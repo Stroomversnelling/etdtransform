@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etdmap"
+version = "0.1.0"
+description = "Mapping helper functions for EnergieTransitieDataset."
+readme = "README.md"
+authors = [{ name = "Nicolas Dickinson", email = "dickinson@washnote.com"}]
+maintainers = [
+    {name = "Nicolas Dickinson", email = "dickinson@washnote.com"},
+    {name = 'Petra Izeboud', email = 'petra.izeboud@live.nl'},
+    ]
+requires-python = ">= 3.9"
+license = { file = "all rights reserved" }
+dependencies = [
+    "pandas>=2.0",
+]
+keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
+
+
+[project.urls]
+repository = "https://github.com/Stroomversnelling/etdmap"
+
+[project.optional-dependencies]
+pytesting = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.flake8]
+max-line-length = 88
+exclude = ["build", "dist", "__pycache__"]
+
+
