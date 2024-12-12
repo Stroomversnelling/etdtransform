@@ -5,13 +5,13 @@ import numpy as np
 import ibis
 from ibis import _
 import ibis.selectors as s
-from etl.aggregate import (
+from etdmap import (
     read_aggregate,
     get_aggregate_table,
     mapped_folder_path,
     aggregate_folder_path,
 )
-from etl.source.knmi.knmi import (
+from etdtransform.knmi.knmi import (
     get_weather_data,
     get_project_weather_station_data,
     weather_columns,
@@ -19,13 +19,6 @@ from etl.source.knmi.knmi import (
 from calculated_columns import intervals, mark_coldest_two_weeks
 from typing import List, Optional
 
-def get_hh_table(interval="default") -> ibis.Expr:
-    household_parquet = os.path.join(
-            aggregate_folder_path, f"household_{interval}.parquet"
-        )
-    household_table = ibis.read_parquet(household_parquet)
-
-    return join_index_table(household_table)
 
 def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
     """
@@ -42,7 +35,12 @@ def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
         weather_station_table = get_weather_station_table()
 
     for interval in intervals:
-        hh_joined = get_hh_table(interval)
+        household_parquet = os.path.join(
+            aggregate_folder_path, f"household_{interval}.parquet"
+        )
+        household_table = ibis.read_parquet(household_parquet)
+
+        hh_joined = join_index_table(household_table)
 
         if include_weather:
             hh_joined = join_weather_data(
