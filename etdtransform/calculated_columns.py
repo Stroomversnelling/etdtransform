@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 
 import ibis
 import pandas as pd
-from ibis import literal
 
 
 def add_calculated_columns_imputed_data(df):
