@@ -2,7 +2,7 @@ import logging
 
 import numpy as np
 import pandas as pd
-from etl.validators.record_validators import thresholds_dict
+from etdmap.record_validators import thresholds_dict
 
 
 def methods_to_bitwise_vectorized(methods_column):

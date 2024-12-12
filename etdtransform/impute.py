@@ -5,8 +5,7 @@ from math import floor, isclose, log10
 
 import numpy as np
 import pandas as pd
-from etl.validators.record_validators import thresholds_dict
-from etl.vectorized_impute import impute_and_normalize_vectorized
+from etdtransform.vectorized_impute import impute_and_normalize_vectorized
 
 impute_and_normalize_optimized = impute_and_normalize_vectorized
 
