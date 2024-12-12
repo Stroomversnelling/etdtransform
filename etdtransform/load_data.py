@@ -19,6 +19,13 @@ from etl.source.knmi.knmi import (
 from calculated_columns import intervals, mark_coldest_two_weeks
 from typing import List, Optional
 
+def get_hh_table(interval="default") -> ibis.Expr:
+    household_parquet = os.path.join(
+            aggregate_folder_path, f"household_{interval}.parquet"
+        )
+    household_table = ibis.read_parquet(household_parquet)
+
+    return join_index_table(household_table)
 
 def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
     """
@@ -35,12 +42,7 @@ def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
         weather_station_table = get_weather_station_table()
 
     for interval in intervals:
-        household_parquet = os.path.join(
-            aggregate_folder_path, f"household_{interval}.parquet"
-        )
-        household_table = ibis.read_parquet(household_parquet)
-
-        hh_joined = join_index_table(household_table)
+        hh_joined = get_hh_table(interval)
 
         if include_weather:
             hh_joined = join_weather_data(
