@@ -1,9 +1,10 @@
-import pandas as pd
-import numpy as np
 import logging
 import os
-from math import floor, log10, isclose
 from enum import IntEnum
+from math import floor, isclose, log10
+
+import numpy as np
+import pandas as pd
 from etl.validators.record_validators import thresholds_dict
 from etl.vectorized_impute import impute_and_normalize_vectorized
 
@@ -11,7 +12,9 @@ impute_and_normalize_optimized = impute_and_normalize_vectorized
 
 
 def calculate_average_diff(
-    df: pd.DataFrame, project_id_column, diff_columns: list
+    df: pd.DataFrame,
+    project_id_column,
+    diff_columns: list,
 ) -> pd.DataFrame:
     logging.info(f"Calculating Diff column averages.")
 
@@ -33,7 +36,7 @@ def calculate_average_diff(
 
     for col in diff_columns:
         household_max[f"{col}_huis_max"] = household_max[f"{col}_huis_max"].astype(
-            "Float64"
+            "Float64",
         )
 
     avg_diff_dict = {}
@@ -82,7 +85,7 @@ def calculate_average_diff(
         impute_na = avg_diff[col + "_avg"].isna().sum()
         if impute_na > 0:
             logging.error(
-                f"Average column `{col}_avg` has {impute_na} missing impute values."
+                f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
         avg_diff_dict[col] = {
@@ -157,32 +160,32 @@ def validate_household_column(household_df, cum_col, huis_code):
 
     if n_na == len_df:
         logging.info(
-            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column."
+            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
         )
         return False
     elif n_na / len_df > 0.4:
         percent_na = 100 * n_na / len_df
         logging.error(
-            f"HuisCode {huis_code} has {percent_na:.2f}% missing values in {cum_col}. Consider removing."
+            f"HuisCode {huis_code} has {percent_na:.2f}% missing values in {cum_col}. Consider removing.",
         )
     else:
         logging.info(
-            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records."
+            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
         )
 
     if round(household_df[cum_col].sum(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column."
+            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[cum_col].max() - household_df[cum_col].min(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column."
+            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[f"{cum_col}Diff"].sum(), 10) == 0:
         logging.warning(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}Diff before imputation."
+            f"HuisCode {huis_code} has no non-zero values in {cum_col}Diff before imputation.",
         )
 
     return True
@@ -213,22 +216,22 @@ def imputation_column_info_checks(household_df, cum_col, huis_code):
 
     if n_na == len_df:
         logging.info(
-            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column."
+            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
         )
         return False
     elif n_na / len_df > 0.4:
         percent_na = 100 * n_na / len_df
         logging.error(
-            f"HuisCode {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing."
+            f"HuisCode {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing.",
         )
     else:
         logging.info(
-            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records."
+            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
         )
 
     if round(household_df[cum_col].sum(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column."
+            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column.",
         )
         return False
 
@@ -238,16 +241,17 @@ def imputation_column_info_checks(household_df, cum_col, huis_code):
 def check_cumulative_difference(household_df, cum_col, huis_code):
     diff_col = cum_col + "Diff"
     cum_column_total_difference = round(
-        household_df[cum_col].max() - household_df[cum_col].min(), 10
+        household_df[cum_col].max() - household_df[cum_col].min(),
+        10,
     )
     if isclose(cum_column_total_difference, 0):
         logging.info(
-            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column."
+            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column.",
         )
         return cum_column_total_difference, False
     if round(household_df[diff_col].sum(), 10) == 0:
         logging.warning(
-            f"HuisCode {huis_code} has no non-zero values in {diff_col} before imputation."
+            f"HuisCode {huis_code} has no non-zero values in {diff_col} before imputation.",
         )
 
     return cum_column_total_difference, True
@@ -296,41 +300,44 @@ def impute_and_normalize_old(
 
                 if n_na == len_df:
                     logging.info(
-                        f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column."
+                        f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
                     )
                     continue
                 elif n_na / len_df > 0.4:
                     percent_na = 100 * n_na / len_df
                     logging.error(
-                        f"HuisCode {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing."
+                        f"HuisCode {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing.",
                     )
                 else:
                     logging.info(
-                        f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records."
+                        f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
                     )
 
                 if round(household_df[cum_col].sum(), 10) == 0:
                     logging.info(
-                        f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column."
+                        f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column.",
                     )
                     continue
 
                 cum_column_total_difference = round(
-                    household_df[cum_col].max() - household_df[cum_col].min(), 10
+                    household_df[cum_col].max() - household_df[cum_col].min(),
+                    10,
                 )
 
                 if isclose(cum_column_total_difference, 0):
                     logging.info(
-                        f"HuisCode {huis_code} has no change in {cum_col}. Skipping column."
+                        f"HuisCode {huis_code} has no change in {cum_col}. Skipping column.",
                     )
                     continue
                 if round(household_df[diff_col].sum(), 10) == 0:
                     logging.warning(
-                        f"HuisCode {huis_code} has no non-zero values in {diff_col} before imputation."
+                        f"HuisCode {huis_code} has no non-zero values in {diff_col} before imputation.",
                     )
 
                 household_df[impute_type_col] = pd.Series(
-                    pd.NA, dtype="Int8", index=household_df.index
+                    pd.NA,
+                    dtype="Int8",
+                    index=household_df.index,
                 )
 
                 # Gap identification
@@ -347,17 +354,16 @@ def impute_and_normalize_old(
 
                 n_gaps = len(diff_gap_starts)
                 logging.info(
-                    f"There are {n_gaps} diff gaps in HuisCode {huis_code} for {cum_col}"
+                    f"There are {n_gaps} diff gaps in HuisCode {huis_code} for {cum_col}",
                 )
 
                 gap_avg_missing_warning = False
 
                 for start_diff_gap, end_diff_gap in zip(diff_gap_starts, diff_gap_ends):
-
                     cum_gap_values = list(
                         household_df.loc[start_diff_gap:end_diff_gap, cum_col]
                         .dropna()
-                        .index
+                        .index,
                     )
                     if pd.isna(household_df.loc[end_diff_gap, cum_col]):
                         cum_gap_values.append(end_diff_gap)
@@ -365,7 +371,6 @@ def impute_and_normalize_old(
                     start = start_diff_gap
 
                     for end in cum_gap_values:
-
                         # logging.info(f'start {start} to end {end}; huis: {huis_code}')
 
                         if start - 1 >= household_df.index[0]:
@@ -398,7 +403,7 @@ def impute_and_normalize_old(
                                 "first_gap": first_gap,
                                 "start": start,
                                 "end": end,
-                            }
+                            },
                         )
 
                         total_gap_count = total_gap_count + gap_length
@@ -416,7 +421,7 @@ def impute_and_normalize_old(
                             ):  # it would be better to not have any na values
                                 if gap_avg_missing_warning == False:
                                     logging.warning(
-                                        f"Gap records are missing {impute_na} impute values based on average diff values. Using 0s or linear interpolation. Check results."
+                                        f"Gap records are missing {impute_na} impute values based on average diff values. Using 0s or linear interpolation. Check results.",
                                     )
                                     gap_avg_missing_warning = True
                                 # We will need to check if this does not result in artifical peaks when there is only one or few timesteps with a non-0 value.
@@ -442,7 +447,7 @@ def impute_and_normalize_old(
                                         round(gap_jump, 10) < 0
                                     ):  # we could consider adding the average instead of zeros here, especially if the gap is long (for example > 1hr)
                                         logging.error(
-                                            f"Negative gap jump of {gap_jump} with HuisCode {huis_code} in column '{cum_col}'. Impute type = -1 (adding 0s). Consider removing."
+                                            f"Negative gap jump of {gap_jump} with HuisCode {huis_code} in column '{cum_col}'. Impute type = -1 (adding 0s). Consider removing.",
                                         )
                                         household_df.loc[start:end, diff_col] = 0
                                         household_df.loc[start:end, is_imputed_col] = (
@@ -463,10 +468,12 @@ def impute_and_normalize_old(
                                                 round(gap_jump / gap_length, 10)
                                             )
                                             household_df.loc[
-                                                start:end, is_imputed_col
+                                                start:end,
+                                                is_imputed_col,
                                             ] = True
                                             household_df.loc[
-                                                start:end, impute_type_col
+                                                start:end,
+                                                impute_type_col,
                                             ] = 4
                                         else:
                                             ratio = round(gap_jump / impute_jump, 10)
@@ -476,10 +483,12 @@ def impute_and_normalize_old(
                                                 impute_values * round(ratio, 10)
                                             )
                                             household_df.loc[
-                                                start:end, is_imputed_col
+                                                start:end,
+                                                is_imputed_col,
                                             ] = True
                                             household_df.loc[
-                                                start:end, impute_type_col
+                                                start:end,
+                                                impute_type_col,
                                             ] = 5
                                     else:
                                         raise Exception(f"Unknown condition")
@@ -488,29 +497,34 @@ def impute_and_normalize_old(
                                         if round(next_cum_value, 10) == 0:
                                             household_df.loc[start:end, diff_col] = 0
                                             household_df.loc[
-                                                start:end, is_imputed_col
+                                                start:end,
+                                                is_imputed_col,
                                             ] = True
                                             household_df.loc[
-                                                start:end, impute_type_col
+                                                start:end,
+                                                impute_type_col,
                                             ] = 6
                                         else:
                                             if (
                                                 round(next_cum_value, 10) > 0
                                             ):  # fill with averages
                                                 household_df.loc[
-                                                    start:end, diff_col
+                                                    start:end,
+                                                    diff_col,
                                                 ] = impute_values
                                                 household_df.loc[
-                                                    start:end, is_imputed_col
+                                                    start:end,
+                                                    is_imputed_col,
                                                 ] = True
                                                 household_df.loc[
-                                                    start:end, impute_type_col
+                                                    start:end,
+                                                    impute_type_col,
                                                 ] = 7
                                             elif round(next_cum_value, 10) < 0:
                                                 raise Exception("Negative next value!")
                                             else:
                                                 raise Exception(
-                                                    f"Unknown condition for gap next value = {next_cum_value} but not first gap and no gap_value."
+                                                    f"Unknown condition for gap next value = {next_cum_value} but not first gap and no gap_value.",
                                                 )
                                     elif prev_cum_value is not None:
                                         if (
@@ -521,7 +535,7 @@ def impute_and_normalize_old(
                                                 household_df[
                                                     household_df[avg_col].notna()
                                                     & household_df[diff_col].notna()
-                                                ].index
+                                                ].index,
                                             )
                                             if sum_records > len_df / 2:
                                                 avg_col_sum = household_df[
@@ -540,57 +554,72 @@ def impute_and_normalize_old(
                                                             dif_col_sum / avg_col_sum
                                                         )
                                                         household_df.loc[
-                                                            start:end, diff_col
+                                                            start:end,
+                                                            diff_col,
                                                         ] = impute_values * round(
-                                                            avg_to_diff_ratio, 10
+                                                            avg_to_diff_ratio,
+                                                            10,
                                                         )
                                                         household_df.loc[
-                                                            start:end, is_imputed_col
+                                                            start:end,
+                                                            is_imputed_col,
                                                         ] = True
                                                         household_df.loc[
-                                                            start:end, impute_type_col
+                                                            start:end,
+                                                            impute_type_col,
                                                         ] = 8
                                                     else:
                                                         household_df.loc[
-                                                            start:end, diff_col
+                                                            start:end,
+                                                            diff_col,
                                                         ] = 0
                                                         household_df.loc[
-                                                            start:end, is_imputed_col
+                                                            start:end,
+                                                            is_imputed_col,
                                                         ] = True
                                                         household_df.loc[
-                                                            start:end, impute_type_col
+                                                            start:end,
+                                                            impute_type_col,
                                                         ] = 9
                                                 else:
                                                     household_df.loc[
-                                                        start:end, diff_col
+                                                        start:end,
+                                                        diff_col,
                                                     ] = 0
                                                     household_df.loc[
-                                                        start:end, is_imputed_col
+                                                        start:end,
+                                                        is_imputed_col,
                                                     ] = True
                                                     household_df.loc[
-                                                        start:end, impute_type_col
+                                                        start:end,
+                                                        impute_type_col,
                                                     ] = 10
                                             else:
                                                 household_df.loc[
-                                                    start:end, diff_col
+                                                    start:end,
+                                                    diff_col,
                                                 ] = impute_values
                                                 household_df.loc[
-                                                    start:end, is_imputed_col
+                                                    start:end,
+                                                    is_imputed_col,
                                                 ] = True
                                                 household_df.loc[
-                                                    start:end, impute_type_col
+                                                    start:end,
+                                                    impute_type_col,
                                                 ] = 11
                                         else:
                                             household_df.loc[start:end, diff_col] = 0
                                             household_df.loc[
-                                                start:end, is_imputed_col
+                                                start:end,
+                                                is_imputed_col,
                                             ] = True
                                             household_df.loc[
-                                                start:end, impute_type_col
+                                                start:end,
+                                                impute_type_col,
                                             ] = 12
                                     else:
                                         raise Exception(
-                                            f"No next value or last value for gap with HuisCode {huis_code} in column {cum_col}. Probably should have skipped column and initial checks may need to be adjusted."
+                                            f"No next value or last value for gap with HuisCode {huis_code} in column {cum_col}. Probably should have skipped column and initial checks may need to be adjusted.",
                                         )
 
                         if (
@@ -598,10 +627,12 @@ def impute_and_normalize_old(
                         ):  # check if the sum  of imputed values and the gap jump are the same after the imputation.
                             sum_diff = household_df.loc[start:end, diff_col].sum()
                             if gap_jump > 0 and not equal_sig_fig(
-                                a=sum_diff, b=gap_jump, sig_figs=5
+                                a=sum_diff,
+                                b=gap_jump,
+                                sig_figs=5,
                             ):
                                 raise Exception(
-                                    f"Gap jump ({gap_jump}) and sum of imputed values ({sum_diff}) are not equal!"
+                                    f"Gap jump ({gap_jump}) and sum of imputed values ({sum_diff}) are not equal!",
                                 )
 
                         start = end + 1
@@ -614,7 +645,7 @@ def impute_and_normalize_old(
                 if any(mask):
                     replacing_out_of_thresholds = mask.sum()
                     logging.error(
-                        f"Replacing n={replacing_out_of_thresholds} values that exceeded physical thresholds for {diff_col} for HuisCode {huis_code}."
+                        f"Replacing n={replacing_out_of_thresholds} values that exceeded physical thresholds for {diff_col} for HuisCode {huis_code}.",
                     )
 
                     household_df.loc[mask, diff_col] = household_df.loc[mask, avg_col]
@@ -624,11 +655,12 @@ def impute_and_normalize_old(
                     ].fillna(0)
 
                 max_allowed = max_bound.loc[
-                    max_bound["HuisCode"] == huis_code, f"{diff_col}_upper_bound"
+                    max_bound["HuisCode"] == huis_code,
+                    f"{diff_col}_upper_bound",
                 ].values[0]
                 if max_allowed is None:
                     logging.error(
-                        f"No upper bound for {diff_col} in HuisCode {huis_code}."
+                        f"No upper bound for {diff_col} in HuisCode {huis_code}.",
                     )
                 else:
                     # household_df.loc[household_df[diff_col] > max_allowed, is_imputed_col] = True
@@ -643,7 +675,7 @@ def impute_and_normalize_old(
                     beyond_upper_bound = sum(household_df[diff_col] > max_allowed)
                     if beyond_upper_bound > 0:
                         logging.error(
-                            f"There are {beyond_upper_bound} values that exceeded {max_allowed} upper bound used in the averages for {diff_col} for HuisCode {huis_code}. Not removed."
+                            f"There are {beyond_upper_bound} values that exceeded {max_allowed} upper bound used in the averages for {diff_col} for HuisCode {huis_code}. Not removed.",
                         )
 
                 # Sanity check
@@ -660,23 +692,23 @@ def impute_and_normalize_old(
                                 * 100
                                 / cum_column_total_difference,
                                 4,
-                            )
+                            ),
                         )
                         if percent_diff > 100 / (365 * 24 * 12):
                             logging.error(
-                                f"Potential imputation error: there is a difference of {difference_in_calculation} ({percent_diff}%) between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference})!"
+                                f"Potential imputation error: there is a difference of {difference_in_calculation} ({percent_diff}%) between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference})!",
                             )
                         else:
                             logging.info(
-                                f"Minor deviation in imputation total: there is a minimal difference {difference_in_calculation} ({percent_diff}%) between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference})."
+                                f"Minor deviation in imputation total: there is a minimal difference {difference_in_calculation} ({percent_diff}%) between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference}).",
                             )
                     else:
                         logging.error(
-                            f"Potential imputation error: there is a difference of {difference_in_calculation} between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference})!"
+                            f"Potential imputation error: there is a difference of {difference_in_calculation} between `{diff_col}` sum total ({diff_column_total}) and the cumulative minimum and maximum ({cum_column_total_difference})!",
                         )
                 else:
                     logging.info(
-                        f"Success! The totals match for huis_code {huis_code}. Imputation is successful."
+                        f"Success! The totals match for huis_code {huis_code}. Imputation is successful.",
                     )
 
                 missing_count = total_gap_count
@@ -688,7 +720,8 @@ def impute_and_normalize_old(
                 imputation_gap_stats.append(
                     {
                         project_id_column: household_df.loc[
-                            household_df.index[0], project_id_column
+                            household_df.index[0],
+                            project_id_column,
                         ],
                         "HuisCode": huis_code,
                         "column": diff_col,
@@ -699,7 +732,7 @@ def impute_and_normalize_old(
                         "methods": methods,
                         "imputed": imputed_count,
                         "imputed_na": imputed_na_count,
-                    }
+                    },
                 )
 
         modified_household_dfs.append(household_df)
@@ -718,7 +751,7 @@ def impute_and_normalize_old(
     logging.info(f"Concatenating the other imputation statistics")
     imputation_gap_stats_df = pd.DataFrame(imputation_gap_stats)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise_vectorized(
-        imputation_gap_stats_df["methods"]
+        imputation_gap_stats_df["methods"],
     )
 
     return df, imputation_gap_stats_df, imputation_reading_date_stats_df
@@ -754,7 +787,6 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
 
     df_list = []
     for col in cumulative_columns:
-
         logging.info(f"Calculating imputation statistics by ReadingDate for {col}")
 
         diff_col = f"{col}Diff"
@@ -764,7 +796,9 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
         na_stats = grouped[diff_col].apply(lambda x: x.isna().sum()).rename("na")
 
         stats_df = pd.concat(
-            [imputed_stats, na_stats, total_stats], axis=1, ignore_index=False
+            [imputed_stats, na_stats, total_stats],
+            axis=1,
+            ignore_index=False,
         )
         # stats_df = pd.concat([imputed_stats, na_stats, total_stats], axis=1).reset_index()
 
@@ -786,7 +820,8 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
     # Concatenate all the DataFrames in the list
     logging.info(f"Concatenating the reading date statistics")
     imputation_reading_date_stats_df = pd.concat(
-        df_list, ignore_index=False
+        df_list,
+        ignore_index=False,
     ).reset_index()
 
     return imputation_reading_date_stats_df
@@ -805,7 +840,10 @@ aggregate_folder_path = os.getenv("AGGREGATE_FOLDER_PATH")
 
 
 def prepare_diffs_for_impute(
-    df: pd.DataFrame, project_id_column: str, cumulative_columns: list, sorted=False
+    df: pd.DataFrame,
+    project_id_column: str,
+    cumulative_columns: list,
+    sorted=False,
 ):
     if sorted != True:
         df = sort_for_impute(df, project_id_column)
@@ -821,10 +859,11 @@ def prepare_diffs_for_impute(
 
     logging.info("Saving average diff columns in avg_diffs.parquet")
     diffs.to_parquet(
-        os.path.join(aggregate_folder_path, "avg_diffs.parquet"), engine="pyarrow"
+        os.path.join(aggregate_folder_path, "avg_diffs.parquet"),
+        engine="pyarrow",
     )
     logging.info(
-        "Saving household diff max and bounds used in household_diff_max_bounds.parquet"
+        "Saving household diff max and bounds used in household_diff_max_bounds.parquet",
     )
     max_bound.to_parquet(
         os.path.join(aggregate_folder_path, "household_diff_max_bounds.parquet"),
@@ -853,7 +892,7 @@ def process_and_impute(
         logging.info("Loading average diffs from file...")
         diffs = read_diffs()
         max_bound = pd.read_parquet(
-            os.path.join(aggregate_folder_path, "household_diff_max_bounds.parquet")
+            os.path.join(aggregate_folder_path, "household_diff_max_bounds.parquet"),
         )
     else:
         diff_columns, diffs, max_bound = prepare_diffs_for_impute(
@@ -864,7 +903,7 @@ def process_and_impute(
         )
 
     logging.info(
-        "Merging the average differences into the household dataframe for imputation."
+        "Merging the average differences into the household dataframe for imputation.",
     )
     df = df.merge(diffs, on=[project_id_column, "ReadingDate"], how="left")
 
@@ -874,7 +913,10 @@ def process_and_impute(
         optimized_label = "_optimized"
         df, imputation_gap_stats_df, imputation_reading_date_stats_df = (
             impute_and_normalize_optimized(
-                df, cumulative_columns, project_id_column, max_bound
+                df,
+                cumulative_columns,
+                project_id_column,
+                max_bound,
             )
         )
     else:
@@ -886,7 +928,8 @@ def process_and_impute(
     logging.info("Saving imputation gap statistics...")
     imputation_gap_stats_df.to_parquet(
         os.path.join(
-            aggregate_folder_path, f"impute_gap_stats{optimized_label}.parquet"
+            aggregate_folder_path,
+            f"impute_gap_stats{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
@@ -914,7 +957,8 @@ def process_and_impute(
 
     logging.info("Merging total records with house imputation summary")
     imputation_summary_house = imputation_summary_house.merge(
-        total_records_house, on=["HuisCode"]
+        total_records_house,
+        on=["HuisCode"],
     )
     imputation_summary_house["percentage_imputed"] = (
         imputation_summary_house["imputed"] / imputation_summary_house["total_records"]
@@ -930,13 +974,13 @@ def process_and_impute(
                 "missing": "sum",
                 "imputed": "sum",
                 "imputed_na": "sum",
-            }
+            },
         )
         .reset_index()
     )
 
     logging.info(
-        "Calculate the total records for each project and column from the original dataframe"
+        "Calculate the total records for each project and column from the original dataframe",
     )
     total_records_project = (
         df.groupby(project_id_column).size().reset_index(name="total_records")
@@ -944,7 +988,8 @@ def process_and_impute(
 
     logging.info("Merge total records with project imputation summary")
     imputation_summary_project = imputation_summary_project.merge(
-        total_records_project, on=[project_id_column]
+        total_records_project,
+        on=[project_id_column],
     )
     imputation_summary_project["percentage_imputed"] = (
         imputation_summary_project["imputed"]
@@ -957,7 +1002,7 @@ def process_and_impute(
     ]
     for _, row in over_40_percent_imputed_house.iterrows():
         logging.warning(
-            f"House {row['HuisCode']}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values."
+            f"House {row['HuisCode']}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
         )
 
     logging.info("Provide warnings if any project has > 40% imputed")
@@ -966,7 +1011,7 @@ def process_and_impute(
     ]
     for _, row in over_40_percent_imputed_project.iterrows():
         logging.warning(
-            f"Project {row[project_id_column]}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values."
+            f"Project {row[project_id_column]}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
         )
 
     if imputation_reading_date_stats_df:
@@ -976,7 +1021,7 @@ def process_and_impute(
         ]
         for _, row in over_40_percent_imputed_dates.iterrows():
             logging.warning(
-                f"ReadingDate {row['ReadingDate']}, Project {row[project_id_column]}, Column {row['column']} has {row['percent_imputed']:.2f}% imputed values."
+                f"ReadingDate {row['ReadingDate']}, Project {row[project_id_column]}, Column {row['column']} has {row['percent_imputed']:.2f}% imputed values.",
             )
     else:
         logging.warning("Not calculating reading date stats")

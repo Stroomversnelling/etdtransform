@@ -1,15 +1,16 @@
 import logging
-import pandas as pd
 import math
 from datetime import datetime, timedelta
+
 import ibis
+import pandas as pd
 from ibis import literal
 
 
 def add_calculated_columns_imputed_data(df):
     logging.info("Calculating TerugleveringTotaalNetto")
     df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"].fillna(
-        0
+        0,
     ) + df["ElektriciteitTerugleveringHoogDiff"].fillna(0)
     logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
 
@@ -65,7 +66,10 @@ def add_calculated_columns_imputed_data(df):
 # Average 'ZonopwekBruto' for the sunniest one week (days = 7)
 # This is a rolling average so does not handle the edges of the year perfectly
 def add_rolling_avg(
-    group, var="ElektriciteitsgebruikTotaalNetto", days=14, avg_var="RollingAverage"
+    group,
+    var="ElektriciteitsgebruikTotaalNetto",
+    days=14,
+    avg_var="RollingAverage",
 ):
     """
     Add a rolling average column to each group in the DataFrame.
@@ -185,7 +189,7 @@ def gelijktijdigheid(df, df_5min, rolling_average="RollingAverage", group_var=No
                 "HighestDailyAvg": [highest_daily_avg],
                 "Highest5MinAvg": [highest_5min_avg],
                 "Ratio": [highest_daily_avg / highest_5min_avg],
-            }
+            },
         )
 
     return result
@@ -356,7 +360,9 @@ intervals = ["5min", "15min", "60min", "24h"]
 
 
 def add_normalized_datetime(
-    x, reference_date=pd.Timestamp("2023-01-02"), datetime_column="ReadingDate"
+    x,
+    reference_date=pd.Timestamp("2023-01-02"),
+    datetime_column="ReadingDate",
 ):
     """
     Adds a normalized datetime column to the DataFrame or Ibis Table.
@@ -375,7 +381,7 @@ def add_normalized_datetime(
         x["day_of_week"] = x[datetime_column].dt.dayofweek  # Monday=0, Sunday=6
 
         x["normalized_datetime"] = x["time_of_day"].apply(
-            lambda t: datetime.combine(reference_date + pd.Timedelta(days=0), t)
+            lambda t: datetime.combine(reference_date + pd.Timedelta(days=0), t),
         ) + pd.to_timedelta(x["day_of_week"], unit="D")
 
         return x
@@ -392,7 +398,7 @@ def add_normalized_datetime(
         )
 
         time_of_day_to_add = x[datetime_column] - x[datetime_column].date().cast(
-            "timestamp"
+            "timestamp",
         )
         normalized_datetime = combined_date + time_of_day_to_add
 

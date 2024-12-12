@@ -1,13 +1,15 @@
-import pandas as pd
 import os
+
 import numpy as np
+import pandas as pd
 
 
 def get_project_weather_station_data():
     # Load mapping of ProjectIdBSV to weather stations and ensure names are uppercase
     weather_station_file = os.getenv("WEATHER_STATIONS_SUMMARY_FILE")
     project_weather_station_df = pd.read_excel(
-        weather_station_file, sheet_name="ProjectWeatherStation"
+        weather_station_file,
+        sheet_name="ProjectWeatherStation",
     )
     project_weather_station_df["Weerstation"] = project_weather_station_df[
         "Weerstation"
@@ -53,7 +55,7 @@ def load_knmi_weather_data(folder_path):
                 * 6.105
                 * np.exp(
                     (vapor_pressure_constant * df["Temperatuur"])
-                    / (df["Temperatuur"] + 237.7)
+                    / (df["Temperatuur"] + 237.7),
                 )
                 / 100
             )

@@ -13,9 +13,8 @@ maintainers = [
     {name = 'Petra Izeboud', email = 'petra.izeboud@live.nl'},
     ]
 requires-python = ">= 3.9"
-license = { file = "all rights reserved" }
 dependencies = [
-    "pandas>=2.0",
+    "pandas>=2.2",
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 
@@ -24,13 +23,37 @@ keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 repository = "https://github.com/Stroomversnelling/etdmap"
 
 [project.optional-dependencies]
+ruffing = ["ruff"]
 pytesting = ["pytest>=7"]
+dev = ["pre-commit"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.ruff]
+line-length = 88
+indent-width = 4
 
-[tool.flake8]
-max-line-length = 88
-exclude = ["build", "dist", "__pycache__"]
+[tool.ruff.lint]
+# Enable pycodestyle (E, W), pyflakes (F) and Flake8 bugbear (B)
+# as well as Ruff-specific-rules (RUF) and isort
+select = ["E", "F", "B", "W", "RUF", "I"]
 
 
+ignore = [
+    # Avoid enforcing line-length violations
+    "E501",
+    # module level import not at top of file
+    "E402",
+    # do not assign a lambda expression, use a def
+    "E731",
+]
+
+# 3. Avoid trying to fix flake8-bugbear (`B`) violations.
+unfixable = ["B"]
+
+# 4. Ignore `E402` (import violations) in all `__init__.py` files, and in selected subdirectories.
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402"]
+"**/{tests}/*" = ["E402"]
+
+[tool.ruff.format]
+# 5. Use double quotes in `ruff format`.
+quote-style = "double"

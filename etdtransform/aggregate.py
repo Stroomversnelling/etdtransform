@@ -1,14 +1,15 @@
-import os
-from multiprocessing import Pool
 import logging
-import pandas as pd
-import numpy as np
-import ibis
+import os
 import re
-from etl.mapping.index_helpers import read_index, update_meenemen
-from etl.impute import process_and_impute
-from etl.mapping.mapping_helpers import cumulative_columns, rearrange_model_columns
+
+import ibis
+import numpy as np
+import pandas as pd
 from calculated_columns import add_calculated_columns_imputed_data
+from etdmap.index_helpers import read_index, update_meenemen
+from etdmap.mapping_helpers import cumulative_columns
+
+from etdtransform.impute import process_and_impute
 
 """
 Aggregating the data for a given time interval
@@ -23,17 +24,19 @@ aggregate_folder_path = os.getenv("AGGREGATE_FOLDER_PATH")
 index_file_path = None
 
 
-def read_hh_data(interval="default", metadata_columns=[]):
+def read_hh_data(interval="default", metadata_columns=None):
+    if not metadata_columns:
+        metadata_columns = []
     df = pd.read_parquet(
-        os.path.join(aggregate_folder_path, f"household_{interval}.parquet")
+        os.path.join(aggregate_folder_path, f"household_{interval}.parquet"),
     )
     return add_index_columns(df, columns=metadata_columns)
 
 
-def add_index_columns(df, columns=[]):
-    if len(columns) > 0:
+def add_index_columns(df, columns=None):
+    if columns:
         index_df, index_path = read_index()
-        columns_to_select = ["HuisCode", "HuisIdBSV", "ProjectIdBSV"] + columns
+        columns_to_select = ["HuisCode", "HuisIdBSV", "ProjectIdBSV", *columns]
         columns_to_select = list(set(columns_to_select))
         index_df = index_df[columns_to_select]
         df = df.merge(index_df, on=["HuisIdBSV", "ProjectIdBSV"], how="left")
@@ -44,16 +47,12 @@ def add_index_columns(df, columns=[]):
 
 def aggregate_hh_data_5min():
     logging.info("Starting to aggregate household data.")
-    for file_name in os.listdir(mapped_folder_path):
-        if "index" in file_name and file_name.endswith(".parquet"):
-            index_file_path = os.path.join(mapped_folder_path, file_name)
-            break
 
     index_df = update_meenemen()
 
     data_frames = []
 
-    index_df = index_df[index_df["Meenemen"] == True]
+    index_df = index_df[index_df["Meenemen"] is True]
 
     for _, row in index_df.iterrows():
         huis_code = row["HuisCode"]
@@ -131,7 +130,7 @@ def impute_hh_data_5min(
 
     modified_household_dfs = []
 
-    for huis_code, household_df in df.groupby("HuisCode"):
+    for _huis_code, household_df in df.groupby("HuisCode"):
         for col in cumulative_columns:
             household_df[col + "Original"] = household_df[col]  # rename
             household_df[col] = household_df[col + "Diff"].cumsum()
@@ -156,26 +155,30 @@ def impute_hh_data_5min(
     logging.info("Saving files.")
     df.to_parquet(
         os.path.join(
-            aggregate_folder_path, f"household_imputed{optimized_label}.parquet"
+            aggregate_folder_path,
+            f"household_imputed{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
 
     aggregated_diff.to_parquet(
         os.path.join(
-            aggregate_folder_path, f"household_aggregated_diff{optimized_label}.parquet"
+            aggregate_folder_path,
+            f"household_aggregated_diff{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_house.to_parquet(
         os.path.join(
-            aggregate_folder_path, f"impute_summary_household{optimized_label}.parquet"
+            aggregate_folder_path,
+            f"impute_summary_household{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_project.to_parquet(
         os.path.join(
-            aggregate_folder_path, f"impute_summary_project{optimized_label}.parquet"
+            aggregate_folder_path,
+            f"impute_summary_project{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
@@ -214,7 +217,7 @@ def add_calculated_columns_to_hh_data(df):
 def read_aggregate(name, interval):
     safe_name = re.sub(r"\W+", "_", name.lower())
     return pd.read_parquet(
-        os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet")
+        os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
     )
 
 
@@ -224,19 +227,20 @@ def get_aggregate_table(name, interval):
     """
     safe_name = re.sub(r"\W+", "_", name.lower())
     parquet_path = os.path.join(
-        aggregate_folder_path, f"{safe_name}_{interval}.parquet"
+        aggregate_folder_path,
+        f"{safe_name}_{interval}.parquet",
     )
     return ibis.read_parquet(parquet_path)
 
 
-def resample_hh_data(df=None, intervals=["60min", "15min", "5min"]):
+def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
     group_column = ["ProjectIdBSV", "HuisCode"]
     if df is None:
-        logging.info(f"Loading data with calculated columns to resample hh data")
+        logging.info("Loading data with calculated columns to resample hh data")
         df = read_hh_data(interval="calculated")
     else:
         logging.warning(
-            "If passing a dataframe to resample_hh_data() be sure to use a copy as it may be modified in place."
+            "If passing a dataframe to resample_hh_data() be sure to use a copy as it may be modified in place.",
         )
 
     for interval in intervals:
@@ -244,26 +248,32 @@ def resample_hh_data(df=None, intervals=["60min", "15min", "5min"]):
 
         if interval == "5min":
             logging.info(
-                f"-- 5min interval - applying shortcut without transformation --"
+                "-- 5min interval - applying shortcut without transformation --",
             )
-            columns_to_copy = (
-                ["ReadingDate"] + group_column + list(aggregation_variables.keys())
-            )
+            columns_to_copy = [
+                "ReadingDate",
+                *group_column,
+                *list(aggregation_variables.keys()),
+            ]
 
-            for var, config in aggregation_variables.items():
+            for _var, config in aggregation_variables.items():
                 validator_column = config.get("validator_column")
                 if validator_column:
                     columns_to_copy.append(validator_column)
 
             df = df[columns_to_copy]
 
-            logging.info(f"5min interval - removing variables that do not pass filters")
+            logging.info(
+                f"{interval}min interval - removing variables that do not pass filters"
+            )
             for var, config in aggregation_variables.items():
                 validator_column = config.get("validator_column")
                 if validator_column:
-                    df.loc[df[validator_column] == False, var] = pd.NA
+                    df.loc[df[validator_column] is False, var] = pd.NA
 
-            logging.info(f"-- 5min interval - saving file household_5min.parquet --")
+            logging.info(
+                f"-- {interval}-min interval - saving file household_5min.parquet --"
+            )
             df.to_parquet(
                 os.path.join(aggregate_folder_path, "household_5min.parquet"),
                 engine="pyarrow",
@@ -272,11 +282,11 @@ def resample_hh_data(df=None, intervals=["60min", "15min", "5min"]):
             resample_and_save(df, group_column, interval=interval, alt_name="household")
 
 
-def aggregate_project_data(intervals=["5min", "15min", "60min"]):
+def aggregate_project_data(intervals=("5min", "15min", "60min")):
     group_column = ["ProjectIdBSV"]
     for interval in intervals:
         logging.info(
-            f"-- Starting {group_column} aggregation with {interval} intervals --"
+            f"-- Starting {group_column} aggregation with {interval} intervals --",
         )
         df = read_hh_data(interval=interval)
         aggregate_and_save(df, group_column, interval=interval, alt_name="project")
@@ -292,14 +302,17 @@ def aggregate_project_data(intervals=["5min", "15min", "60min"]):
 
 
 def aggregate_and_save(
-    df, group_column=["ProjectIdBSV"], interval="5min", alt_name=None
+    df,
+    group_column=("ProjectIdBSV"),
+    interval="5min",
+    alt_name=None,
 ):
-    df_grouped = df.groupby(["ReadingDate"] + group_column)
+    df_grouped = df.groupby(["ReadingDate", *list(group_column)])
     df_size = df_grouped.size().reset_index(name="n")
     if alt_name is None:
         alt_name = group_column
     df = aggregate_by_columns(df, group_column=group_column, size=df_size)
-    df = df.merge(df_size, on=["ReadingDate"] + group_column, how="left")
+    df = df.merge(df_size, on=["ReadingDate", *list(group_column)], how="left")
     safe_name = re.sub(r"\W+", "_", alt_name.lower())
     df.to_parquet(
         os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
@@ -317,11 +330,15 @@ def aggregate_by_columns(df, group_column, size):
 
         if (
             method == "diff_cumsum"
-            and first == False
+            and not first
             and var + "Diff" in combined_results.columns
         ):
             result = aggregate_diff_cumsum(
-                df, var, group_column, size, combined_results=combined_results
+                df,
+                var,
+                group_column,
+                size,
+                combined_results=combined_results,
             )
         else:
             result = aggregate_variable(df, var, config, group_column, size)
@@ -331,7 +348,9 @@ def aggregate_by_columns(df, group_column, size):
             first = False
         else:
             combined_results = combined_results.merge(
-                result, on=["ReadingDate"] + group_column, how="outer"
+                result,
+                on=["ReadingDate", *group_column],
+                how="outer",
             )
 
     logging.info(f"Combining aggregated dataset grouped by: {group_column}")
@@ -345,10 +364,10 @@ def aggregate_variable(df_grouped, var, config, group_column, size):
     # not including validator columns as they are not aggregated in the household data atm
     # validator_column = config.get('validator_column')
 
-    columns_to_select = ["ReadingDate"] + group_column + [var]
+    columns_to_select = ["ReadingDate", *group_column, var]
 
     if method == "diff_cumsum":
-        columns_to_select = columns_to_select + [var + "Diff"]
+        columns_to_select = [*columns_to_select, var + "Diff"]
 
     # if validator_column:
     #     columns_to_copy.append(validator_column)
@@ -359,11 +378,11 @@ def aggregate_variable(df_grouped, var, config, group_column, size):
     #     df_copy.loc[df_copy[validator_column] != True, var] = pd.NA
 
     if method == "sum":
-        return aggregate_sum(df_copy, var, ["ReadingDate"] + group_column, size)
+        return aggregate_sum(df_copy, var, ["ReadingDate", *group_column], size)
     elif method == "max":
-        return aggregate_max(df_copy, var, ["ReadingDate"] + group_column, size)
+        return aggregate_max(df_copy, var, ["ReadingDate", *group_column], size)
     elif method == "avg":
-        return aggregate_avg(df_copy, var, ["ReadingDate"] + group_column, size)
+        return aggregate_avg(df_copy, var, ["ReadingDate", *group_column], size)
     elif method == "diff_cumsum":
         # ReadingDate left out here to allow cumsum to proceed per project with pre-sorted rows
         return aggregate_diff_cumsum(df_copy, var, group_column, size)
@@ -373,29 +392,32 @@ def aggregate_variable(df_grouped, var, config, group_column, size):
 def aggregate_diff_cumsum(df, column, group_column, size, combined_results=None):
     diff_column = column + "Diff"
     logging.info(
-        f"Aggregate cumsum of diff column: {group_column} / {column} / {diff_column}"
+        f"Aggregate cumsum of diff column: {group_column} / {column} / {diff_column}",
     )
     if combined_results is None:
         logging.info("Calculating Diff as not included.")
         aggregated = aggregate_avg(
-            df, diff_column, ["ReadingDate"] + group_column, size
+            df,
+            diff_column,
+            ["ReadingDate", *group_column],
+            size,
         )
     else:
         logging.info("Diff precalculated. No need to recalculate. Making a copy.")
         aggregated = combined_results[
-            ["ReadingDate"] + group_column + [diff_column]
+            ["ReadingDate", *group_column, diff_column]
         ].copy()
     logging.info(
-        f"Transform average diff to calculate cumsum: {group_column} / {column} / {column}Diff"
+        f"Transform average diff to calculate cumsum: {group_column} / {column} / {column}Diff",
     )
     aggregated[column] = aggregated.groupby(group_column)[diff_column].transform(
-        pd.Series.cumsum
+        pd.Series.cumsum,
     )
-    logging.info(f"Add missing values")
+    logging.info("Add missing values")
     aggregated[aggregated[diff_column].isna()][column] = pd.NA
-    logging.info(f"Drop column")
+    logging.info("Drop column")
     aggregated = aggregated.drop(columns=[diff_column])
-    logging.info(f"Finished")
+    logging.info("Finished")
     return aggregated
 
 
@@ -421,7 +443,8 @@ def aggregate_avg(df, column, group_column, size):
 
     # Aggregate with sum and count
     aggregated = grouped.agg(
-        sum_agg=(column, "sum"), count_agg=(column, "count")
+        sum_agg=(column, "sum"),
+        count_agg=(column, "count"),
     ).reset_index()
 
     aggregated[column] = np.where(
@@ -435,7 +458,10 @@ def aggregate_avg(df, column, group_column, size):
 
 
 def resample_and_save(
-    df, group_column=["ProjectIdBSV", "HuisCode"], interval="5min", alt_name=None
+    df,
+    group_column=("ProjectIdBSV", "HuisCode"),
+    interval="5min",
+    alt_name=None,
 ):
     if alt_name is None:
         alt_name = "_".join(group_column)
@@ -450,9 +476,13 @@ def resample_and_save(
 
 
 def resample_by_columns(
-    df, group_column=["ProjectIdBSV", "HuisCode"], interval="15min"
+    df,
+    group_column=None,
+    interval="15min",
 ):
     # resampled_dfs = []
+    if group_column is None:
+        group_column = ["ProjectIdBSV", "HuisCode"]
 
     if interval == "5min":
         min_count = 1
@@ -482,7 +512,9 @@ def resample_by_columns(
         logging.info(f"in loop for {var}")
         result = resample_variable(df, var, config, interval, group_column, min_count)
         combined_results = combined_results.merge(
-            result, on=["ReadingDate"] + group_column, how="outer"
+            result,
+            on=["ReadingDate", *group_column],
+            how="outer",
         )
 
     logging.info(f"Combining dataset: {interval} / {group_column}")
@@ -496,14 +528,14 @@ def resample_variable(df, var, config, interval, group_column, min_count):
     method = config["resample_method"]
     validator_column = config.get("validator_column")
 
-    columns_to_copy = group_column + [var]
+    columns_to_copy = [*group_column, var]
     if validator_column:
         columns_to_copy.append(validator_column)
     df_copy = df[columns_to_copy].copy()
 
     # Filter by validator column if specified
     if validator_column:
-        df_copy.loc[df_copy[validator_column] == False, var] = pd.NA
+        df_copy.loc[df_copy[validator_column] is False, var] = pd.NA
 
     if method == "sum":
         return resample_sum(df_copy, var, interval, group_column, min_count)
@@ -550,7 +582,9 @@ def resample_avg(df, column, interval, group_column, min_count):
         .reset_index()
     )
     resampled[column] = np.where(
-        resampled["count"] >= min_count, resampled["sum"] / resampled["count"], pd.NA
+        resampled["count"] >= min_count,
+        resampled["sum"] / resampled["count"],
+        pd.NA,
     )
     resampled = resampled.drop(columns=["sum", "count"])
     # resampled = df.groupby(group_column)[column].resample(interval).apply(

@@ -1,6 +1,7 @@
+import logging
+
 import numpy as np
 import pandas as pd
-import logging
 from etl.validators.record_validators import thresholds_dict
 
 
@@ -20,7 +21,13 @@ def methods_to_bitwise_vectorized(methods_column):
 
 
 def apply_thresholds(
-    df, lower_bound, upper_bound, diff_col, avg_col, impute_type_col, is_imputed_col
+    df,
+    lower_bound,
+    upper_bound,
+    diff_col,
+    avg_col,
+    impute_type_col,
+    is_imputed_col,
 ):
     mask = ((df[diff_col] < lower_bound) | (df[diff_col] > upper_bound)) & df[
         diff_col
@@ -59,13 +66,12 @@ def impute_and_normalize_vectorized(
                 "methods": methods,
                 "imputed": imputed_count,
                 "imputed_na": imputed_na_count,
-            }
+            },
         )
 
     imputation_gap_stats = []
 
     for cum_col in cumulative_columns:
-
         logging.info(f"Starting {cum_col} vectorized imputation")
 
         temp_cols = ["gap_length", "cumulative_value_group"]
@@ -82,13 +88,15 @@ def impute_and_normalize_vectorized(
 
         if df[diff_col].isna().sum() == 0:
             logging.info(
-                f"No values to impute in {diff_col}. Only checking thresholds."
+                f"No values to impute in {diff_col}. Only checking thresholds.",
             )
             df[is_imputed_col] = False
             df[impute_type_col] = pd.Series(pd.NA, dtype="Int8", index=df.index)
             df["gap_length"] = pd.Series(pd.NA, dtype="Int8", index=df.index)
             df["cumulative_value_group"] = pd.Series(
-                pd.NA, dtype="Int8", index=df.index
+                pd.NA,
+                dtype="Int8",
+                index=df.index,
             )
             logging.info("Apply thresholds to remove physically impossible outliers")
             df = apply_thresholds(
@@ -104,7 +112,9 @@ def impute_and_normalize_vectorized(
         else:
             logging.info(f"Defining {diff_col} gap groups")
             df = process_gap_and_cumulative_groups(
-                df, diff_col=diff_col, cum_col=cum_col
+                df,
+                diff_col=diff_col,
+                cum_col=cum_col,
             )
 
             logging.info(f"Imputing {diff_col}")
@@ -121,14 +131,14 @@ def impute_and_normalize_vectorized(
 
             if remaining_na > 0:
                 logging.error(
-                    f"{remaining_na} missing values still exist in column {diff_col}. Check masks and imputation logic."
+                    f"{remaining_na} missing values still exist in column {diff_col}. Check masks and imputation logic.",
                 )
 
         logging.info(f"Calculating {diff_col} imputation gap stats")
         imputation_gap_stats.append(
             df.groupby([project_id_column, "HuisCode"])
             .apply(calculate_imputation_gap_stats, cum_col, diff_col, impute_type_col)
-            .reset_index()
+            .reset_index(),
         )
 
         drop_temp_cols(df, temp_cols=["gap_length", "cumulative_value_group"])
@@ -137,7 +147,7 @@ def impute_and_normalize_vectorized(
 
     imputation_gap_stats_df = pd.concat(imputation_gap_stats, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise_vectorized(
-        imputation_gap_stats_df["methods"]
+        imputation_gap_stats_df["methods"],
     )
 
     imputation_reading_date_stats_df = None
@@ -167,12 +177,11 @@ def drop_temp_cols(
     + ["no_diff_mask"],
     logLeftoverError=False,
 ):
-
     cols_to_drop = [col for col in temp_cols if col in df.columns]
 
     if logLeftoverError and len(cols_to_drop) > 0:
         logging.error(
-            f"There are some leftover columns to remove from the code: {cols_to_drop}"
+            f"There are some leftover columns to remove from the code: {cols_to_drop}",
         )
 
     df.drop(columns=cols_to_drop, inplace=True)
@@ -213,7 +222,8 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
     exclude_mask = ~is_na_mask
 
     df["cumulative_value_group"] = df["cumulative_value_group"].mask(
-        exclude_mask, pd.NA
+        exclude_mask,
+        pd.NA,
     )
 
     # Step 7: Add the count of records in each group consistently for all rows in the group
@@ -226,9 +236,13 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
 
 # Function to handle imputation with fixed values for negative or invalid differences
 def process_imputation_vectorized(
-    df, diff_col, cum_col, avg_col, impute_type_col, is_imputed_col
+    df,
+    diff_col,
+    cum_col,
+    avg_col,
+    impute_type_col,
+    is_imputed_col,
 ):
-
     def setup_prev_value_columns(df, cum_col):
         # Shift by one to get the immediate previous time step value before the group and make sure no other time step is there
         df["prev_cum_value"] = df[cum_col].shift(1)
@@ -259,7 +273,7 @@ def process_imputation_vectorized(
         for col in columns:
             if df[col].dtype != "Float64":
                 logging.warning(
-                    f'{col} dtype is "{df[col].dtype}". Attempting to convert.'
+                    f'{col} dtype is "{df[col].dtype}". Attempting to convert.',
                 )
                 try:
                     # Attempt to convert the column to Float64
@@ -284,7 +298,7 @@ def process_imputation_vectorized(
         # add impute jump and tracking of missing values
         df["avg_na"] = df[avg_col].isna()
         df["impute_na"] = df.groupby("cumulative_value_group")["avg_na"].transform(
-            "sum"
+            "sum",
         )
         df["impute_values"] = df[avg_col].fillna(0)
 
@@ -328,7 +342,8 @@ def process_imputation_vectorized(
         not_enough_comparable = comparable_counts <= (total_counts / 2)
 
         df["house_impute_factor"] = (df["diff_avg_sum"] / df["cum_diff_sum"]).replace(
-            [float("inf"), -float("inf")], pd.NA
+            [float("inf"), -float("inf")],
+            pd.NA,
         )
         df["house_impute_factor"] = (
             df["house_impute_factor"].fillna(1.0).mask(not_enough_comparable, 1.0)
@@ -359,7 +374,7 @@ def process_imputation_vectorized(
     df = setup_prev_value_columns(df, cum_col)
 
     df["end_cum_value"] = df.groupby("cumulative_value_group")[cum_col].transform(
-        "last"
+        "last",
     )
     df.loc[df["end_cum_value"] < 0, "end_cum_value"] = pd.NA
 
@@ -404,7 +419,8 @@ def process_imputation_vectorized(
         )
         df.loc[positive_gap_linear_mask, is_imputed_col] = True
         df.loc[positive_gap_linear_mask, diff_col] = round(
-            df["gap_jump"] / df["gap_length"], 10
+            df["gap_jump"] / df["gap_length"],
+            10,
         )
         df.loc[positive_gap_linear_mask, impute_type_col] = 4
 
@@ -472,14 +488,15 @@ def process_imputation_vectorized(
         )
         df.loc[nogpjump_has_end_value_positive_mask, is_imputed_col] = True
         df.loc[nogpjump_has_end_value_positive_mask, diff_col] = df.loc[
-            nogpjump_has_end_value_positive_mask, "impute_values"
+            nogpjump_has_end_value_positive_mask,
+            "impute_values",
         ]
         df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = 7
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
             raise Exception(
-                "Negative next value at end of gap - that is not supposed to happen!"
+                "Negative next value at end of gap - that is not supposed to happen!",
             )
 
         ### start value but no end value for gap - fill with impute values
