@@ -5,6 +5,7 @@ from math import floor, isclose, log10
 
 import numpy as np
 import pandas as pd
+import etdtransform
 from etdtransform.vectorized_impute import impute_and_normalize_vectorized
 
 impute_and_normalize_optimized = impute_and_normalize_vectorized
@@ -334,7 +335,7 @@ def get_diff_columns(cumulative_columns: list):
     return [col + "Diff" for col in cumulative_columns]
 
 
-aggregate_folder_path = os.getenv("AGGREGATE_FOLDER_PATH")
+aggregate_folder_path = etdtransform.options.aggregate_folder_path
 
 
 def prepare_diffs_for_impute(
