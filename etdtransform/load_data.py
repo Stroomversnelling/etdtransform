@@ -4,17 +4,16 @@ from typing import List, Optional
 
 import ibis
 import ibis.selectors as s
-import numpy as np
 import pandas as pd
-from calculated_columns import intervals, mark_coldest_two_weeks
-from etdmap import (
+from ibis import _
+
+from etdtransform.aggregate import (
     aggregate_folder_path,
     get_aggregate_table,
     mapped_folder_path,
     read_aggregate,
 )
-from ibis import _
-
+from etdtransform.calculated_columns import intervals, mark_coldest_two_weeks
 from etdtransform.knmi import (
     get_project_weather_station_data,
     get_weather_data,

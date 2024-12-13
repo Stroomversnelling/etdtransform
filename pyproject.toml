@@ -15,6 +15,7 @@ maintainers = [
 requires-python = ">= 3.9"
 dependencies = [
     "pandas>=2.2",
+    "ibis-framework"
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 
