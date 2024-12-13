@@ -15,7 +15,7 @@ from etdmap import (
 )
 from ibis import _
 
-from etdtransform.knmi.knmi import (
+from etdtransform.knmi import (
     get_project_weather_station_data,
     get_weather_data,
     weather_columns,
