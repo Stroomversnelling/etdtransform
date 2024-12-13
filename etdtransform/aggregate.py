@@ -5,6 +5,7 @@ import re
 import ibis
 import numpy as np
 import pandas as pd
+import etdtransform
 from etdmap.data_model import cumulative_columns
 from etdmap.index_helpers import read_index, update_meenemen
 from etdtransform.calculated_columns import add_calculated_columns_imputed_data
@@ -18,8 +19,8 @@ Example intervals:
 5 min: '5min'
 """
 
-mapped_folder_path = os.getenv("MAPPED_FOLDER_PATH")
-aggregate_folder_path = os.getenv("AGGREGATE_FOLDER_PATH")
+mapped_folder_path = etdtransform.options.mapped_folder_path
+aggregate_folder_path = etdtransform.options.aggregate_folder_path
 index_file_path = None
 
 

@@ -3,10 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 
+import etdtransform
+
 
 def get_project_weather_station_data():
     # Load mapping of ProjectIdBSV to weather stations and ensure names are uppercase
-    weather_station_file = os.getenv("WEATHER_STATIONS_SUMMARY_FILE")
+    weather_station_file = etdtransform.options.weather_stations_summary_file
     project_weather_station_df = pd.read_excel(
         weather_station_file,
         sheet_name="ProjectWeatherStation",
@@ -21,7 +23,7 @@ def get_project_weather_station_data():
 
 def get_weather_data():
     # Load all temperature CSV files from the folder
-    weather_data_folder = os.getenv("WEATHER_DATA_FOLDER_PATH")
+    weather_data_folder = etdtransform.options.weather_data_folder_path
 
     weather_data_df = load_knmi_weather_data(weather_data_folder)
 

@@ -1,3 +1,3 @@
-from . import settings
+from etdtransform._config import options
 
-__all__ = ["settings"]
+__all__ = ["options"]

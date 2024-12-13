@@ -1,23 +1,25 @@
-import os
 import logging
-import pandas as pd
-import numpy as np
+import os
+from typing import List, Optional
+
 import ibis
-from ibis import _
 import ibis.selectors as s
+import numpy as np
+import pandas as pd
+from calculated_columns import intervals, mark_coldest_two_weeks
 from etdmap import (
-    read_aggregate,
+    aggregate_folder_path,
     get_aggregate_table,
     mapped_folder_path,
-    aggregate_folder_path,
+    read_aggregate,
 )
+from ibis import _
+
 from etdtransform.knmi.knmi import (
-    get_weather_data,
     get_project_weather_station_data,
+    get_weather_data,
     weather_columns,
 )
-from calculated_columns import intervals, mark_coldest_two_weeks
-from typing import List, Optional
 
 
 def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
