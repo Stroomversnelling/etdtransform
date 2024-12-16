@@ -1,13 +1,15 @@
 import logging
 import os
 import re
+from typing import Optional
 
 import ibis
 import numpy as np
 import pandas as pd
-import etdtransform
 from etdmap.data_model import cumulative_columns
 from etdmap.index_helpers import read_index, update_meenemen
+
+import etdtransform
 from etdtransform.calculated_columns import add_calculated_columns_imputed_data
 from etdtransform.impute import process_and_impute
 
@@ -33,7 +35,7 @@ def read_hh_data(interval="default", metadata_columns=None):
     return add_index_columns(df, columns=metadata_columns)
 
 
-def add_index_columns(df, columns=None):
+def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.DataFrame:
     if columns:
         index_df, index_path = read_index()
         columns_to_select = ["HuisCode", "HuisIdBSV", "ProjectIdBSV", *columns]
@@ -52,7 +54,7 @@ def aggregate_hh_data_5min():
 
     data_frames = []
 
-    index_df = index_df[index_df["Meenemen"] is True]
+    index_df = index_df[index_df["Meenemen"] == True]
 
     for _, row in index_df.iterrows():
         huis_code = row["HuisCode"]

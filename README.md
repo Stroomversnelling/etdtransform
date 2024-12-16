@@ -12,7 +12,7 @@ To use most functions in this package, one needs to configure options so that th
 ```python
 import etdtransform
 
-etdtransform.options.mapping_folder = 'mapping_folder_path' # path to folder where mapping files are stored
+etdtransform.options.mapped_folder = 'mapped_folder_path' # path to folder where mapped files are stored
 etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
 etdtransform.options.weather_folder = 'KNMI_weather_data_folder_path' # path to the KNMI weather data folder
 etdtransform.options.weather_file = 'path_to_KNMI_stations_file' # path to the KNMI weather stations data file
@@ -125,7 +125,7 @@ df_calculated = get_hh_table('5min', 'calculated').select(
 
 ## Transformations to prepare datasets for loading
 
-After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapping folder. The mapping folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.
+After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.
 
 While most users will not apply these transformations, at the moment, some of the following operations require large amounts of RAM and can surpass 100GB of RAM. Please ensure you have enough RAM available if you are processing the data.
 
@@ -138,7 +138,7 @@ For nearly 300 househoulds, it requires over 25GB of RAM. This function will sav
 ```python
 from etdtransform import aggregate_hh_data_5min
 
-etdtransform.options.mapping_folder = 'mapping_folder_path' # path to folder where mapping files are stored
+etdtransform.options.mapped_folder = 'mapped_folder_path' # path to folder where mapping files are stored
 etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
 
 aggregate_hh_data_5min() # this will generate the `household_default.parquet` file in the aggregate data folder

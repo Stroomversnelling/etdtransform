@@ -6,7 +6,7 @@ Option = namedtuple("Option", "key default_value doc validator callback")
 
 # Define allowed Options
 mapped_folder_path = Option(
-    key="mapping_folder_path",
+    key="mapped_folder_path",
     # By default it is stored locally in the data folder.
     default_value=r"./data/mapped",
     doc=(
