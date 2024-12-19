@@ -21,16 +21,12 @@ Example intervals:
 5 min: '5min'
 """
 
-mapped_folder_path = etdtransform.options.mapped_folder_path
-aggregate_folder_path = etdtransform.options.aggregate_folder_path
-index_file_path = None
-
 
 def read_hh_data(interval="default", metadata_columns=None):
     if not metadata_columns:
         metadata_columns = []
     df = pd.read_parquet(
-        os.path.join(aggregate_folder_path, f"household_{interval}.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"),
     )
     return add_index_columns(df, columns=metadata_columns)
 
@@ -62,7 +58,7 @@ def aggregate_hh_data_5min():
         project_code = row["ProjectIdBSV"]
         file_name = f"household_{huis_code}_table.parquet"
 
-        file_path = os.path.join(mapped_folder_path, file_name)
+        file_path = os.path.join(etdtransform.options.mapped_folder_path, file_name)
         household_df = pd.read_parquet(file_path)
         household_df["HuisCode"] = huis_code
         household_df["ProjectIdBSV"] = project_code
@@ -75,7 +71,7 @@ def aggregate_hh_data_5min():
     df = pd.concat(data_frames, ignore_index=True)
     logging.info("Saving HH data to parquet file.")
     df.to_parquet(
-        os.path.join(aggregate_folder_path, "household_default.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, "household_default.parquet"),
         engine="pyarrow",
     )
 
@@ -157,7 +153,7 @@ def impute_hh_data_5min(
     logging.info("Saving files.")
     df.to_parquet(
         os.path.join(
-            aggregate_folder_path,
+            etdtransform.options.aggregate_folder_path,
             f"household_imputed{optimized_label}.parquet",
         ),
         engine="pyarrow",
@@ -165,21 +161,21 @@ def impute_hh_data_5min(
 
     aggregated_diff.to_parquet(
         os.path.join(
-            aggregate_folder_path,
+            etdtransform.options.aggregate_folder_path,
             f"household_aggregated_diff{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_house.to_parquet(
         os.path.join(
-            aggregate_folder_path,
+            etdtransform.options.aggregate_folder_path,
             f"impute_summary_household{optimized_label}.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_project.to_parquet(
         os.path.join(
-            aggregate_folder_path,
+            etdtransform.options.aggregate_folder_path,
             f"impute_summary_project{optimized_label}.parquet",
         ),
         engine="pyarrow",
@@ -188,7 +184,7 @@ def impute_hh_data_5min(
     if imputation_reading_date_stats_df:
         imputation_reading_date_stats_df.to_parquet(
             os.path.join(
-                aggregate_folder_path,
+                etdtransform.options.aggregate_folder_path,
                 f"impute_summary_reading_date{optimized_label}.parquet",
             ),
             engine="pyarrow",
@@ -209,7 +205,7 @@ def add_calculated_columns_to_hh_data(df):
 
     logging.info("Saving calculated columns to file: household_calculated.parquet")
     df.to_parquet(
-        os.path.join(aggregate_folder_path, "household_calculated.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet"),
         engine="pyarrow",
     )
 
@@ -219,7 +215,7 @@ def add_calculated_columns_to_hh_data(df):
 def read_aggregate(name, interval):
     safe_name = re.sub(r"\W+", "_", name.lower())
     return pd.read_parquet(
-        os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
     )
 
 
@@ -229,7 +225,7 @@ def get_aggregate_table(name, interval):
     """
     safe_name = re.sub(r"\W+", "_", name.lower())
     parquet_path = os.path.join(
-        aggregate_folder_path,
+        etdtransform.options.aggregate_folder_path,
         f"{safe_name}_{interval}.parquet",
     )
     return ibis.read_parquet(parquet_path)
@@ -277,7 +273,7 @@ def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
                 f"-- {interval}-min interval - saving file household_5min.parquet --"
             )
             df.to_parquet(
-                os.path.join(aggregate_folder_path, "household_5min.parquet"),
+                os.path.join(etdtransform.options.aggregate_folder_path, "household_5min.parquet"),
                 engine="pyarrow",
             )
         else:
@@ -317,7 +313,7 @@ def aggregate_and_save(
     df = df.merge(df_size, on=["ReadingDate", *list(group_column)], how="left")
     safe_name = re.sub(r"\W+", "_", alt_name.lower())
     df.to_parquet(
-        os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
         engine="pyarrow",
     )
 
@@ -472,7 +468,7 @@ def resample_and_save(
     df.reset_index(inplace=True)
     safe_name = re.sub(r"\W+", "_", alt_name.lower())
     df.to_parquet(
-        os.path.join(aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
         engine="pyarrow",
     )
 

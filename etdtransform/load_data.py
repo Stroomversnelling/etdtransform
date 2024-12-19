@@ -7,10 +7,9 @@ import ibis.selectors as s
 import pandas as pd
 from ibis import _
 
+import etdtransform
 from etdtransform.aggregate import (
-    aggregate_folder_path,
     get_aggregate_table,
-    mapped_folder_path,
     read_aggregate,
 )
 from etdtransform.calculated_columns import intervals, mark_coldest_two_weeks
@@ -37,7 +36,7 @@ def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
 
     for interval in intervals:
         household_parquet = os.path.join(
-            aggregate_folder_path, f"household_{interval}.parquet"
+            etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
         )
         household_table = ibis.read_parquet(household_parquet)
 
@@ -62,7 +61,7 @@ def join_index_table(
 ) -> ibis.Expr:
     if index_table is None:
         index_table = ibis.read_parquet(
-            os.path.join(mapped_folder_path, "index.parquet")
+            os.path.join(etdtransform.options.mapped_folder_path, "index.parquet")
         )
 
     return tbl.left_join(index_table, index_join_columns)

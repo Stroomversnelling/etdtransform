@@ -5,6 +5,28 @@ This package provides the required helpers to work with the `Energietransitie da
 
 ## Installation
 
+Normally, one would use the `etdanalyze` and `etdtranform` packages and install their requirements, which will automatically install `etdtransform`. 
+
+However, if you want to use this package on its own, you can install it with pip:
+
+```bash
+git clone https://github.com/Stroomversnelling/etdtransform.git
+cd etdtransform
+pip install .
+```
+
+### Developing and contributing
+
+If you would like to contribute to the package code, we would create an environment and install it in editable mode:
+
+```bash	
+git clone https://github.com/Stroomversnelling/etdtransform.git
+cd etdtransform
+python -m venv .venv
+source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
+pip install -e .
+```
+
 ## Configuration
 
 To use most functions in this package, one needs to configure options so that the location of the mapped files created with `etdmap` and the location of aggregated data created with this package is defined up front.

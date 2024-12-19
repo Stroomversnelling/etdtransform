@@ -13,8 +13,8 @@ impute_and_normalize_optimized = impute_and_normalize_vectorized
 
 def calculate_average_diff(
     df: pd.DataFrame,
-    project_id_column,
-    diff_columns: list,
+    project_id_column: str,
+    diff_columns: list[str],
 ) -> pd.DataFrame:
     logging.info(f"Calculating Diff column averages.")
 
@@ -256,6 +256,7 @@ def check_cumulative_difference(household_df, cum_col, huis_code):
 
     return cum_column_total_difference, True
 
+
 def methods_to_bitwise(methods):
     bitwise_value = 0
     for method in methods:
@@ -334,10 +335,6 @@ def sort_for_impute(df: pd.DataFrame, project_id_column: str):
 def get_diff_columns(cumulative_columns: list):
     return [col + "Diff" for col in cumulative_columns]
 
-
-aggregate_folder_path = etdtransform.options.aggregate_folder_path
-
-
 def prepare_diffs_for_impute(
     df: pd.DataFrame,
     project_id_column: str,
@@ -358,14 +355,14 @@ def prepare_diffs_for_impute(
 
     logging.info("Saving average diff columns in avg_diffs.parquet")
     diffs.to_parquet(
-        os.path.join(aggregate_folder_path, "avg_diffs.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
         engine="pyarrow",
     )
     logging.info(
         "Saving household diff max and bounds used in household_diff_max_bounds.parquet",
     )
     max_bound.to_parquet(
-        os.path.join(aggregate_folder_path, "household_diff_max_bounds.parquet"),
+        os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
         engine="pyarrow",
     )
 
@@ -373,7 +370,7 @@ def prepare_diffs_for_impute(
 
 
 def read_diffs():
-    return pd.read_parquet(os.path.join(aggregate_folder_path, "avg_diffs.parquet"))
+    return pd.read_parquet(os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"))
 
 
 def process_and_impute(
@@ -391,7 +388,7 @@ def process_and_impute(
         logging.info("Loading average diffs from file...")
         diffs = read_diffs()
         max_bound = pd.read_parquet(
-            os.path.join(aggregate_folder_path, "household_diff_max_bounds.parquet"),
+            os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
         )
     else:
         diff_columns, diffs, max_bound = prepare_diffs_for_impute(
@@ -427,7 +424,7 @@ def process_and_impute(
     logging.info("Saving imputation gap statistics...")
     imputation_gap_stats_df.to_parquet(
         os.path.join(
-            aggregate_folder_path,
+            etdtransform.options.aggregate_folder_path,
             f"impute_gap_stats{optimized_label}.parquet",
         ),
         engine="pyarrow",

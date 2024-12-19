@@ -157,26 +157,32 @@ def impute_and_normalize_vectorized(
 
 def drop_temp_cols(
     df,
-    temp_cols=[
-        "gap_start",
-        "gap_group",
-        "gap_jump_is_na_mask",
-        "gap_jump",
-        "house_impute_factor",
-        "avg_na",
-        "impute_jump",
-        "impute_na",
-        "impute_values",
-        "impute_na_ratio",
-        "cum_value_encountered",
-        "prev_cum_value",
-        "end_cum_value",
-        "impute_type_old",
-    ]
-    + ["gap_length", "cumulative_value_group"]
-    + ["no_diff_mask"],
+    temp_cols=None,
     logLeftoverError=False,
 ):
+
+    if temp_cols is None:
+        temp_cols = [
+            "gap_start",
+            "gap_group",
+            "gap_jump_is_na_mask",
+            "gap_jump",
+            "house_impute_factor",
+            "avg_na",
+            "impute_jump",
+            "impute_na",
+            "impute_values",
+            "impute_na_ratio",
+            "cum_value_encountered",
+            "prev_cum_value",
+            "end_cum_value",
+            "impute_type_old",
+            "gap_length",
+            "cumulative_value_group",
+            "no_diff_mask"
+            ]
+
+
     cols_to_drop = [col for col in temp_cols if col in df.columns]
 
     if logLeftoverError and len(cols_to_drop) > 0:
