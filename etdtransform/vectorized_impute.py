@@ -136,7 +136,7 @@ def impute_and_normalize_vectorized(
 
         logging.info(f"Calculating {diff_col} imputation gap stats")
         imputation_gap_stats.append(
-            df.groupby([project_id_column, "HuisCode"])
+            df.groupby([project_id_column, "HuisIdBSV"])
             .apply(calculate_imputation_gap_stats, cum_col, diff_col, impute_type_col)
             .reset_index(),
         )
@@ -202,7 +202,7 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
 
     # Step 2: Identify gap start only for NA values and transitions between households
     df["gap_start"] = (is_na_mask & (~is_na_mask.shift(1, fill_value=False))) | (
-        (df["HuisCode"] != df["HuisCode"].shift(1)) & is_na_mask
+        (df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)) & is_na_mask
     )
 
     # Step 3: Create gap groups by cumulative sum, but now ensure it doesn't increment unnecessarily at house boundaries
@@ -257,7 +257,7 @@ def process_imputation_vectorized(
             df["cumulative_value_group"] != df["cumulative_value_group"].shift(1)
         ) & ~(df["cumulative_value_group"].isna())
 
-        first_in_house = df["HuisCode"] != df["HuisCode"].shift(1)
+        first_in_house = df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)
 
         # remove all values that are not the first in the group or that are from another household
         df.loc[
@@ -331,20 +331,20 @@ def process_imputation_vectorized(
         df["diff_avg_sum"] = (
             df[avg_col]
             .where(df["comparable_to_impute_mask"])
-            .groupby(df["HuisCode"])
+            .groupby(df["HuisIdBSV"])
             .transform("sum")
         )
         df["cum_diff_sum"] = (
             df[diff_col]
             .where(df["comparable_to_impute_mask"])
-            .groupby(df["HuisCode"])
+            .groupby(df["HuisIdBSV"])
             .transform("sum")
         )
 
-        comparable_counts = df.groupby("HuisCode")[
+        comparable_counts = df.groupby("HuisIdBSV")[
             "comparable_to_impute_mask"
         ].transform("sum")
-        total_counts = df.groupby("HuisCode")[diff_col].transform("size")
+        total_counts = df.groupby("HuisIdBSV")[diff_col].transform("size")
         not_enough_comparable = comparable_counts <= (total_counts / 2)
 
         df["house_impute_factor"] = (df["diff_avg_sum"] / df["cum_diff_sum"]).replace(
@@ -470,7 +470,7 @@ def process_imputation_vectorized(
         if nogpjump_no_start_no_end_value_mask.any():
             logging.error(f"No next value or last value for a gap. Whole column empty?")
             house_no_diff_values = (
-                df.groupby("HuisCode")[diff_col].transform("count") == 0
+                df.groupby("HuisIdBSV")[diff_col].transform("count") == 0
             )
 
             # raise Exception(f'No next value or last value for a gap.')
@@ -539,13 +539,13 @@ def process_imputation_vectorized(
 
     # Households without a cumulative sum above 0 or all cum_col values are NA
     house_no_cum_sum = (
-        df.groupby("HuisCode")[cum_col].transform("sum").fillna(0) <= 0
-    ) | (df.groupby("HuisCode")[cum_col].transform("count") == 0)
+        df.groupby("HuisIdBSV")[cum_col].transform("sum").fillna(0) <= 0
+    ) | (df.groupby("HuisIdBSV")[cum_col].transform("count") == 0)
 
     # Households where max - min cumulative sum is not > 0
     houses_cum_min_max = (
-        df[cum_col].groupby(df["HuisCode"]).transform("max")
-        - df[cum_col].groupby(df["HuisCode"]).transform("min")
+        df[cum_col].groupby(df["HuisIdBSV"]).transform("max")
+        - df[cum_col].groupby(df["HuisIdBSV"]).transform("min")
     ).fillna(0) <= 0
 
     drop_temp_cols(df, temp_cols=temp_cols)
