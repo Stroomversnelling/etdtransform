@@ -34,7 +34,7 @@ def read_hh_data(interval="default", metadata_columns=None):
 def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.DataFrame:
     if columns:
         index_df, index_path = read_index()
-        columns_to_select = ["HuisCode", "HuisIdBSV", "ProjectIdBSV", *columns]
+        columns_to_select = ["HuisIdBSV", "HuisIdBSV", "ProjectIdBSV", *columns]
         columns_to_select = list(set(columns_to_select))
         index_df = index_df[columns_to_select]
         df = df.merge(index_df, on=["HuisIdBSV", "ProjectIdBSV"], how="left")
@@ -50,17 +50,17 @@ def aggregate_hh_data_5min():
 
     data_frames = []
 
-    index_df = index_df[index_df["Meenemen"] == True]
+    index_df = index_df[index_df["Meenemen"]]
 
     for _, row in index_df.iterrows():
-        huis_code = row["HuisCode"]
+        # huis_code = row["HuisCode"]
         huis_id_bsv = row["HuisIdBSV"]
         project_code = row["ProjectIdBSV"]
-        file_name = f"household_{huis_code}_table.parquet"
+        file_name = f"household_{huis_id_bsv}_table.parquet"
 
         file_path = os.path.join(etdtransform.options.mapped_folder_path, file_name)
         household_df = pd.read_parquet(file_path)
-        household_df["HuisCode"] = huis_code
+        # household_df["HuisCode"] = huis_code
         household_df["ProjectIdBSV"] = project_code
         household_df["HuisIdBSV"] = huis_id_bsv
 
@@ -128,7 +128,7 @@ def impute_hh_data_5min(
 
     modified_household_dfs = []
 
-    for _huis_code, household_df in df.groupby("HuisCode"):
+    for _huis_code, household_df in df.groupby("HuisIdBSV"):
         for col in cumulative_columns:
             household_df[col + "Original"] = household_df[col]  # rename
             household_df[col] = household_df[col + "Diff"].cumsum()
@@ -232,7 +232,7 @@ def get_aggregate_table(name, interval):
 
 
 def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
-    group_column = ["ProjectIdBSV", "HuisCode"]
+    group_column = ["ProjectIdBSV", "HuisIdBSV"]
     if df is None:
         logging.info("Loading data with calculated columns to resample hh data")
         df = read_hh_data(interval="calculated")
@@ -457,7 +457,7 @@ def aggregate_avg(df, column, group_column, size):
 
 def resample_and_save(
     df,
-    group_column=("ProjectIdBSV", "HuisCode"),
+    group_column=("ProjectIdBSV", "HuisIdBSV"),
     interval="5min",
     alt_name=None,
 ):
@@ -480,7 +480,7 @@ def resample_by_columns(
 ):
     # resampled_dfs = []
     if group_column is None:
-        group_column = ["ProjectIdBSV", "HuisCode"]
+        group_column = ["ProjectIdBSV", "HuisIdBSV"]
 
     if interval == "5min":
         min_count = 1

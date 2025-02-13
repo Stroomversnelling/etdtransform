@@ -28,9 +28,9 @@ def calculate_average_diff(
     # per Diff column max per house
     logging.info("Calculating max values per household.")
     household_max = (
-        df.groupby([project_id_column, "HuisCode"])[diff_columns].max().reset_index()
+        df.groupby([project_id_column, "HuisIdBSV"])[diff_columns].max().reset_index()
     )
-    household_max.columns = [project_id_column, "HuisCode"] + [
+    household_max.columns = [project_id_column, "HuisIdBSV"] + [
         f"{col}_huis_max" for col in diff_columns
     ]
 
@@ -57,7 +57,7 @@ def calculate_average_diff(
 
         logging.info(f"Identifying households to include for {col}.")
         household_max_with_bounds = household_max[
-            [project_id_column, "HuisCode", f"{col}_huis_max"]
+            [project_id_column, "HuisIdBSV", f"{col}_huis_max"]
         ].merge(upper_bounds, on=project_id_column, how="left")
         include_mask = (
             household_max_with_bounds[f"{col}_huis_max"]
@@ -66,8 +66,8 @@ def calculate_average_diff(
         households_to_include = household_max_with_bounds.loc[include_mask, "HuisCode"]
 
         logging.info(f"Filtering the dataframe for {col}.")
-        df_filtered = df[["HuisCode", project_id_column, "ReadingDate", col]][
-            df["HuisCode"].isin(households_to_include)
+        df_filtered = df[["HuisIdBSV", project_id_column, "ReadingDate", col]][
+            df["HuisIdBSV"].isin(households_to_include)
         ][[project_id_column, "ReadingDate", col]]
 
         logging.info(f"Checking for negative Diff values in {col}.")
@@ -100,7 +100,7 @@ def calculate_average_diff(
 def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
     first_key = next(iter(avg_diff_dict))
     key_columns = avg_diff_dict[first_key]["household_max_with_bounds"][
-        [project_id_column, "HuisCode"]
+        [project_id_column, "HuisIdBSV"]
     ]
     columns = [key_columns]
     for col, data in avg_diff_dict.items():
@@ -160,32 +160,32 @@ def validate_household_column(household_df, cum_col, huis_code):
 
     if n_na == len_df:
         logging.info(
-            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
+            f"HuisIdBSV {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
         )
         return False
     elif n_na / len_df > 0.4:
         percent_na = 100 * n_na / len_df
         logging.error(
-            f"HuisCode {huis_code} has {percent_na:.2f}% missing values in {cum_col}. Consider removing.",
+            f"HuisIdBSV {huis_code} has {percent_na:.2f}% missing values in {cum_col}. Consider removing.",
         )
     else:
         logging.info(
-            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
+            f"HuisIdBSV {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
         )
 
     if round(household_df[cum_col].sum(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column.",
+            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[cum_col].max() - household_df[cum_col].min(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column.",
+            f"HuisIdBSV {huis_code} has no change in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[f"{cum_col}Diff"].sum(), 10) == 0:
         logging.warning(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}Diff before imputation.",
+            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}Diff before imputation.",
         )
 
     return True
@@ -216,22 +216,22 @@ def imputation_column_info_checks(household_df, cum_col, huis_code):
 
     if n_na == len_df:
         logging.info(
-            f"HuisCode {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
+            f"HuisIdBSV {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
         )
         return False
     elif n_na / len_df > 0.4:
         percent_na = 100 * n_na / len_df
         logging.error(
-            f"HuisCode {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing.",
+            f"HuisIdBSV {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing.",
         )
     else:
         logging.info(
-            f"HuisCode {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
+            f"HuisIdBSV {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
         )
 
     if round(household_df[cum_col].sum(), 10) == 0:
         logging.info(
-            f"HuisCode {huis_code} has no non-zero values in {cum_col}. Skipping column.",
+            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}. Skipping column.",
         )
         return False
 
@@ -246,12 +246,12 @@ def check_cumulative_difference(household_df, cum_col, huis_code):
     )
     if isclose(cum_column_total_difference, 0):
         logging.info(
-            f"HuisCode {huis_code} has no change in {cum_col}. Skipping column.",
+            f"HuisIdBSV {huis_code} has no change in {cum_col}. Skipping column.",
         )
         return cum_column_total_difference, False
     if round(household_df[diff_col].sum(), 10) == 0:
         logging.warning(
-            f"HuisCode {huis_code} has no non-zero values in {diff_col} before imputation.",
+            f"HuisIdBSV {huis_code} has no non-zero values in {diff_col} before imputation.",
         )
 
     return cum_column_total_difference, True
@@ -329,7 +329,7 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
 
 def sort_for_impute(df: pd.DataFrame, project_id_column: str):
     logging.info("Sorting to prepare for imputation.")
-    return df.sort_values(by=[project_id_column, "HuisCode", "ReadingDate"])
+    return df.sort_values(by=[project_id_column, "HuisIdBSV", "ReadingDate"])
 
 
 def get_diff_columns(cumulative_columns: list):
@@ -341,7 +341,7 @@ def prepare_diffs_for_impute(
     cumulative_columns: list,
     sorted=False,
 ):
-    if sorted != True:
+    if not sorted:
         df = sort_for_impute(df, project_id_column)
 
     diff_columns = get_diff_columns(cumulative_columns)
@@ -381,7 +381,7 @@ def process_and_impute(
     diffs_calculated=False,
     optimized=False,
 ):
-    if sorted != True:
+    if not sorted:
         df = sort_for_impute(df, project_id_column)
 
     if diffs_calculated:
@@ -405,7 +405,7 @@ def process_and_impute(
 
     logging.info("Merge completed.")
 
-    if optimized == True:
+    if optimized:
         optimized_label = "_optimized"
         df, imputation_gap_stats_df, imputation_reading_date_stats_df = (
             impute_and_normalize_optimized(
@@ -434,7 +434,7 @@ def process_and_impute(
     imputation_summary_house = imputation_gap_stats_df[
         [
             project_id_column,
-            "HuisCode",
+            "HuisIdBSV",
             "column",
             "diff_col_total",
             "cum_col_min_max_diff",
@@ -448,13 +448,13 @@ def process_and_impute(
 
     logging.info("Calculating the total records for each house")
     total_records_house = (
-        df.groupby("HuisCode").size().reset_index(name="total_records")
+        df.groupby("HuisIdBSV").size().reset_index(name="total_records")
     )
 
     logging.info("Merging total records with house imputation summary")
     imputation_summary_house = imputation_summary_house.merge(
         total_records_house,
-        on=["HuisCode"],
+        on=["HuisIdBSV"],
     )
     imputation_summary_house["percentage_imputed"] = (
         imputation_summary_house["imputed"] / imputation_summary_house["total_records"]
@@ -498,7 +498,7 @@ def process_and_impute(
     ]
     for _, row in over_40_percent_imputed_house.iterrows():
         logging.warning(
-            f"House {row['HuisCode']}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
+            f"House {row["HuisIdBSV"]}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
         )
 
     logging.info("Provide warnings if any project has > 40% imputed")
