@@ -1,0 +1,5 @@
+etdmap_configuration:
+  mapped_folder_path: ''
+  aggregate_folder_path: ''
+  # BSV_METADATA_FILE is the file where metadata about each household is kept and managed to consistently map data source provider households to BSV households
+  bsv_metadata_file: ''
