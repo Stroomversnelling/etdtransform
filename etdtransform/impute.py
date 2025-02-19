@@ -63,7 +63,7 @@ def calculate_average_diff(
             household_max_with_bounds[f"{col}_huis_max"]
             < household_max_with_bounds[f"{col}_upper_bound"]
         )
-        households_to_include = household_max_with_bounds.loc[include_mask, "HuisCode"]
+        households_to_include = household_max_with_bounds.loc[include_mask, "HuisIdBSV"]
 
         logging.info(f"Filtering the dataframe for {col}.")
         df_filtered = df[["HuisIdBSV", project_id_column, "ReadingDate", col]][

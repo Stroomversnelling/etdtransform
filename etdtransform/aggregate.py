@@ -34,7 +34,7 @@ def read_hh_data(interval="default", metadata_columns=None):
 def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.DataFrame:
     if columns:
         index_df, index_path = read_index()
-        columns_to_select = ["HuisIdBSV", "HuisIdBSV", "ProjectIdBSV", *columns]
+        columns_to_select = ["HuisIdBSV", "ProjectIdBSV", *columns]
         columns_to_select = list(set(columns_to_select))
         index_df = index_df[columns_to_select]
         df = df.merge(index_df, on=["HuisIdBSV", "ProjectIdBSV"], how="left")
