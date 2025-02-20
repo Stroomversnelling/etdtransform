@@ -1,13 +1,13 @@
 import os
 from pathlib import Path
 
+import conftest
 import etdmap
 import etdmap.index_helpers
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
-import yaml
-from etdmap.index_helpers import read_index, update_meenemen
+from test_helpers import get_metadata_parquet_file
 
 import etdtransform
 from etdtransform.aggregate import (
@@ -18,26 +18,10 @@ from etdtransform.aggregate import (
     read_hh_data,
     resample_hh_data,
 )
-from etdtransform.impute import prepare_diffs_for_impute, sort_for_impute
+from etdtransform.impute import prepare_diffs_for_impute
+
 
 def test_total_workflow_imputations():
-
-    # set paths
-    def load_config(config_path):
-            with open(config_path, 'r') as file:
-                return yaml.safe_load(file)
-
-    test_config_path = Path("config_test.yaml")
-    if os.path.isfile(test_config_path):
-        config = load_config(test_config_path)
-    else:
-         raise FileNotFoundError("no file named 'config_test.yaml'")
-
-    etdmap.options.mapped_folder_path = Path(config['etdmap_configuration']['mapped_folder_path'])
-    etdmap.options.aggregate_folder_path = Path(config['etdmap_configuration']['aggregate_folder_path'])
-    etdmap.options.bsv_metadata_file = Path(config['etdmap_configuration']['bsv_metadata_file'])
-    etdtransform.options.mapped_folder_path = Path(config['etdtransform_configuration']['mapped_folder_path'])
-    etdtransform.options.aggregate_folder_path = etdmap.options.aggregate_folder_path
 
     # update with the manual steps from bsv metadata
     index_df = etdmap.index_helpers.update_meenemen()
@@ -108,55 +92,112 @@ def test_total_workflow_imputations():
             sorted=True,
             diffs_calculated=diffs_calculated,
         )
+    # should create the following files
+    hh_agg_diff_path = os.path.join(
+            etdtransform.options.aggregate_folder_path,
+            "household_aggregated_diff.parquet",
+        )
+    imputation_summary_house_path = os.path.join(
+            etdtransform.options.aggregate_folder_path,
+            "impute_summary_household.parquet",
+        )
+    imputation_summary_project_path = os.path.join(
+            etdtransform.options.aggregate_folder_path,
+            "impute_summary_project.parquet",
+        )
+    assert os.path.isfile(hh_agg_diff_path)
+    assert os.path.isfile(imputation_summary_house_path)
+    assert os.path.isfile(imputation_summary_project_path)
 
     # "add calculated columns"
     add_calculated_columns_to_hh_data(df_imputed)
+    # should create file: 
+    hh_calculated_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet")
+    assert os.path.isfile(hh_calculated_path)
+    # the household_calculated file should contain the following cols:
+    calc_cols = [
+        "TerugleveringTotaalNetto",
+        "ElektriciteitsgebruikTotaalNetto",
+        "ElektriciteitsgebruikTotaalWarmtepomp",
+        "ElektriciteitsgebruikTotaalGebouwgebonden",
+        "ElektriciteitsgebruikTotaalHuishoudelijk",
+        "Zelfgebruik",
+        "ElektriciteitsgebruikTotaalBruto"
+    ]
+    df_hh_calc = pd.read_parquet(hh_calculated_path)
+    assert all([col in df_hh_calc.columns for col in calc_cols])
 
     #"resample_hh_5min"
     resample_hh_data(intervals=["5min"])
+    # Should create file
+    hh_5min_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_5min.parquet")
+    assert os.path.isfile(hh_5min_path)
+
+    # Note all following imputations and aggregations
+    # will be run here, and tested in test_files_equal_expected 
 
     # "aggregate_project_5min"
     aggregate_project_data(intervals=["5min"])
-
     # "resample_hh_15_60min"
     resample_hh_data(intervals=["60min", "15min"])
-
     # "aggregate_project_15_60min"
     aggregate_project_data(intervals=["60min", "15min"])
-
     # "resample_hh_24h"
     resample_hh_data(intervals=["24h"])
-
     # "aggregate_project_24h"
     aggregate_project_data(intervals=["24h"])
-
     # "resample_hh_6h"
     resample_hh_data(intervals=["6h"])
-
     # "aggregate_project_6h"
     aggregate_project_data(intervals=["6h"])
 
 
-def test_prepare_diffs_for_impute(load_metadata):
+def _check_metadatafiles_are_equal(load_metadata, stored_path, generated_path):
+
+    expected_metadata = load_metadata(stored_path)
+
+    parquet_file = pq.ParquetFile(generated_path)
+    actual_metadata = get_metadata_parquet_file(parquet_file)
+    # The meta data contains:
+    # the number of rows & cols,
+    # for each column the min, max values and null count
+    return actual_metadata == expected_metadata
+
+
+def _check_samples_are_equal(expected_path, generated_path):
     """
-    Should generate a file called avr_diff. 
-
-    This test compares it to a snippet of what that file
-    should look like and it compares the metadata of the file
+    Checks if expected vs. generated samples of .parquet files are equal.
     """
-    expected_metadata = load_metadata("tests/data/metadata_avg_diffs.json")  # Pass filepath
+    df_expected = pd.read_parquet(expected_path)
 
-    generated_file_path = os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet")
-    parquet_file = pq.ParquetFile(generated_file_path)
-    actual_metadata = {
-        "schema": str(parquet_file.schema),
-        "num_rows": parquet_file.metadata.num_rows,
-        "num_row_groups": parquet_file.num_row_groups,
-        "num_columns": parquet_file.metadata.num_columns,
-        "file_size": parquet_file.metadata.serialized_size,
-    }
+    df_generated_full = pd.read_parquet(generated_path)
+    sample_size = min(100, len(df_generated_full))
+    df_generated_sample = df_generated_full.sample(n=sample_size, random_state=42)
+    return df_expected.equals(df_generated_sample)
 
-    assert actual_metadata == expected_metadata, "Parquet metadata mismatch!"
+
+def test_files_equal_expected(load_metadata):
+    """
+    Checks for each file generated by the workflow if
+    its sample and its metadata match the expected files.
+    """
+    for name in conftest.file_names:
+        name=name.split('.parquet')[0]
+        expected_path = Path(f"tests/data/metadata_{name}.json")
+        generated_path = os.path.join(etdtransform.options.aggregate_folder_path, f"{name}.parquet")
+        assert _check_metadatafiles_are_equal(
+            load_metadata,
+            expected_path,
+            generated_path
+            ), f"expected vs. generaged metadata files do not match for metadata_{name}.json"
+
+        # check sample of file
+        expected_path = Path(f"tests/data/sample_{name}.parquet")
+        generated_path = os.path.join(etdtransform.options.aggregate_folder_path, f"{name}.parquet")
+        assert _check_samples_are_equal(
+            expected_path,
+            generated_path
+            ), f"expected vs. generaged files do not match for sample_{name}.parquet"
 
 if __name__ == "__main__":
     # Run pytest for debugging the testing

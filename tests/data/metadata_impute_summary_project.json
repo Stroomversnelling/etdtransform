@@ -1,7 +1,69 @@
 {
-    "schema": "<pyarrow._parquet.ParquetSchema object at 0x0000027E89AB03C0>\nrequired group field_id=-1 schema {\n  optional int64 field_id=-1 ProjectIdBSV;\n  optional binary field_id=-1 column (String);\n  optional int64 field_id=-1 bitwise_methods;\n  optional group field_id=-1 methods (List) {\n    repeated group field_id=-1 list {\n      optional int32 field_id=-1 element (Int(bitWidth=8, isSigned=true));\n    }\n  }\n  optional int64 field_id=-1 missing;\n  optional int64 field_id=-1 imputed;\n  optional int64 field_id=-1 imputed_na;\n  optional int64 field_id=-1 total_records;\n  optional double field_id=-1 percentage_imputed;\n}\n",
     "num_rows": 20,
-    "num_row_groups": 1,
     "num_columns": 9,
-    "file_size": 5443
+    "column_details": {
+        "ProjectIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "2",
+                "null_count": 0
+            }
+        },
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitNetgebruikHoogDiff",
+                "max": "Zon-opwekTotaalDiff",
+                "null_count": 0
+            }
+        },
+        "bitwise_methods": {
+            "statistics": {
+                "min": "-120",
+                "max": "16",
+                "null_count": 0
+            }
+        },
+        "element": {
+            "statistics": {
+                "min": "4",
+                "max": "18",
+                "null_count": 12
+            }
+        },
+        "missing": {
+            "statistics": {
+                "min": "0",
+                "max": "525595",
+                "null_count": 0
+            }
+        },
+        "imputed": {
+            "statistics": {
+                "min": "0",
+                "max": "525595",
+                "null_count": 0
+            }
+        },
+        "imputed_na": {
+            "statistics": {
+                "min": "-263600",
+                "max": "0",
+                "null_count": 0
+            }
+        },
+        "total_records": {
+            "statistics": {
+                "min": "525600",
+                "max": "525600",
+                "null_count": 0
+            }
+        },
+        "percentage_imputed": {
+            "statistics": {
+                "min": "-0.0",
+                "max": "99.99904870624049",
+                "null_count": 0
+            }
+        }
+    }
 }
