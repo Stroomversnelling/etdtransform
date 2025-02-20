@@ -4,6 +4,7 @@ from pathlib import Path
 import etdmap
 import etdmap.index_helpers
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from etdmap.index_helpers import read_index, update_meenemen
@@ -18,7 +19,6 @@ from etdtransform.aggregate import (
     resample_hh_data,
 )
 from etdtransform.impute import prepare_diffs_for_impute, sort_for_impute
-
 
 def test_total_workflow_imputations():
 
@@ -118,13 +118,11 @@ def test_total_workflow_imputations():
     # "aggregate_project_5min"
     aggregate_project_data(intervals=["5min"])
 
-
     # "resample_hh_15_60min"
     resample_hh_data(intervals=["60min", "15min"])
 
     # "aggregate_project_15_60min"
     aggregate_project_data(intervals=["60min", "15min"])
-
 
     # "resample_hh_24h"
     resample_hh_data(intervals=["24h"])
@@ -132,13 +130,33 @@ def test_total_workflow_imputations():
     # "aggregate_project_24h"
     aggregate_project_data(intervals=["24h"])
 
-
     # "resample_hh_6h"
     resample_hh_data(intervals=["6h"])
 
-
     # "aggregate_project_6h"
     aggregate_project_data(intervals=["6h"])
+
+
+def test_prepare_diffs_for_impute(load_metadata):
+    """
+    Should generate a file called avr_diff. 
+
+    This test compares it to a snippet of what that file
+    should look like and it compares the metadata of the file
+    """
+    expected_metadata = load_metadata("tests/data/metadata_avg_diffs.json")  # Pass filepath
+
+    generated_file_path = os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet")
+    parquet_file = pq.ParquetFile(generated_file_path)
+    actual_metadata = {
+        "schema": str(parquet_file.schema),
+        "num_rows": parquet_file.metadata.num_rows,
+        "num_row_groups": parquet_file.num_row_groups,
+        "num_columns": parquet_file.metadata.num_columns,
+        "file_size": parquet_file.metadata.serialized_size,
+    }
+
+    assert actual_metadata == expected_metadata, "Parquet metadata mismatch!"
 
 if __name__ == "__main__":
     # Run pytest for debugging the testing

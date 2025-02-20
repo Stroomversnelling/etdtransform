@@ -1,0 +1,7 @@
+{
+    "schema": "<pyarrow._parquet.ParquetSchema object at 0x0000027E898F0400>\nrequired group field_id=-1 schema {\n  optional int64 field_id=-1 ProjectIdBSV;\n  optional int64 field_id=-1 ReadingDate (Timestamp(isAdjustedToUTC=false, timeUnit=nanoseconds, is_from_converted_type=false, force_set_converted_type=false));\n  optional double field_id=-1 ElektriciteitsgebruikBoosterDiff_avg;\n  optional double field_id=-1 ElektriciteitsgebruikBoilervatDiff_avg;\n  optional double field_id=-1 ElektriciteitsgebruikWTWDiff_avg;\n  optional double field_id=-1 ElektriciteitsgebruikRadiatorDiff_avg;\n  optional double field_id=-1 Zon-opwekTotaalDiff_avg;\n  optional double field_id=-1 ElektriciteitsgebruikWarmtepompDiff_avg;\n  optional double field_id=-1 ElektriciteitTerugleveringLaagDiff_avg;\n  optional double field_id=-1 ElektriciteitTerugleveringHoogDiff_avg;\n  optional double field_id=-1 ElektriciteitNetgebruikLaagDiff_avg;\n  optional double field_id=-1 ElektriciteitNetgebruikHoogDiff_avg;\n}\n",
+    "num_rows": 210240,
+    "num_row_groups": 1,
+    "num_columns": 12,
+    "file_size": 8877
+}
