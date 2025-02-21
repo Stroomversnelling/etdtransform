@@ -1,34 +1,63 @@
 import json
 import os
+from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
+from conftest import config, file_names
 
+import etdtransform
 
-def create_metadata_testfiles_from_valid_run(path_to_file, save_name='metadata.json'):
+etdtransform.options.aggregate_folder_path = Path(config['etdtransform_configuration']['aggregate_folder_path'])
+
+def get_metadata_parquet_file(parquet_file):
+    """Get metadata from a parquet file object"""
+    metadata_dict = {
+        "num_rows": parquet_file.metadata.num_rows,
+        "num_columns": parquet_file.metadata.num_columns,
+        "column_details": {}
+    }
+    # Extract schema information
+    schema = parquet_file.schema
+
+    # Extract metadata for each column
+    for i in range(len(schema)):  # Use len(schema) instead of schema.num_fields
+        column_name = schema.names[i]  # Correct way to get column names
+
+        # Extract statistics from the first row group (if available)
+        column_stats = {"min": None, "max": None, "null_count": None}
+        if parquet_file.metadata.num_row_groups > 0:
+            column_meta = parquet_file.metadata.row_group(0).column(i)
+            stats = column_meta.statistics
+
+            if stats:
+                column_stats["min"] = str(stats.min) if stats.has_min_max else None
+                column_stats["max"] = str(stats.max) if stats.has_min_max else None
+                column_stats["null_count"] = stats.null_count if stats.has_null_count else None
+
+        # Store in metadata dictionary
+        metadata_dict["column_details"][column_name] = {
+            "statistics": column_stats
+        }
+
+    return metadata_dict
+
+def create_metadata_testfile_from_valid_run(path_to_file, save_name='metadata.json'):
     """Create metadata files of valid files.
 
     Done only to generate data which will be used to check
-    if the outcome is as expected. Stores the metadatafiles 
+    if the outcome is as expected. Stores the metadatafiles
     in the data dir under the tests folder.
 
     Args:
         filename (str): filename of correctly generated file.
     """
     parquet_file = pq.ParquetFile(path_to_file)
-
-    # Extract schema and metadata
-    metadata = {
-        "schema": str(parquet_file.schema),  # Schema details
-        "num_rows": parquet_file.metadata.num_rows,  # Total row count
-        "num_row_groups": parquet_file.num_row_groups,  # Number of row groups
-        "num_columns": parquet_file.metadata.num_columns,  # Total columns
-        "file_size": parquet_file.metadata.serialized_size,  # File size in bytes
-    }
+    metadata_dict = get_metadata_parquet_file(parquet_file)
 
     # Save metadata as JSON
-    with open(f"tests/data/{save_name}", "w") as f:
-        json.dump(metadata, f, indent=4)
+    with open(f"tests/data/{save_name}.json", "w") as f:
+        json.dump(metadata_dict, f, indent=4)
 
 
 def store_sample_from_valid_run(path_to_file, save_name):
@@ -47,31 +76,22 @@ def store_sample_from_valid_run(path_to_file, save_name):
 
 
 def store_sample_and_metadata_for_all_transformed_files(path_to_folder):
-    filenames = [
-        "impute_summary_household.parquet",
-        "impute_summary_project.parquet",
-        "avg_diffs.parquet",
-        "household_aggregated_diff.parquet",
-        "household_calculated.parquet",
-        "household_default.parquet",
-        "household_diff_max_bounds.parquet",
-        "household_imputed.parquet",
-        "impute_gap_stats.parquet",
-    ]
 
-    for file in filenames:
+    for file in file_names:
         path_to_file = os.path.join(path_to_folder, file)
-        create_metadata_testfiles_from_valid_run(
+        name = file.split('.parquet')[0]
+        create_metadata_testfile_from_valid_run(
             path_to_file,
-            save_name=f'metadata_{file.split('.parquet')[0]}.json'
+            save_name=f'metadata_{name}'
             )
         store_sample_from_valid_run(
-            path_to_file, 
-            save_name=f'sample_{file.split('.parquet')[0]}.parquet')
+            path_to_file,
+            save_name=f'sample_{name}')
 
 if __name__ == "__main__":
     # Create metadata & sample files for each created file
     # by the different imputation steps in etdtransform
-    # used for testing. Needs te be run only when the behaviour 
+    # used for testing. Needs te be run only when the behaviour
     # of etdtransform has changed and the output is checked carefully.
-    store_sample_and_metadata_for_all_transformed_files(r'H:\Mijn Drive\Pion\Opdrachten\StroomVersnelling\temp_data\aggregate_fixtures')
+
+    store_sample_and_metadata_for_all_transformed_files(etdtransform.options.aggregate_folder_path)

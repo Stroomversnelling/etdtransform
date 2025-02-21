@@ -1,7 +1,97 @@
 {
-    "schema": "<pyarrow._parquet.ParquetSchema object at 0x0000027E898F2680>\nrequired group field_id=-1 schema {\n  optional int64 field_id=-1 index;\n  optional int64 field_id=-1 ProjectIdBSV;\n  optional int64 field_id=-1 HuisIdBSV;\n  optional binary field_id=-1 column (String);\n  optional double field_id=-1 diff_col_total;\n  optional double field_id=-1 cum_col_min_max_diff;\n  optional int64 field_id=-1 missing;\n  optional int64 field_id=-1 imputed;\n  optional int64 field_id=-1 imputed_na;\n  optional group field_id=-1 methods (List) {\n    repeated group field_id=-1 list {\n      optional int32 field_id=-1 element (Int(bitWidth=8, isSigned=true));\n    }\n  }\n  optional int64 field_id=-1 bitwise_methods;\n  optional int64 field_id=-1 total_records;\n  optional double field_id=-1 percentage_imputed;\n}\n",
     "num_rows": 100,
-    "num_row_groups": 1,
     "num_columns": 13,
-    "file_size": 7413
+    "column_details": {
+        "index": {
+            "statistics": {
+                "min": "0",
+                "max": "99",
+                "null_count": 0
+            }
+        },
+        "ProjectIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "2",
+                "null_count": 0
+            }
+        },
+        "HuisIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitNetgebruikHoogDiff",
+                "max": "Zon-opwekTotaalDiff",
+                "null_count": 0
+            }
+        },
+        "diff_col_total": {
+            "statistics": {
+                "min": "16778.5853125785",
+                "max": "79237.31756990979",
+                "null_count": 0
+            }
+        },
+        "cum_col_min_max_diff": {
+            "statistics": {
+                "min": "16779.225541692325",
+                "max": "79237.31756990864",
+                "null_count": 0
+            }
+        },
+        "missing": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "imputed": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "imputed_na": {
+            "statistics": {
+                "min": "-52890",
+                "max": "0",
+                "null_count": 0
+            }
+        },
+        "element": {
+            "statistics": {
+                "min": "4",
+                "max": "18",
+                "null_count": 60
+            }
+        },
+        "bitwise_methods": {
+            "statistics": {
+                "min": "-120",
+                "max": "16",
+                "null_count": 0
+            }
+        },
+        "total_records": {
+            "statistics": {
+                "min": "105120",
+                "max": "105120",
+                "null_count": 0
+            }
+        },
+        "percentage_imputed": {
+            "statistics": {
+                "min": "-0.0",
+                "max": "99.99904870624049",
+                "null_count": 0
+            }
+        }
+    }
 }
