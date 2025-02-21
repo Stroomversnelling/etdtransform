@@ -5,8 +5,17 @@ import numpy as np
 import pandas as pd
 from etdmap.record_validators import thresholds_dict
 
+__all__ = [
+    'ImputeType',
+    'apply_thresholds',
+    'drop_temp_cols',
+    'impute_and_normalize',
+    'methods_to_bitwise',
+    'process_gap_and_cumulative_groups',
+    'process_imputation_vectorized'
+]
 
-def methods_to_bitwise_vectorized(methods_column):
+def methods_to_bitwise(methods_column):
     """
     Convert methods to bitwise representation.
 
@@ -99,16 +108,14 @@ def apply_thresholds(
     return df
 
 
-def impute_and_normalize_vectorized(
+def impute_and_normalize(
     df: pd.DataFrame,
     cumulative_columns: list,
     project_id_column: str,
     max_bound: pd.DataFrame,
 ):
     """
-    Perform vectorized imputation and normalization on cumulative columns.
-
-    This function applies imputation techniques to fill missing values in
+    Perform vectorized imputation and normalization on cumulative columns/ This function applies imputation techniques to fill missing values in
     cumulative columns and normalizes the data. It uses vectorized operations
     for improved performance.
 
@@ -250,7 +257,7 @@ def impute_and_normalize_vectorized(
         drop_temp_cols(df, logLeftoverError=True)
 
     imputation_gap_stats_df = pd.concat(imputation_gap_stats, ignore_index=True)
-    imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise_vectorized(
+    imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
         imputation_gap_stats_df["methods"],
     )
 
@@ -767,7 +774,6 @@ def process_imputation_vectorized(
 
     return df
 
-from enum import IntFlag, auto
 
 class ImputeType(IntFlag):
     """

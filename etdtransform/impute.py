@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 import etdtransform
-from etdtransform.vectorized_impute import impute_and_normalize_vectorized
+from etdtransform.vectorized_impute import impute_and_normalize
 
 
 def calculate_average_diff(
@@ -765,6 +765,3 @@ def process_and_impute(
         imputation_summary_project,
         imputation_reading_date_stats_df,
     )
-
-impute_and_normalize_optimized = impute_and_normalize_vectorized
-impute_and_normalize = impute_and_normalize_vectorized
