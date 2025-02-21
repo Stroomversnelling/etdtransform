@@ -1,4 +1,5 @@
 import logging
+from enum import IntFlag, auto
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,30 @@ from etdmap.record_validators import thresholds_dict
 
 
 def methods_to_bitwise_vectorized(methods_column):
+    """
+    Convert methods to bitwise representation.
+
+    This function takes a column of methods and converts each method to a bitwise
+    representation. Each method is represented by a bit in the resulting integer.
+
+    Parameters
+    ----------
+    methods_column : array-like
+        A column containing lists of method numbers.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array of integers where each integer represents the bitwise
+        representation of the methods for that row.
+
+    Notes
+    -----
+    The function assumes that method numbers start from 1 and correspond to
+    bit positions (method 1 = bit 0, method 2 = bit 1, etc.).
+
+    This vectorized version is optimized for performance with NumPy.
+    """
     bitwise_values = np.zeros(len(methods_column), dtype=np.int64)
 
     for i, methods in enumerate(methods_column):
@@ -29,12 +54,47 @@ def apply_thresholds(
     impute_type_col,
     is_imputed_col,
 ):
+    """
+    Apply thresholds to difference column and update imputation flags.
+
+    This function applies lower and upper bounds to a difference column in the
+    DataFrame. Values outside these bounds are replaced with average values,
+    and corresponding imputation flags are updated.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input DataFrame containing the data.
+    lower_bound : float
+        The lower threshold for the difference column.
+    upper_bound : float
+        The upper threshold for the difference column.
+    diff_col : str
+        The name of the difference column to apply thresholds to.
+    avg_col : str
+        The name of the column containing average values to use for imputation.
+    impute_type_col : str
+        The name of the column indicating the imputation type.
+    is_imputed_col : str
+        The name of the column indicating whether a value is imputed.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The DataFrame with thresholds applied and imputation flags updated.
+
+    Notes
+    -----
+    This function modifies the input DataFrame in-place and also returns it.
+    Values outside the thresholds are replaced with average values and marked
+    as imputed.
+    """
     mask = ((df[diff_col] < lower_bound) | (df[diff_col] > upper_bound)) & df[
         diff_col
     ].notna()
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
-    df.loc[mask, impute_type_col] = 13 + df[impute_type_col].fillna(0)
+    df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE) | ImputeType.THRESHOLD_ADJUSTED
 
     return df
 
@@ -45,6 +105,50 @@ def impute_and_normalize_vectorized(
     project_id_column: str,
     max_bound: pd.DataFrame,
 ):
+    """
+    Perform vectorized imputation and normalization on cumulative columns.
+
+    This function applies imputation techniques to fill missing values in
+    cumulative columns and normalizes the data. It uses vectorized operations
+    for improved performance.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input DataFrame containing the data to be imputed and normalized.
+    cumulative_columns : list
+        A list of column names representing cumulative variables to be processed.
+    project_id_column : str
+        The name of the column containing project identifiers.
+    max_bound : pandas.DataFrame
+        A DataFrame containing maximum bounds for each variable.
+
+    Returns
+    -------
+    tuple
+        A tuple containing three elements:
+        - df : pandas.DataFrame
+            The imputed and normalized DataFrame.
+        - imputation_gap_stats_df : pandas.DataFrame
+            Statistics about the imputation process for each gap.
+        - imputation_reading_date_stats_df : None or pandas.DataFrame
+            Statistics about imputation by reading date (if calculated).
+
+    Notes
+    -----
+    This function applies various imputation methods based on the nature of
+    the missing data and the available information. It handles different
+    scenarios such as gaps in data, zero jumps, and negative jumps.
+
+    The function also calculates and returns statistics about the imputation
+    process, which can be useful for quality assessment.
+
+    Warnings
+    --------
+    - The function may modify the input DataFrame in-place.
+    - Imputation methods may introduce bias or affect the variance of the data.
+    - Large amounts of imputed data may significantly affect analysis results.
+    """
     logging.info("Starting to impute cumulative column diffs (vectorized).")
 
     def calculate_imputation_gap_stats(group, cum_col, diff_col, impute_type_col):
@@ -160,6 +264,35 @@ def drop_temp_cols(
     temp_cols=None,
     logLeftoverError=False,
 ):
+    """
+    Drop temporary columns from the DataFrame.
+
+    This function removes specified temporary columns from the DataFrame.
+    If no columns are specified, it drops a predefined set of temporary columns.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame from which to drop columns.
+    temp_cols : list, optional
+        A list of column names to drop. If None, a default set of temporary
+        columns will be used.
+    logLeftoverError : bool, optional
+        If True, log an error message for any leftover columns to be removed.
+
+    Notes
+    -----
+    This function modifies the DataFrame in-place.
+
+    The default set of temporary columns includes various intermediate
+    calculation columns used in the imputation process.
+
+    Warnings
+    --------
+    - If logLeftoverError is True and there are columns to be dropped, an error
+      message will be logged, which might indicate unintended remnants in the
+      data processing pipeline.
+    """
 
     if temp_cols is None:
         temp_cols = [
@@ -193,8 +326,47 @@ def drop_temp_cols(
     df.drop(columns=cols_to_drop, inplace=True)
 
 
-# Function to create groups and cumulative value groups
 def process_gap_and_cumulative_groups(df, diff_col, cum_col):
+    """
+    Process gap and cumulative value groups in the DataFrame.
+
+    This function identifies gaps in the data, creates gap groups, and
+    establishes cumulative value groups based on the presence of NA values
+    and transitions between households.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame to process.
+    diff_col : str
+        The name of the difference column to analyze for gaps.
+    cum_col : str
+        The name of the cumulative column to use for value grouping.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The processed DataFrame with added columns for gap and cumulative
+        value grouping.
+
+    Notes
+    -----
+    This function adds several temporary columns to the DataFrame:
+    - 'gap_start': Identifies the start of a diff column gap or transition between households.
+    - 'gap_group': Groups consecutive NA values in diff columns.
+    - 'cum_value_encountered': Marks where a non-NA value is encountered in cumulative column.
+    - 'cumulative_value_group': Groups gaps based on cumulative values.
+    - 'gap_length': The length of each gap group.
+
+    These columns are crucial for the subsequent imputation process. It returns only for further imputation:
+    - 'cumulative_value_group'
+    - 'gap_length'
+
+    Warnings
+    --------
+    - This function modifies the input DataFrame in-place.
+    - The added columns should be handled carefully in subsequent processing steps.
+    """
     temp_cols = ["gap_start", "gap_group", "cum_value_encountered"]
 
     # Step 1: Identify NA values in diff_col
@@ -240,7 +412,6 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
     return df
 
 
-# Function to handle imputation with fixed values for negative or invalid differences
 def process_imputation_vectorized(
     df,
     diff_col,
@@ -249,6 +420,50 @@ def process_imputation_vectorized(
     impute_type_col,
     is_imputed_col,
 ):
+    """
+    Perform vectorized imputation on the DataFrame.
+
+    This function applies various imputation methods to fill missing values
+    in the difference column based on cumulative values and average differences.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame to impute.
+    diff_col : str
+        The name of the difference column to impute.
+    cum_col : str
+        The name of the cumulative column used for imputation.
+    avg_col : str
+        The name of the column containing average differences.
+    impute_type_col : str
+        The name of the column to store imputation type.
+    is_imputed_col : str
+        The name of the column to indicate whether a value is imputed.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The DataFrame with imputed values and additional columns indicating
+        imputation types and statistics.
+
+    Notes
+    -----
+    This function applies several imputation methods for diff columns:
+    - Filling with zeros for flat or near-zero gaps
+    - Linear filling for positive gaps with near-zero impute jumps
+    - Scaled impute value filling for positive gaps with positive impute jumps
+    - Handling cases with no gap jump (e.g., at the start or end of the dataset)
+
+    The function also applies thresholds to remove physically impossible outliers.
+
+    Warnings
+    --------
+    - This function modifies the input DataFrame in-place.
+    - The imputation process may introduce bias, especially in cases with large gaps
+      or when a significant portion of the data is imputed.
+    - The function assumes that the input data has been properly prepared and sorted.
+    """
     def setup_prev_value_columns(df, cum_col):
         # Shift by one to get the immediate previous time step value before the group and make sure no other time step is there
         df["prev_cum_value"] = df[cum_col].shift(1)
@@ -408,7 +623,7 @@ def process_imputation_vectorized(
         flat_gap_jump_mask = has_gap_jump_mask & (df["gap_jump"] < 0)
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = 2
+        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEGATIVE_GAP_JUMP
 
         # gap jump near zero - fill with zeros
         flat_gap_jump_mask = (
@@ -416,7 +631,7 @@ def process_imputation_vectorized(
         )
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = 3
+        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEAR_ZERO_GAP_JUMP
 
         # positive gap jump and impute jump near zero - linear fill
         # round(gap_jump / gap_length,10)
@@ -428,7 +643,7 @@ def process_imputation_vectorized(
             df["gap_jump"] / df["gap_length"],
             10,
         )
-        df.loc[positive_gap_linear_mask, impute_type_col] = 4
+        df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL
 
         # positive gap jump and positive impute jump and - scaled impute value fill
         # (optional for future: add logic to look at impute_na_ratio)
@@ -444,7 +659,7 @@ def process_imputation_vectorized(
             ),
             10,
         )
-        df.loc[positive_gap_scaled_mask, impute_type_col] = 5
+        df.loc[positive_gap_scaled_mask, impute_type_col] = ImputeType.SCALED_FILL
 
         return df
 
@@ -486,7 +701,7 @@ def process_imputation_vectorized(
         )
         df.loc[nogpjump_has_end_value_zero_mask, is_imputed_col] = True
         df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
-        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = 6
+        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = ImputeType.ZERO_END_VALUE
 
         #### end value > 0 - fill with impute values - type 7
         nogpjump_has_end_value_positive_mask = nogpjump_has_end_value_mask & (
@@ -497,7 +712,7 @@ def process_imputation_vectorized(
             nogpjump_has_end_value_positive_mask,
             "impute_values",
         ]
-        df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = 7
+        df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = ImputeType.POSITIVE_END_VALUE
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
@@ -514,7 +729,7 @@ def process_imputation_vectorized(
             df.loc[nogpjump_has_start_value_mask, "impute_values"]
             * df.loc[nogpjump_has_start_value_mask, "house_impute_factor"]
         )
-        df.loc[nogpjump_has_start_value_mask, impute_type_col] = 8
+        df.loc[nogpjump_has_start_value_mask, impute_type_col] = ImputeType.NO_END_VALUE
 
         return df
 
@@ -551,3 +766,50 @@ def process_imputation_vectorized(
     drop_temp_cols(df, temp_cols=temp_cols)
 
     return df
+
+from enum import IntFlag, auto
+
+class ImputeType(IntFlag):
+    """
+    Enumeration of imputation types used in the vectorized imputation process.
+
+    This class defines the different types of imputation methods applied
+    during the vectorized imputation process for handling missing or
+    problematic data in time series.
+
+    Attributes
+    ----------
+    NONE : int
+        Represents no imputation.
+    NEGATIVE_GAP_JUMP : int
+        Represents a negative gap jump. Fills with zeros (potentially a meter reset)
+    NEAR_ZERO_GAP_JUMP : int
+        Represents a gap jump near zero. Fills with zeros (no change).
+    LINEAR_FILL : int
+        Represents a linear fill for positive gaps with near-zero impute jumps based on average.
+    SCALED_FILL : int
+        Represents a scaled fill for positive gaps with positive impute jumps based on average.
+    ZERO_END_VALUE : int
+        Represents imputation when end value is zero and there is no start value. Fills with zeros.
+    POSITIVE_END_VALUE : int
+        Represents imputation when end value is positive but there is no start value. Fills with averages.
+    NO_END_VALUE : int
+        Represents imputation when there is no end value. Fills with averages.
+    THRESHOLD_ADJUSTED : int
+        Represents values adjusted due to threshold violations. This happens after imputation and could be triggered by imputed values.
+
+    Notes
+    -----
+    The enumeration values are automatically assigned using auto().
+    The THRESHOLD_ADJUSTED flag can be combined with other imputation types.
+    """
+
+    NONE = 0
+    NEGATIVE_GAP_JUMP = auto()
+    NEAR_ZERO_GAP_JUMP = auto()
+    LINEAR_FILL = auto()
+    SCALED_FILL = auto()
+    ZERO_END_VALUE = auto()
+    POSITIVE_END_VALUE = auto()
+    NO_END_VALUE = auto()
+    THRESHOLD_ADJUSTED = auto()
