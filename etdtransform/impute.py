@@ -1,14 +1,12 @@
 import logging
 import os
-from enum import IntEnum
 from math import floor, isclose, log10
 
 import numpy as np
 import pandas as pd
-import etdtransform
-from etdtransform.vectorized_impute import impute_and_normalize_vectorized
 
-impute_and_normalize_optimized = impute_and_normalize_vectorized
+import etdtransform
+from etdtransform.vectorized_impute import impute_and_normalize
 
 
 def calculate_average_diff(
@@ -16,7 +14,43 @@ def calculate_average_diff(
     project_id_column: str,
     diff_columns: list[str],
 ) -> pd.DataFrame:
-    logging.info(f"Calculating Diff column averages.")
+    """
+    Calculate average differences for specified columns grouped by project and reading date.
+
+    This function computes the average differences for the specified columns,
+    excluding outliers based on a 95th percentile threshold. It's used to prepare
+    data for imputation of missing values.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the data.
+    project_id_column : str
+        The name of the column containing project IDs.
+    diff_columns : list[str]
+        A list of column names for which to calculate average differences.
+
+    Returns
+    -------
+    dict
+        A dictionary where keys are column names and values are dictionaries containing:
+        - 'avg_diff': DataFrame with average differences
+        - 'upper_bounds': DataFrame with upper bounds for outlier exclusion
+        - 'household_max_with_bounds': DataFrame with household maximum values and bounds
+
+    Notes
+    -----
+    This function uses a 95th percentile threshold to exclude outliers when calculating
+    averages. The threshold is doubled to create an upper bound for inclusion in the
+    average calculation.
+
+    Warnings
+    --------
+    - Negative difference values will raise a ValueError.
+    - Missing values in the resulting average columns will be logged as errors.
+
+    """
+    logging.info("Calculating Diff column averages.")
 
     def safe_quantile(group, col_name):
         filtered_group = group[group[col_name] > 1e-8]
@@ -98,6 +132,32 @@ def calculate_average_diff(
 
 
 def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
+    """
+    Concatenate household maximum values and bounds for all columns.
+
+    This function combines the household maximum values and upper bounds
+    for all columns in the avg_diff_dict into a single DataFrame.
+
+    Parameters
+    ----------
+    avg_diff_dict : dict
+        A dictionary containing average difference data for each column.
+    project_id_column : str
+        The name of the column containing project IDs.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing concatenated household maximum values and bounds
+        for all columns.
+
+    Notes
+    -----
+    This function assumes that the 'household_max_with_bounds' key exists in each
+    dictionary within avg_diff_dict and contains the columns 'ProjectIdBSV' (or other specified project id column),
+    'HuisIdBSV', '{col}_huis_max', and '{col}_upper_bound'.
+
+    """
     first_key = next(iter(avg_diff_dict))
     key_columns = avg_diff_dict[first_key]["household_max_with_bounds"][
         [project_id_column, "HuisIdBSV"]
@@ -113,6 +173,32 @@ def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
 
 
 def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
+    """
+    Concatenate average difference columns for all variables.
+
+    This function combines the average difference columns for all variables
+    in the avg_diff_dict into a single DataFrame.
+
+    Parameters
+    ----------
+    avg_diff_dict : dict
+        A dictionary containing average difference data for each column.
+    project_id_column : str
+        The name of the column containing project IDs.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing concatenated average difference columns
+        for all variables.
+
+    Notes
+    -----
+    This function assumes that the 'avg_diff' key exists in each dictionary
+    within avg_diff_dict and contains the columns 'ProjectIdBSV' or specified project_id_column, 'ReadingDate',
+    and '{col}_avg'.
+
+    """
     first_key = next(iter(avg_diff_dict))
     key_columns = avg_diff_dict[first_key]["avg_diff"][
         [project_id_column, "ReadingDate"]
@@ -126,6 +212,34 @@ def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
 
 
 def equal_sig_fig(a, b, sig_figs):
+    """
+    Compare two numbers for equality up to a specified number of significant figures.
+
+    This function rounds both numbers to the specified number of significant figures
+    and then compares them for equality using a relative tolerance that scales with
+    the magnitude of the numbers.
+
+    Parameters
+    ----------
+    a : float
+        The first number to compare.
+    b : float
+        The second number to compare.
+    sig_figs : int
+        The number of significant figures to consider for comparison.
+
+    Returns
+    -------
+    bool
+        True if the numbers are equal up to the specified number of significant figures,
+        False otherwise.
+
+    Notes
+    -----
+    This function uses the `isclose` function from the `math` module to compare the
+    rounded numbers with a relative tolerance based on the number of significant figures.
+
+    """
     # Define a helper function to scale the number to significant figures
     def round_to_sig_figs(x, sig_figs):
         if x == 0:
@@ -143,18 +257,39 @@ def equal_sig_fig(a, b, sig_figs):
     return isclose(a_rounded, b_rounded, rel_tol=tolerance)
 
 
-class ImputeType(IntEnum):
-    FIRST_GAP = 1
-    RATIO_ADJUSTED = 2
-    EQUAL_DISTRIBUTION = 3
-    ZERO_JUMP = 0
-    NEGATIVE_JUMP = -1
-    AVERAGE_FILL = 6
-    RATIO_IMPUTE = 7
-    ZERO_IMPUTE = 8
 
 
 def validate_household_column(household_df, cum_col, huis_code):
+    """
+    Validate a household column for data quality and completeness.
+
+    This function checks a specific column in a household DataFrame for missing values,
+    zero values, and lack of change. It logs warnings and information about the data quality.
+
+    Parameters
+    ----------
+    household_df : pd.DataFrame
+        The DataFrame containing household data.
+    cum_col : str
+        The name of the cumulative column to validate.
+    huis_code : str
+        The unique identifier for the household.
+
+    Returns
+    -------
+    bool
+        True if the column passes all checks, False otherwise.
+
+    Notes
+    -----
+    This function is currently unused in the main processing pipeline.
+
+    Warnings
+    --------
+    - Logs a warning if more than 40% of values in the column are missing.
+    - Logs information about the number of missing values, zero values, and lack of change.
+
+    """
     n_na = household_df[cum_col].isna().sum()
     len_df = len(household_df.index)
 
@@ -190,98 +325,47 @@ def validate_household_column(household_df, cum_col, huis_code):
 
     return True
 
-
-def identify_gaps(household_df, diff_col):
-    gap_col = f"{diff_col}_gap"
-    household_df[gap_col] = household_df[diff_col].isna().astype(int)
-
-    gap_starts = household_df[
-        household_df[gap_col] & ~household_df[gap_col].shift(1, fill_value=False)
-    ].index
-    gap_ends = household_df[
-        household_df[gap_col] & ~household_df[gap_col].shift(-1, fill_value=False)
-    ].index
-
-    return list(zip(gap_starts, gap_ends))
-
-
-def enforce_thresholds_upper_bounds(household_df, diff_col, max_allowed):
-    print()
-
-
-def imputation_column_info_checks(household_df, cum_col, huis_code):
-    na_values = household_df[cum_col].isna()
-    n_na = na_values.sum()
-    len_df = len(household_df.index)
-
-    if n_na == len_df:
-        logging.info(
-            f"HuisIdBSV {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
-        )
-        return False
-    elif n_na / len_df > 0.4:
-        percent_na = 100 * n_na / len_df
-        logging.error(
-            f"HuisIdBSV {huis_code} has {percent_na}% missing values in {cum_col}. Consider removing.",
-        )
-    else:
-        logging.info(
-            f"HuisIdBSV {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
-        )
-
-    if round(household_df[cum_col].sum(), 10) == 0:
-        logging.info(
-            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}. Skipping column.",
-        )
-        return False
-
-    return True
-
-
-def check_cumulative_difference(household_df, cum_col, huis_code):
-    diff_col = cum_col + "Diff"
-    cum_column_total_difference = round(
-        household_df[cum_col].max() - household_df[cum_col].min(),
-        10,
-    )
-    if isclose(cum_column_total_difference, 0):
-        logging.info(
-            f"HuisIdBSV {huis_code} has no change in {cum_col}. Skipping column.",
-        )
-        return cum_column_total_difference, False
-    if round(household_df[diff_col].sum(), 10) == 0:
-        logging.warning(
-            f"HuisIdBSV {huis_code} has no non-zero values in {diff_col} before imputation.",
-        )
-
-    return cum_column_total_difference, True
-
-
-def methods_to_bitwise(methods):
-    bitwise_value = 0
-    for method in methods:
-        bitwise_value |= 1 << (
-            method - 1
-        )  # Subtract 1 because method 1 is stored in the least significant bit
-    return bitwise_value
-
-
-def methods_to_bitwise_vectorized(methods_column):
-    bitwise_values = np.zeros(len(methods_column), dtype=np.int64)
-
-    for i, methods in enumerate(methods_column):
-        bitwise_value = 0
-        for method in methods:
-            if method > 0:
-                bitwise_value |= 1 << (
-                    method - 1
-                )  # Same logic as before, but faster with NumPy
-        bitwise_values[i] = bitwise_value
-
-    return bitwise_values
-
-
+# currently unused - apply as a sense check to ensure not too many values are missing
 def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns):
+    """
+    Calculate imputation statistics for each reading date and cumulative column.
+
+    This function computes various statistics related to imputation for each reading date
+    and cumulative column, including the number of imputed values, missing values, and
+    original values.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame containing the data.
+    project_id_column : str
+        The name of the column containing project IDs.
+    cumulative_columns : list
+        A list of cumulative column names to analyze.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing imputation statistics for each reading date and column.
+
+    Notes
+    -----
+    This function is currently unused but can be applied as a sense check to ensure
+    not too many values are missing.
+
+    The resulting DataFrame includes the following columns:
+    - project_id_column
+    - ReadingDate
+    - column
+    - imputed
+    - na
+    - total_records
+    - original
+    - percent_imputed
+    - percent_na
+    - percent_original
+
+    """
     grouped = df.groupby([project_id_column, "ReadingDate"])
     total_stats = grouped.size().rename("total_records")
 
@@ -328,11 +412,57 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
 
 
 def sort_for_impute(df: pd.DataFrame, project_id_column: str):
+    """
+    Sort the DataFrame to prepare for imputation.
+
+    This function sorts the input DataFrame by project ID, household ID, and reading date.
+    Sorting is necessary to ensure correct imputation of missing values.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to be sorted.
+    project_id_column : str
+        The name of the column containing project IDs.
+
+    Returns
+    -------
+    pd.DataFrame
+        The sorted DataFrame.
+
+    Notes
+    -----
+    The sorting order is: project ID, household ID (HuisIdBSV), and reading date (ReadingDate).
+    This order is crucial for the imputation process to work correctly.
+
+    """
     logging.info("Sorting to prepare for imputation.")
     return df.sort_values(by=[project_id_column, "HuisIdBSV", "ReadingDate"])
 
 
 def get_diff_columns(cumulative_columns: list):
+    """
+    Generate difference column names from cumulative column names.
+
+    This function takes a list of cumulative column names and returns a list of
+    corresponding difference column names by appending 'Diff' to each name.
+
+    Parameters
+    ----------
+    cumulative_columns : list
+        A list of cumulative column names.
+
+    Returns
+    -------
+    list
+        A list of difference column names.
+
+    Notes
+    -----
+    This function is used to create names for columns that will store the differences
+    between consecutive cumulative values.
+
+    """
     return [col + "Diff" for col in cumulative_columns]
 
 def prepare_diffs_for_impute(
@@ -341,6 +471,43 @@ def prepare_diffs_for_impute(
     cumulative_columns: list,
     sorted=False,
 ):
+    """
+    Prepare difference columns for imputation.
+
+    This function calculates average differences, combines them, and prepares
+    household maximum and bound information for imputation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the data.
+    project_id_column : str
+        The name of the column containing project IDs.
+    cumulative_columns : list
+        A list of cumulative column names.
+    sorted : bool, optional
+        Whether the DataFrame is already sorted. Default is False.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - diff_columns: list of difference column names
+        - diffs: DataFrame with average differences
+        - max_bound: DataFrame with household maximum and bound information
+
+    Notes
+    -----
+    This function performs the following steps:
+    1. Sorts the DataFrame if not already sorted.
+    2. Calculates average differences for each cumulative column.
+    3. Combines average differences and household maximum/bound information.
+    4. Saves the results to parquet files for later use.
+
+    The resulting files are saved in the directory specified by
+    etdtransform.options.aggregate_folder_path.
+
+    """
     if not sorted:
         df = sort_for_impute(df, project_id_column)
 
@@ -370,6 +537,26 @@ def prepare_diffs_for_impute(
 
 
 def read_diffs():
+    """
+    Read average differences from a parquet file.
+
+    This function reads the average differences data from a parquet file
+    located in the aggregate folder specified in the etdtransform options.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the average differences data.
+
+    Notes
+    -----
+    The function assumes that the 'avg_diffs.parquet' file exists in the
+    aggregate folder path specified in etdtransform.options.aggregate_folder_path.
+
+    This function is typically used to load pre-calculated average differences
+    for use in imputation processes.
+
+    """
     return pd.read_parquet(os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"))
 
 
@@ -381,6 +568,56 @@ def process_and_impute(
     diffs_calculated=False,
     optimized=False,
 ):
+    """
+    Process and impute missing values in the dataset.
+
+    This function performs data processing and imputation on the input DataFrame.
+    It can either calculate differences or load pre-calculated differences,
+    and then applies imputation methods to fill missing values.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the data to be processed and imputed.
+    project_id_column : str
+        The name of the column containing project IDs.
+    cumulative_columns : list
+        A list of cumulative column names to be processed.
+    sorted : bool, optional
+        Whether the DataFrame is already sorted. Default is False.
+    diffs_calculated : bool, optional
+        Whether differences have already been calculated. Default is False.
+    optimized : bool, optional
+        Whether to use optimized imputation methods. Default is False.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - df: The processed and imputed DataFrame
+        - imputation_summary_house: Summary of imputation statistics per house
+        - imputation_summary_project: Summary of imputation statistics per project
+        - imputation_reading_date_stats_df: Statistics of imputation by reading date
+
+    Notes
+    -----
+    This function performs the following steps:
+    1. Sorts the DataFrame if not already sorted.
+    2. Loads or calculates differences.
+    3. Merges average differences into the household DataFrame.
+    4. Applies imputation methods (either optimized or standard).
+    5. Calculates and saves imputation statistics.
+    6. Provides warnings for high imputation percentages.
+
+    The function saves various statistics and summary files in the
+    aggregate folder specified in etdtransform.options.aggregate_folder_path.
+
+    Warnings
+    --------
+    - Logs warnings if any house or project has more than 40% imputed values.
+    - Logs warnings if any reading date has more than 40% imputed values.
+
+    """
     if not sorted:
         df = sort_for_impute(df, project_id_column)
 
@@ -498,7 +735,7 @@ def process_and_impute(
     ]
     for _, row in over_40_percent_imputed_house.iterrows():
         logging.warning(
-            f"House {row["HuisIdBSV"]}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
+            f"House {row['HuisIdBSV']}, Column {row['column']} has {row['percentage_imputed']:.2f}% imputed values.",
         )
 
     logging.info("Provide warnings if any project has > 40% imputed")
@@ -528,6 +765,3 @@ def process_and_impute(
         imputation_summary_project,
         imputation_reading_date_stats_df,
     )
-
-
-impute_and_normalize = impute_and_normalize_vectorized

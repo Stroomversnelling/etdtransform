@@ -6,54 +6,135 @@ import ibis
 import pandas as pd
 
 
-def add_calculated_columns_imputed_data(df):
-    logging.info("Calculating TerugleveringTotaalNetto")
-    df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"].fillna(
-        0,
-    ) + df["ElektriciteitTerugleveringHoogDiff"].fillna(0)
-    logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
+def add_calculated_columns_imputed_data(df, fillna = True):
+    """
+    Add calculated columns to the input DataFrame based on existing data.
 
-    df["ElektriciteitsgebruikTotaalNetto"] = df[
-        "ElektriciteitNetgebruikLaagDiff"
-    ].fillna(0) + df["ElektriciteitNetgebruikHoogDiff"].fillna(0)
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing energy usage and production data.
+    fillna : bool, optional
+        Whether to fill missing values with 0 before performing calculations.
+        Default is True.
 
-    logging.info("Calculating Netuitwisseling")
-    df["Netuitwisseling"] = df["ElektriciteitsgebruikTotaalNetto"].fillna(0) - df[
-        "TerugleveringTotaalNetto"
-    ].fillna(0)
+    Returns
+    -------
+    pd.DataFrame
+        The modified DataFrame with additional calculated columns.
 
-    logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
-    df["ElektriciteitsgebruikTotaalWarmtepomp"] = df[
-        "ElektriciteitsgebruikWarmtepompDiff"
-    ].fillna(0) + df["ElektriciteitsgebruikBoosterDiff"].fillna(0)
+    Notes
+    -----
+    - This function assumes that the input DataFrame contains the necessary
+      columns such as 'ElektriciteitTerugleveringLaagDiff',
+      'ElektriciteitTerugleveringHoogDiff', 'ElektriciteitNetgebruikLaagDiff',
+      'ElektriciteitNetgebruikHoogDiff', 'ElektriciteitsgebruikWarmtepompDiff',
+      'ElektriciteitsgebruikBoosterDiff', 'ElektriciteitsgebruikBoilervatDiff',
+      'ElektriciteitsgebruikWTWDiff', 'ElektriciteitsgebruikRadiatorDiff',
+      and 'Zon-opwekTotaalDiff'.
+    - The function assumes that missing values can be treated a 0s, typically after
+      data cleaning and imputation.
+    - The function fills missing values in each column with 0 before performing
+      calculations to ensure that the operations do not fail due to missing data.
+    """
 
-    logging.info("Calculating ElektriciteitsgebruikTotaalGebouwgebonden")
-    df["ElektriciteitsgebruikTotaalGebouwgebonden"] = (
-        df["ElektriciteitsgebruikTotaalWarmtepomp"].fillna(0)
-        + df["ElektriciteitsgebruikBoilervatDiff"].fillna(0)
-        + df["ElektriciteitsgebruikWTWDiff"].fillna(0)
-        + df["ElektriciteitsgebruikRadiatorDiff"].fillna(0)
-    )
+    if fillna:
 
-    logging.info("Renaming Zon-opwekTotaalDiff to ZonopwekBruto")
-    df.rename(columns={"Zon-opwekTotaalDiff": "ZonopwekBruto"}, inplace=True)
+        logging.info("Calculating TerugleveringTotaalNetto")
+        df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"].fillna(
+            0,
+        ) + df["ElektriciteitTerugleveringHoogDiff"].fillna(0)
+        logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
 
-    logging.info("Calculating ElektriciteitsgebruikTotaalHuishoudelijk")
-    df["ElektriciteitsgebruikTotaalHuishoudelijk"] = (
-        df["Netuitwisseling"].fillna(0)
-        + df["ZonopwekBruto"].fillna(0)
-        - df["ElektriciteitsgebruikTotaalGebouwgebonden"].fillna(0)
-    )
+        df["ElektriciteitsgebruikTotaalNetto"] = df[
+            "ElektriciteitNetgebruikLaagDiff"
+        ].fillna(0) + df["ElektriciteitNetgebruikHoogDiff"].fillna(0)
 
-    logging.info("Calculating Zelfgebruik")
-    df["Zelfgebruik"] = df["ZonopwekBruto"].fillna(0) - df[
-        "TerugleveringTotaalNetto"
-    ].fillna(0)
+        logging.info("Calculating Netuitwisseling")
+        df["Netuitwisseling"] = df["ElektriciteitsgebruikTotaalNetto"].fillna(0) - df[
+            "TerugleveringTotaalNetto"
+        ].fillna(0)
 
-    logging.info("Calculating ElektriciteitsgebruikTotaalBruto")
-    df["ElektriciteitsgebruikTotaalBruto"] = df[
-        "ElektriciteitsgebruikTotaalNetto"
-    ].fillna(0) + df["Zelfgebruik"].fillna(0)
+        logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
+        df["ElektriciteitsgebruikTotaalWarmtepomp"] = df[
+            "ElektriciteitsgebruikWarmtepompDiff"
+        ].fillna(0) + df["ElektriciteitsgebruikBoosterDiff"].fillna(0)
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalGebouwgebonden")
+        df["ElektriciteitsgebruikTotaalGebouwgebonden"] = (
+            df["ElektriciteitsgebruikTotaalWarmtepomp"].fillna(0)
+            + df["ElektriciteitsgebruikBoilervatDiff"].fillna(0)
+            + df["ElektriciteitsgebruikWTWDiff"].fillna(0)
+            + df["ElektriciteitsgebruikRadiatorDiff"].fillna(0)
+        )
+
+        logging.info("Renaming Zon-opwekTotaalDiff to ZonopwekBruto")
+        df.rename(columns={"Zon-opwekTotaalDiff": "ZonopwekBruto"}, inplace=True)
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalHuishoudelijk")
+        df["ElektriciteitsgebruikTotaalHuishoudelijk"] = (
+            df["Netuitwisseling"].fillna(0)
+            + df["ZonopwekBruto"].fillna(0)
+            - df["ElektriciteitsgebruikTotaalGebouwgebonden"].fillna(0)
+        )
+
+        logging.info("Calculating Zelfgebruik")
+        df["Zelfgebruik"] = df["ZonopwekBruto"].fillna(0) - df[
+            "TerugleveringTotaalNetto"
+        ].fillna(0)
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalBruto")
+        df["ElektriciteitsgebruikTotaalBruto"] = df[
+            "ElektriciteitsgebruikTotaalNetto"
+        ].fillna(0) + df["Zelfgebruik"].fillna(0)
+    else:
+        logging.info("Calculating TerugleveringTotaalNetto")
+        df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"]
+        + df["ElektriciteitTerugleveringHoogDiff"]
+        logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
+
+        df["ElektriciteitsgebruikTotaalNetto"] = df[
+            "ElektriciteitNetgebruikLaagDiff"
+        ] + df["ElektriciteitNetgebruikHoogDiff"]
+
+        logging.info("Calculating Netuitwisseling")
+        df["Netuitwisseling"] = df["ElektriciteitsgebruikTotaalNetto"] - df[
+            "TerugleveringTotaalNetto"
+        ]
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
+        df["ElektriciteitsgebruikTotaalWarmtepomp"] = df[
+            "ElektriciteitsgebruikWarmtepompDiff"
+        ] + df["ElektriciteitsgebruikBoosterDiff"]
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalGebouwgebonden")
+        df["ElektriciteitsgebruikTotaalGebouwgebonden"] = (
+            df["ElektriciteitsgebruikTotaalWarmtepomp"]
+            + df["ElektriciteitsgebruikBoilervatDiff"]
+            + df["ElektriciteitsgebruikWTWDiff"]
+            + df["ElektriciteitsgebruikRadiatorDiff"]
+        )
+
+        logging.info("Renaming Zon-opwekTotaalDiff to ZonopwekBruto")
+        df.rename(columns={"Zon-opwekTotaalDiff": "ZonopwekBruto"}, inplace=True)
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalHuishoudelijk")
+        df["ElektriciteitsgebruikTotaalHuishoudelijk"] = (
+            df["Netuitwisseling"]
+            + df["ZonopwekBruto"]
+            - df["ElektriciteitsgebruikTotaalGebouwgebonden"]
+        )
+
+        logging.info("Calculating Zelfgebruik")
+        df["Zelfgebruik"] = df["ZonopwekBruto"] - df[
+            "TerugleveringTotaalNetto"
+        ]
+
+        logging.info("Calculating ElektriciteitsgebruikTotaalBruto")
+        df["ElektriciteitsgebruikTotaalBruto"] = df[
+            "ElektriciteitsgebruikTotaalNetto"
+        ] + df["Zelfgebruik"]
+
 
     return df
 
@@ -73,14 +154,41 @@ def add_rolling_avg(
     """
     Add a rolling average column to each group in the DataFrame.
 
-    Parameters:
-    - group (pd.DataFrame): The DataFrame group.
-    - var (str): The variable for which to calculate the rolling average.
-    - days (int): The number of days over which to calculate the rolling average.
-    - avg_var (str): The name of the rolling average column to be added.
+    Parameters
+    ----------
+    group : pd.DataFrame
+        The DataFrame group on which to perform the operation.
+        This should be a subset of a larger DataFrame that has been grouped by some key,
+        for example, `df.groupby('some_column').apply(add_rolling_avg)`.
+    var : str, optional
+        The name of the column in 'group' for which the rolling average will be calculated.
+        Default is 'ElektriciteitsgebruikTotaalNetto'.
+    days : int, optional
+        The number of days over which to calculate the rolling average.
+        Default is 14 days.
+    avg_var : str, optional
+        The name of the new column in 'group' that will store the calculated rolling average values.
+        Default is 'RollingAverage'.
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with an additional column containing the rolling averages.
 
-    Returns:
-    - pd.DataFrame: The group with the rolling average column added.
+    Notes
+    -----
+    - This function assumes that the 'ReadingDate' column exists in the input DataFrame and
+      is sorted in ascending order. The 'ReadingDate' column should be of datetime type.
+    - The function calculates a rolling average using a window size determined by the number of days
+      specified and the frequency of the data points in the group. It uses a forward-looking window,
+      meaning that for each date, it computes the average of the next `days` worth of data points.
+    - To handle cases where there are missing dates or irregular sampling intervals, the function
+      first calculates the time difference between consecutive readings to determine how many timesteps
+      correspond to the specified number of days. It then uses this calculated window size for the
+      rolling average computation.
+    - The `min_periods` parameter in the rolling method is set to half of the window size,
+      ensuring that partial windows at the beginning and end of the group are still computed if they have
+      sufficient data points.
+
     """
     group = group.sort_values("ReadingDate")
 
@@ -102,14 +210,38 @@ def get_highest_avg_period(group, avg_var="RollingAverage", days=14):
     """
     Retrieve the start time, end time, and highest rolling average for each group in the DataFrame.
 
-    Parameters:
-    - group (pd.DataFrame): The DataFrame group.
-    - avg_var (str): The variable containing the rolling averages.
-    - days (int): The number of days over which the rolling average was calculated.
+    Parameters
+    ----------
+    group : pd.DataFrame
+        The DataFrame group on which to perform the operation.
+        This should be a subset of a larger DataFrame that has been grouped by some key,
+        for example, `df.groupby('some_column').apply(get_highest_avg_period)`.
+    avg_var : str, optional
+        The name of the column in 'group' containing the rolling averages.
+        Default is 'RollingAverage'.
+    days : int, optional
+        The number of days over which the rolling average was calculated.
+        Default is 14 days.
 
-    Returns:
-    - pd.DataFrame: A DataFrame with the group variable, start time, end time,
-      and highest rolling average.
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with columns for each group variable (if applicable), start time,
+        end time, and highest rolling average.
+
+    Notes
+    -----
+    - This function assumes that the 'ReadingDate' column exists in the input DataFrame and
+      is sorted in ascending order. The 'ReadingDate' column should be of datetime type.
+    - The function identifies rows with the highest value in the `avg_var` column and calculates
+      the corresponding start and end times based on the number of days specified.
+    - To handle cases where there are missing dates or irregular sampling intervals, the function
+      first calculates the time difference between consecutive readings to determine how many timesteps
+      correspond to the specified number of days. It then uses this calculated window size for
+      determining the start and end times.
+    - If the calculated start index is out of bounds (greater than or equal to the length of the group),
+      it sets the start index to the last valid index in the group.
+
     """
     results = []
 
@@ -161,16 +293,22 @@ def gelijktijdigheid(df, df_5min, rolling_average="RollingAverage", group_var=No
     """
     Calculate the ratio of the highest rolling average of the given rolling average column between daily and 5-minute interval data.
 
-    Parameters:
-    - df (pd.DataFrame): The input daily DataFrame containing the data.
-    - df_5min (pd.DataFrame): The input 5-minute interval DataFrame containing the data.
-    - rolling_average (str): The column name of the rolling average.
-    - group_var (str, optional): The column name to group by.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input daily DataFrame containing the data.
+    df_5min : pd.DataFrame
+        The input 5-minute interval DataFrame containing the data.
+    rolling_average : str, optional
+        The column name of the rolling average. Default is "RollingAverage".
+    group_var : str, optional
+        The column name to group by. Default is None.
 
-    Returns:
-    - pd.DataFrame: A DataFrame with the group variable (if applicable) and the ratio of the highest rolling average value.
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with the group variable (if applicable) and the ratio of the highest rolling average value.
     """
-
     def highest_avg(group):
         return group[rolling_average].max()
 
@@ -198,14 +336,38 @@ def get_lowest_avg_period(group, avg_var="RollingAvg_Temperatuur", days=14):
     """
     Retrieve the start time, end time, and lowest rolling average for each group in the DataFrame.
 
-    Parameters:
-    - group (pd.DataFrame): The DataFrame group.
-    - avg_var (str): The variable containing the rolling averages.
-    - days (int): The number of days over which the rolling average was calculated.
+    Parameters
+    ----------
+    group : pd.DataFrame
+        The DataFrame group on which to perform the operation.
+        This should be a subset of a larger DataFrame that has been grouped by some key,
+        for example, `df.groupby('some_column').apply(get_lowest_avg_period)`.
+    avg_var : str, optional
+        The name of the column in 'group' containing the rolling averages.
+        Default is 'RollingAvg_Temperatuur'.
+    days : int, optional
+        The number of days over which the rolling average was calculated.
+        Default is 14 days.
 
-    Returns:
-    - pd.DataFrame: A DataFrame with the group variable, start time, end time,
-      and lowest rolling average.
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with columns for each group variable (if applicable), start time,
+        end time, and lowest rolling average.
+
+    Notes
+    -----
+    - This function assumes that the 'ReadingDate' column exists in the input DataFrame and
+      is sorted in ascending order. The 'ReadingDate' column should be of datetime type.
+    - The function identifies rows with the lowest value in the `avg_var` column and calculates
+      the corresponding start and end times based on the number of days specified.
+    - To handle cases where there are missing dates or irregular sampling intervals, the function
+      first calculates the time difference between consecutive readings to determine how many timesteps
+      correspond to the specified number of days. It then uses this calculated window size for
+      determining the start and end times.
+    - If the calculated start index is out of bounds (greater than or equal to the length of the group),
+      it sets the start index to the last valid index in the group.
+
     """
     results = []
 
@@ -258,13 +420,19 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
     """
     Marks the coldest two-week period for each group in the DataFrame.
 
-    Parameters:
-    - group (pd.DataFrame): The DataFrame group.
-    - avg_var (str): The variable containing the rolling averages.
-    - days (int): The number of days over which the rolling average was calculated.
+    Parameters
+    ----------
+    group : pd.DataFrame
+        The DataFrame group.
+    avg_var : str
+        The variable containing the rolling averages.
+    days : int
+        The number of days over which the rolling average was calculated.
 
-    Returns:
-    - pd.Series: A boolean Series indicating whether each row is within the coldest two-week period.
+    Returns
+    -------
+    pd.Series
+        A boolean Series indicating whether each row is within the coldest two-week period.
     """
     original_index = group.index
 
@@ -290,19 +458,24 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
 
     return coldest_period
 
-
 # Find the start and end of the one week period with the highest peak for each project
 def mark_highest_peak(group, var="ElektriciteitsgebruikTotaalNetto", days=6):
     """
     Marks the one-week period for each group in the DataFrame around the highest peak.
 
-    Parameters:
-    - group (pd.DataFrame): The DataFrame group.
-    - var (str): The variable containing the peak energy use.
-    - days (int): The number of days to include.
+    Parameters
+    ----------
+    group : pd.DataFrame
+        The DataFrame group.
+    var : str
+        The variable containing the peak energy use.
+    days : int
+        The number of days to include.
 
-    Returns:
-    - pd.Series: A boolean Series indicating whether each row is within the coldest two-week period.
+    Returns
+    -------
+    pd.Series
+        A boolean Series indicating whether each row is within the one-week period around the highest peak.
     """
     original_index = group.index
 
@@ -335,12 +508,17 @@ def switch_multiplier(interval_choice):
     """
     Returns the multiplier for the switches in the calculation of the calculated columns.
 
-    Parameters:
-    - interval_choice (str): The interval over which the data is aggregated.
+    Parameters
+    ----------
+    interval_choice : str
+        The interval over which the data is aggregated.
 
-    Returns:
-    - int: The multiplier to use.
+    Returns
+    -------
+    int
+        The multiplier to use in unit conversions.
     """
+
     if interval_choice == "5min":
         return 12
     elif interval_choice == "15min":
@@ -354,9 +532,7 @@ def switch_multiplier(interval_choice):
     else:
         raise Exception("Unknown interval")
 
-
 intervals = ["5min", "15min", "60min", "24h"]
-
 
 def add_normalized_datetime(
     x,
@@ -365,16 +541,21 @@ def add_normalized_datetime(
 ):
     """
     Adds a normalized datetime column to the DataFrame or Ibis Table.
+    Used to do analyses that depend on the time of day rather than date.
 
-    Parameters:
-    - x (pd.DataFrame or ibis.expr.types.TableExpr): The DataFrame or Table.
-    - reference_date (datetime.datetime): The date used as reference for the normalization.
-    - datetime_column (str): The name of the column containing the datetime.
-
-    Returns:
-    - pd.DataFrame or ibis.expr.types.TableExpr: The DataFrame or Table with a new column 'normalized_datetime'.
+    Parameters
+    ----------
+    x : pd.DataFrame or ibis.expr.types.TableExpr
+        The DataFrame or Table.
+    reference_date : datetime.datetime, optional
+        The date used as reference for the normalization. Default is '2023-01-02'.
+    datetime_column : str, optional
+        The name of the column containing the datetime. Default is 'ReadingDate'.
+    Returns
+    -------
+    pd.DataFrame or ibis.expr.types.TableExpr
+        The DataFrame or Table with a new column 'normalized_datetime'.
     """
-
     if isinstance(x, pd.DataFrame):
         x["time_of_day"] = x[datetime_column].dt.time
         x["day_of_week"] = x[datetime_column].dt.dayofweek  # Monday=0, Sunday=6

@@ -23,6 +23,25 @@ Example intervals:
 
 
 def read_hh_data(interval="default", metadata_columns=None):
+    """
+    Read household data from a parquet file and optionally add index columns to.
+
+    Parameters
+    ----------
+    interval : str, optional
+        The time interval of the data to read, by default "default"
+    metadata_columns : list, optional
+        Additional columns to include from the index, by default None
+
+    Returns
+    -------
+    pd.DataFrame
+        The household data with optional index columns added
+
+    Notes
+    -----
+    This function reads parquet files from a predefined folder path.
+    """
     if not metadata_columns:
         metadata_columns = []
     df = pd.read_parquet(
@@ -32,6 +51,25 @@ def read_hh_data(interval="default", metadata_columns=None):
 
 
 def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.DataFrame:
+    """
+    Add index columns to the given DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    columns : list, optional
+        Additional columns to include from the index, by default None
+
+    Returns
+    -------
+    pd.DataFrame
+        The DataFrame with added index columns
+
+    Notes
+    -----
+    This function merges the input DataFrame with an index DataFrame based on 'HuisIdBSV' and 'ProjectIdBSV'.
+    """
     if columns:
         index_df, index_path = read_index()
         columns_to_select = ["HuisIdBSV", "ProjectIdBSV", *columns]
@@ -44,6 +82,14 @@ def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.Da
 
 
 def aggregate_hh_data_5min():
+    """
+    Aggregate household data into 5-minute intervals.
+
+    Notes
+    -----
+    This function reads individual household parquet files, concatenates them,
+    and saves the result as a single parquet file.
+    """
     logging.info("Starting to aggregate household data.")
 
     index_df = update_meenemen()
@@ -83,6 +129,31 @@ def impute_hh_data_5min(
     diffs_calculated=False,
     optimized=False,
 ):
+    """
+    Impute missing values in household data and save results.
+
+    Parameters
+    ----------
+    df : pd.DataFrame, optional
+        The input DataFrame, if None it will be read from a file
+    cum_cols : list, optional
+        List of cumulative columns to process, by default cumulative_columns
+    sorted : bool, optional
+        Whether the data is already sorted, by default False
+    diffs_calculated : bool, optional
+        Whether differences are already calculated, by default False
+    optimized : bool, optional
+        Whether to use optimized processing, by default False
+
+    Returns
+    -------
+    pd.DataFrame
+        The imputed household data
+
+    Notes
+    -----
+    This function performs imputation, calculates differences, and saves various summary statistics.
+    """
     logging.info("Loading HH data from parquet file.")
 
     if df is None:
@@ -196,6 +267,23 @@ def impute_hh_data_5min(
 
 
 def add_calculated_columns_to_hh_data(df):
+    """
+    Add calculated columns to household data and save the result.
+
+    Parameters
+    ----------
+    df : pd.DataFrame, optional
+        The input DataFrame, if None it will be read from a file
+
+    Returns
+    -------
+    pd.DataFrame
+        The DataFrame with added calculated columns
+
+    Notes
+    -----
+    This function adds calculated columns to the household data and saves the result as a parquet file.
+    """
     logging.info("Loading imputed data from parquet file.")
     if df is None:
         df = read_hh_data(interval="imputed")
@@ -213,6 +301,25 @@ def add_calculated_columns_to_hh_data(df):
 
 
 def read_aggregate(name, interval):
+    """
+    Read an aggregate parquet file.
+
+    Parameters
+    ----------
+    name : str
+        The name of the aggregate
+    interval : str
+        The time interval of the aggregate
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregate data
+
+    Notes
+    -----
+    This function reads a parquet file based on the provided name and interval.
+    """
     safe_name = re.sub(r"\W+", "_", name.lower())
     return pd.read_parquet(
         os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
@@ -221,7 +328,23 @@ def read_aggregate(name, interval):
 
 def get_aggregate_table(name, interval):
     """
-    Reads the aggregate parquet file from disk and returns it as an ibis table.
+    Get an aggregate table as an ibis table.
+
+    Parameters
+    ----------
+    name : str
+        The name of the aggregate
+    interval : str
+        The time interval of the aggregate
+
+    Returns
+    -------
+    ibis.Table
+        The aggregate data as an ibis table
+
+    Notes
+    -----
+    This function reads a parquet file and returns it as an ibis table.
     """
     safe_name = re.sub(r"\W+", "_", name.lower())
     parquet_path = os.path.join(
@@ -232,6 +355,20 @@ def get_aggregate_table(name, interval):
 
 
 def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
+    """
+    Resample household data to different time intervals.
+
+    Parameters
+    ----------
+    df : pd.DataFrame, optional
+        The input DataFrame, if None it will be read from a file
+    intervals : tuple, optional
+        The time intervals to resample to, by default ("60min", "15min", "5min")
+
+    Notes
+    -----
+    This function resamples household data to specified time intervals and saves the results.
+    """
     group_column = ["ProjectIdBSV", "HuisIdBSV"]
     if df is None:
         logging.info("Loading data with calculated columns to resample hh data")
@@ -281,6 +418,18 @@ def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
 
 
 def aggregate_project_data(intervals=("5min", "15min", "60min")):
+    """
+    Aggregate project data for different time intervals.
+
+    Parameters
+    ----------
+    intervals : tuple, optional
+        The time intervals to aggregate, by default ("5min", "15min", "60min")
+
+    Notes
+    -----
+    This function aggregates project data for specified time intervals and saves the results.
+    """
     group_column = ["ProjectIdBSV"]
     for interval in intervals:
         logging.info(
@@ -305,6 +454,24 @@ def aggregate_and_save(
     interval="5min",
     alt_name=None,
 ):
+    """
+    Aggregate data and save the result.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    group_column : tuple, optional
+        The column(s) to group by, by default ("ProjectIdBSV")
+    interval : str, optional
+        The time interval for aggregation, by default "5min"
+    alt_name : str, optional
+        An alternative name for the output file, by default None
+
+    Notes
+    -----
+    This function aggregates data, merges with size information, and saves the result as a parquet file.
+    """
     df_grouped = df.groupby(["ReadingDate", *list(group_column)])
     df_size = df_grouped.size().reset_index(name="n")
     if alt_name is None:
@@ -319,6 +486,27 @@ def aggregate_and_save(
 
 
 def aggregate_by_columns(df, group_column, size):
+    """
+    Aggregate data by columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame
+
+    Notes
+    -----
+    This function aggregates data for each variable defined in aggregation_variables.
+    """
     first = True
     combined_results = None
     for var, config in aggregation_variables.items():
@@ -356,6 +544,31 @@ def aggregate_by_columns(df, group_column, size):
 
 
 def aggregate_variable(df_grouped, var, config, group_column, size):
+    """
+    Aggregate a single variable.
+
+    Parameters
+    ----------
+    df_grouped : pd.DataFrame
+        The grouped DataFrame
+    var : str
+        The variable to aggregate
+    config : dict
+        Configuration for the aggregation
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame for the variable
+
+    Notes
+    -----
+    This function aggregates a single variable based on the specified method in the config.
+    """
     logging.info(f"{group_column} : column {var}")
     method = config["aggregate_method"]
 
@@ -388,6 +601,31 @@ def aggregate_variable(df_grouped, var, config, group_column, size):
 
 # would be smarter to do these variables with method diff_sum only after calculating the average Diff columns
 def aggregate_diff_cumsum(df, column, group_column, size, combined_results=None):
+    """
+    Aggregate cumulative sum of differences.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to aggregate
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+    combined_results : pd.DataFrame, optional
+        Previously combined results, by default None
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame
+
+    Notes
+    -----
+    This function calculates the cumulative sum of differences for the specified column.
+    """
     diff_column = column + "Diff"
     logging.info(
         f"Aggregate cumsum of diff column: {group_column} / {column} / {diff_column}",
@@ -420,6 +658,29 @@ def aggregate_diff_cumsum(df, column, group_column, size, combined_results=None)
 
 
 def aggregate_sum(df, column, group_column, size):
+    """
+    Aggregate sum of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to aggregate
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame
+
+    Notes
+    -----
+    This function calculates the sum of the specified column, requiring at least 60% of values to be present.
+    """
     logging.info(f"aggregate sum: {group_column} / {column}")
     grouped = df.groupby(group_column)
     aggregated = grouped[column].agg(sum, min_count=size["n"] * 0.6).reset_index()
@@ -427,6 +688,29 @@ def aggregate_sum(df, column, group_column, size):
 
 
 def aggregate_max(df, column, group_column, size):
+    """
+    Aggregate maximum of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to aggregate
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame
+
+    Notes
+    -----
+    This function calculates the maximum of the specified column, requiring at least 60% of values to be present.
+    """
     logging.info(f"aggregate sum: {group_column} / {column}")
     grouped = df.groupby(group_column)
     aggregated = grouped[column].agg(max, min_count=size["n"] * 0.6).reset_index()
@@ -434,6 +718,29 @@ def aggregate_max(df, column, group_column, size):
 
 
 def aggregate_avg(df, column, group_column, size):
+    """
+    Aggregate average of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to aggregate
+    group_column : list
+        The column(s) to group by
+    size : pd.DataFrame
+        DataFrame containing size information
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated DataFrame
+
+    Notes
+    -----
+    This function calculates the average of the specified column, requiring at least 60% of values to be present.
+    """
     logging.info(f"aggregate avg: {group_column} / {column}")
 
     # Group by the specified column
@@ -461,6 +768,24 @@ def resample_and_save(
     interval="5min",
     alt_name=None,
 ):
+    """
+    Resample data and save the result.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    group_column : tuple, optional
+        The column(s) to group by, by default ("ProjectIdBSV", "HuisIdBSV")
+    interval : str, optional
+        The time interval for resampling, by default "5min"
+    alt_name : str, optional
+        An alternative name for the output file, by default None
+
+    Notes
+    -----
+    This function resamples data and saves the result as a parquet file.
+    """
     if alt_name is None:
         alt_name = "_".join(group_column)
     df = df.set_index("ReadingDate")
@@ -478,6 +803,27 @@ def resample_by_columns(
     group_column=None,
     interval="15min",
 ):
+    """
+    Resample data by columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    group_column : list, optional
+        The column(s) to group by, by default None
+    interval : str, optional
+        The time interval for resampling, by default "15min"
+
+    Returns
+    -------
+    pd.DataFrame
+        The resampled DataFrame
+
+    Notes
+    -----
+    This function resamples data for each variable defined in aggregation_variables.
+    """
     # resampled_dfs = []
     if group_column is None:
         group_column = ["ProjectIdBSV", "HuisIdBSV"]
@@ -522,6 +868,33 @@ def resample_by_columns(
 
 
 def resample_variable(df, var, config, interval, group_column, min_count):
+    """
+    Resample a single variable.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    var : str
+        The variable to resample
+    config : dict
+        Configuration for the resampling
+    interval : str
+        The time interval for resampling
+    group_column : list
+        The column(s) to group by
+    min_count : int
+        The minimum count required for resampling
+
+    Returns
+    -------
+    pd.DataFrame
+        The resampled DataFrame for the variable
+
+    Notes
+    -----
+    This function resamples a single variable based on the specified method in the config.
+    """
     logging.info(f"{group_column} / {interval}: column {var}")
     method = config["resample_method"]
     validator_column = config.get("validator_column")
@@ -544,6 +917,31 @@ def resample_variable(df, var, config, interval, group_column, min_count):
 
 
 def resample_max(df, column, interval, group_column, min_count):
+    """
+    Resample maximum of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to resample
+    interval : str
+        The time interval for resampling
+    group_column : list
+        The column(s) to group by
+    min_count : int
+        The minimum count required for resampling
+
+    Returns
+    -------
+    pd.DataFrame
+        The resampled DataFrame
+
+    Notes
+    -----
+    This function resamples the maximum of the specified column.
+    """
     logging.info(f"resample max: {group_column} / {interval}: {column}")
     resampled = (
         df.groupby(group_column)[column]
@@ -555,6 +953,31 @@ def resample_max(df, column, interval, group_column, min_count):
 
 
 def resample_sum(df, column, interval, group_column, min_count):
+    """
+    Resample sum of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame
+    column : str
+        The column to resample
+    interval : str
+        The time interval for resampling
+    group_column : list
+        The column(s) to group by
+    min_count : int
+        The minimum count required for resampling
+
+    Returns
+    -------
+    pd.DataFrame
+        The resampled DataFrame
+
+    Notes
+    -----
+    This function resamples the sum of the specified column.
+    """
     logging.info(f"resample sum: {group_column} / {interval}: {column}")
     resampled = (
         df.groupby(group_column)[column]
@@ -572,6 +995,31 @@ def resample_sum(df, column, interval, group_column, min_count):
 
 
 def resample_avg(df, column, interval, group_column, min_count):
+    """
+    Resample average of a column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame.
+    column : str
+        The column to resample.
+    interval : str
+        The time interval for resampling.
+    group_column : list
+        The column(s) to group by.
+    min_count : int
+        The minimum count required for resampling.
+
+    Returns
+    -------
+    pd.DataFrame
+        The resampled DataFrame.
+
+    Notes
+    -----
+    This function resamples the average of the specified column, requiring at least `min_count` values to be present.
+    """
     logging.info(f"resample avg: {group_column} / {interval}: {column}")
     resampled = (
         df.groupby(group_column)

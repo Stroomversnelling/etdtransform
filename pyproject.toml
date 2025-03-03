@@ -24,6 +24,12 @@ keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 repository = "https://github.com/Stroomversnelling/etdmap"
 
 [project.optional-dependencies]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "numpydoc",
+    "myst-parser",
+]
 ruffing = ["ruff"]
 pytesting = ["pytest>=7"]
 dev = ["pre-commit"]

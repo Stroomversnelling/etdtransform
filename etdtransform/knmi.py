@@ -7,6 +7,14 @@ import etdtransform
 
 
 def get_project_weather_station_data():
+    """
+    Load and process project weather station data.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing project weather station data with uppercase station names.
+    """
     # Load mapping of ProjectIdBSV to weather stations and ensure names are uppercase
     weather_station_file = etdtransform.options.weather_stations_summary_file
     project_weather_station_df = pd.read_excel(
@@ -22,6 +30,14 @@ def get_project_weather_station_data():
 
 
 def get_weather_data():
+    """
+    Load and process weather data from CSV files.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing combined weather data from all CSV files.
+    """
     # Load all temperature CSV files from the folder
     weather_data_folder = etdtransform.options.weather_data_folder_path
 
@@ -31,6 +47,19 @@ def get_weather_data():
 
 
 def load_knmi_weather_data(folder_path):
+    """
+    Load and process KNMI weather data from text files in a specified folder.
+
+    Parameters
+    ----------
+    folder_path : str
+        Path to the folder containing KNMI weather data files.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing combined and processed weather data from all files.
+    """
     combined_df = pd.DataFrame()
     for file_name in os.listdir(folder_path):
         if file_name.endswith(".txt"):
