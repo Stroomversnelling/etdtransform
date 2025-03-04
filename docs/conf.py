@@ -30,13 +30,19 @@ extensions = [
     'numpydoc',
 ]
 
+numpydoc_show_class_members = False
+
 autosummary_generate = True
+autosummary_imported_members = True
+
 autodoc_default_options = {
     'members': True,
+    'undoc-members': True,
+    'inherited-members': False,  # Avoid inherited int methods from IntFlag
+    'show-inheritance': True,
     'member-order': 'bysource',
     'special-members': '__init__',
-    'undoc-members': True,
-    'exclude-members': '__weakref__'
+    'exclude-members': '__weakref__, NONE, NEGATIVE_GAP_JUMP, NEAR_ZERO_GAP_JUMP, LINEAR_FILL, SCALED_FILL, ZERO_END_VALUE, POSITIVE_END_VALUE, NO_END_VALUE, THRESHOLD_ADJUSTED'
 }
 
 source_suffix = {
@@ -49,21 +55,19 @@ myst_enable_extensions = [
     "deflist",
 ]
 
-numpydoc_show_class_members = True
+numpydoc_show_class_members = False
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-#html_theme = 'alabaster'
 html_theme = "sphinx_rtd_theme"
 html_static_path = ['_static']
 
 # Linking to source code configuration
+
 def linkcode_resolve(domain, info):
     if domain != 'py':
         return None
@@ -99,7 +103,6 @@ def linkcode_resolve(domain, info):
     fn = os.path.relpath(fn, start=os.path.abspath('../'))  # Adjust this path if needed
 
     return f"https://github.com/Stroomversnelling/etdtransform/blob/main/{fn}#L{lineno}"
-
 
 linkcode_options = {
     'resolve': linkcode_resolve,

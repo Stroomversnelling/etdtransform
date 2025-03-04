@@ -40,6 +40,7 @@ def methods_to_bitwise(methods_column):
 
     This vectorized version is optimized for performance with NumPy.
     """
+
     bitwise_values = np.zeros(len(methods_column), dtype=np.int64)
 
     for i, methods in enumerate(methods_column):
@@ -115,7 +116,9 @@ def impute_and_normalize(
     max_bound: pd.DataFrame,
 ):
     """
-    Perform vectorized imputation and normalization on cumulative columns/ This function applies imputation techniques to fill missing values in
+    Perform vectorized imputation and normalization on cumulative columns
+
+    This function applies imputation techniques to fill missing values in
     cumulative columns and normalizes the data. It uses vectorized operations
     for improved performance.
 
@@ -134,10 +137,13 @@ def impute_and_normalize(
     -------
     tuple
         A tuple containing three elements:
+
         - df : pandas.DataFrame
             The imputed and normalized DataFrame.
+
         - imputation_gap_stats_df : pandas.DataFrame
             Statistics about the imputation process for each gap.
+
         - imputation_reading_date_stats_df : None or pandas.DataFrame
             Statistics about imputation by reading date (if calculated).
 
@@ -156,6 +162,7 @@ def impute_and_normalize(
     - Imputation methods may introduce bias or affect the variance of the data.
     - Large amounts of imputed data may significantly affect analysis results.
     """
+
     logging.info("Starting to impute cumulative column diffs (vectorized).")
 
     def calculate_imputation_gap_stats(group, cum_col, diff_col, impute_type_col):
@@ -806,8 +813,9 @@ class ImputeType(IntFlag):
 
     Notes
     -----
-    The enumeration values are automatically assigned using auto().
     The THRESHOLD_ADJUSTED flag can be combined with other imputation types.
+
+    .. :no-index:
     """
 
     NONE = 0
