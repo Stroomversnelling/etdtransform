@@ -325,6 +325,7 @@ def validate_household_column(household_df, cum_col, huis_code):
 
     return True
 
+
 # currently unused - apply as a sense check to ensure not too many values are missing
 def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns):
     """

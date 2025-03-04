@@ -99,14 +99,13 @@ def aggregate_hh_data_5min():
     index_df = index_df[index_df["Meenemen"]]
 
     for _, row in index_df.iterrows():
-        # huis_code = row["HuisCode"]
         huis_id_bsv = row["HuisIdBSV"]
         project_code = row["ProjectIdBSV"]
         file_name = f"household_{huis_id_bsv}_table.parquet"
 
         file_path = os.path.join(etdtransform.options.mapped_folder_path, file_name)
         household_df = pd.read_parquet(file_path)
-        # household_df["HuisCode"] = huis_code
+
         household_df["ProjectIdBSV"] = project_code
         household_df["HuisIdBSV"] = huis_id_bsv
 
