@@ -30,7 +30,6 @@ docs = [
     "sphinx-rtd-theme",
     "numpydoc",
     "myst-parser",
-    "git+https://github.com/Stroomversnelling/etdmap#egg=etdmap"
 ]
 ruffing = ["ruff"]
 pytesting = ["pytest>=7"]
