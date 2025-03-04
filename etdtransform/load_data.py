@@ -19,14 +19,21 @@ from etdtransform.knmi import (
     weather_columns,
 )
 
-
-def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
+def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
     """
-    Reads household data tables for different intervals and joins them with an index table as a dictionary of Ibis tables.
+    Reads household data tables for different intervals and joins them with an index table.
+    Optionally integrates weather data.
 
-    Returns:
-        dict[str, ibis.Expr]: A dictionary where keys are intervals and values
-        are the joined Ibis tables for each interval.
+    Parameters
+    ----------
+    include_weather : bool, optional
+        If True, includes weather data in the returned tables (default is True).
+
+    Returns
+    -------
+    dict[str, ibis.Expr]
+        A dictionary where keys are interval names (e.g., 'hourly', 'daily') and values
+        are the corresponding Ibis tables.
     """
     household_tbls = {}
 
@@ -39,7 +46,6 @@ def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
             etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
         )
         household_table = ibis.read_parquet(household_parquet)
-
         hh_joined = join_index_table(household_table)
 
         if include_weather:
@@ -53,27 +59,52 @@ def get_household_tables(include_weather=True) -> dict[str, ibis.Expr]:
 
     return household_tbls
 
-
 def join_index_table(
     tbl: ibis.Expr,
     index_table: Optional[ibis.Expr] = None,
     index_join_columns: List[str] = ["HuisIdBSV", "ProjectIdBSV"],
 ) -> ibis.Expr:
+    """
+    Joins a given table with an index table on specified columns.
+
+    Parameters
+    ----------
+    tbl : ibis.Expr
+        The table to join.
+    index_table : Optional[ibis.Expr], optional
+        The index table. If None, reads from default parquet file (default is None).
+    index_join_columns : List[str], optional
+        Columns to use for the join (default is ["HuisCode", "ProjectIdBSV"]).
+
+    Returns
+    -------
+    ibis.Expr
+        The table joined with the index table.
+    """
     if index_table is None:
         index_table = ibis.read_parquet(
             os.path.join(etdtransform.options.mapped_folder_path, "index.parquet")
         )
-
+    
     return tbl.left_join(index_table, index_join_columns)
-
 
 def get_weather_data_table() -> ibis.Expr:
     """
     Processes and transforms weather data into an Ibis table with additional calculated columns.
 
-    Returns:
-        ibis.Expr: An Ibis table containing transformed weather data with rolling averages,
-        weekly summaries, and flags for the coldest two weeks based on temperature and perceived temperature.
+    The transformations include:
+    - Rolling 14-day averages of temperature and perceived temperature.
+    - Identifying the coldest two weeks based on rolling averages.
+    - Adding ISO week, day of week, and weekly summary calculations.
+
+    Returns
+    -------
+    ibis.Expr
+        An Ibis table containing transformed weather data with additional calculated columns.
+    
+    Notes
+    -----
+    The weather data is grouped by station ('STN') and aggregated weekly.
     """
     weather_data_df = get_weather_data()
     weather_data_df = weather_data_df.sort_values(["STN", "YYYYMMDD", "HH"])
@@ -202,19 +233,36 @@ def get_weather_data_table() -> ibis.Expr:
     # Add the transformed weather data as an Ibis table
     return weather_data
 
-
 def get_weather_station_table() -> ibis.Expr:
     """
-    Weather statation data as an Ibis table.
+    Retrieves weather station data as an Ibis table.
 
-    Returns:
-        ibis.Expr: An Ibis table containing weather station data.
+    Returns
+    -------
+    ibis.Expr
+        An Ibis table containing weather station data.
     """
     project_weather_station_df = get_project_weather_station_data()
     return ibis.memtable(project_weather_station_df)
 
+def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr] = None, weather_table: Optional[ibis.Expr] = None) -> ibis.Expr:
+    """
+    Joins weather data with a given table.
 
-def join_weather_data(tbl, weather_station_table=None, weather_table=None) -> ibis.Expr:
+    Parameters
+    ----------
+    tbl : ibis.Expr
+        The table to join with weather data.
+    weather_station_table : Optional[ibis.Expr], optional
+        The weather station mapping table (default is None, meaning it will be retrieved).
+    weather_table : Optional[ibis.Expr], optional
+        The table containing weather data (default is None, meaning it will be retrieved).
+
+    Returns
+    -------
+    ibis.Expr
+        The input table with joined weather data.
+    """
     if weather_table is None:
         weather_table = get_weather_data_table()
     if weather_station_table is None:

@@ -1,0 +1,97 @@
+{
+    "num_rows": 100,
+    "num_columns": 13,
+    "column_details": {
+        "index": {
+            "statistics": {
+                "min": "0",
+                "max": "99",
+                "null_count": 0
+            }
+        },
+        "ProjectIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "2",
+                "null_count": 0
+            }
+        },
+        "HuisIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitNetgebruikHoogDiff",
+                "max": "Zon-opwekTotaalDiff",
+                "null_count": 0
+            }
+        },
+        "diff_col_total": {
+            "statistics": {
+                "min": "16778.5853125785",
+                "max": "79237.31756990979",
+                "null_count": 0
+            }
+        },
+        "cum_col_min_max_diff": {
+            "statistics": {
+                "min": "16779.225541692325",
+                "max": "79237.31756990864",
+                "null_count": 0
+            }
+        },
+        "missing": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "imputed": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "imputed_na": {
+            "statistics": {
+                "min": "-52890",
+                "max": "0",
+                "null_count": 0
+            }
+        },
+        "element": {
+            "statistics": {
+                "min": "4",
+                "max": "18",
+                "null_count": 60
+            }
+        },
+        "bitwise_methods": {
+            "statistics": {
+                "min": "-120",
+                "max": "16",
+                "null_count": 0
+            }
+        },
+        "total_records": {
+            "statistics": {
+                "min": "105120",
+                "max": "105120",
+                "null_count": 0
+            }
+        },
+        "percentage_imputed": {
+            "statistics": {
+                "min": "-0.0",
+                "max": "99.99904870624049",
+                "null_count": 0
+            }
+        }
+    }
+}
