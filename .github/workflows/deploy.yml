@@ -32,7 +32,7 @@ jobs:
     - name: Generate API documentation
       run: |
         cd docs
-        sphinx-apidoc -o source ../etdmap
+        sphinx-apidoc -o source ../etdtransform
 
     - name: Build documentation
       run: |
