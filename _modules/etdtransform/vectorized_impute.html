@@ -113,6 +113,7 @@
 
 <span class="sd">    This vectorized version is optimized for performance with NumPy.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="n">bitwise_values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">methods_column</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
 
     <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">methods</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">methods_column</span><span class="p">):</span>
@@ -194,7 +195,9 @@
     <span class="n">max_bound</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
 <span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Perform vectorized imputation and normalization on cumulative columns/ This function applies imputation techniques to fill missing values in</span>
+<span class="sd">    Perform vectorized imputation and normalization on cumulative columns</span>
+
+<span class="sd">    This function applies imputation techniques to fill missing values in</span>
 <span class="sd">    cumulative columns and normalizes the data. It uses vectorized operations</span>
 <span class="sd">    for improved performance.</span>
 
@@ -213,10 +216,13 @@
 <span class="sd">    -------</span>
 <span class="sd">    tuple</span>
 <span class="sd">        A tuple containing three elements:</span>
+
 <span class="sd">        - df : pandas.DataFrame</span>
 <span class="sd">            The imputed and normalized DataFrame.</span>
+
 <span class="sd">        - imputation_gap_stats_df : pandas.DataFrame</span>
 <span class="sd">            Statistics about the imputation process for each gap.</span>
+
 <span class="sd">        - imputation_reading_date_stats_df : None or pandas.DataFrame</span>
 <span class="sd">            Statistics about imputation by reading date (if calculated).</span>
 
@@ -235,6 +241,7 @@
 <span class="sd">    - Imputation methods may introduce bias or affect the variance of the data.</span>
 <span class="sd">    - Large amounts of imputed data may significantly affect analysis results.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting to impute cumulative column diffs (vectorized).&quot;</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">calculate_imputation_gap_stats</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">):</span>
@@ -897,8 +904,9 @@
 
 <span class="sd">    Notes</span>
 <span class="sd">    -----</span>
-<span class="sd">    The enumeration values are automatically assigned using auto().</span>
 <span class="sd">    The THRESHOLD_ADJUSTED flag can be combined with other imputation types.</span>
+
+<span class="sd">    .. :no-index:</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">NONE</span> <span class="o">=</span> <span class="mi">0</span>
