@@ -1,13 +1,13 @@
 # etdtransform
 __"Energietransitie Dataset" transformation and loading package__
 
-This package provides the required helpers to work with the `Energietransitie dataset` (ETD). The ETD is a model defining important variables for energy in the built environment, which are used to inform policy and planning decisions in the Netherlands.
+`etdtransform` package provides the required helpers to work with the `Energietransitie dataset` (ETD). The ETD is a model defining important variables for energy in the built environment, which are used to inform policy and planning decisions in the Netherlands. 
+
+It depends on `etdmap` for the ETD data model definitions and for some data loading functions. It is expected that any datasets used have already been mapped and undergone basic quality control. See `etdmap` for more information.
 
 ## Installation
 
-Normally, one would use the `etdanalyze` and `etdtranform` packages and install their requirements, which will automatically install `etdtransform`. 
-
-However, if you want to use this package on its own, you can install it with pip:
+If you want to use this package on its own, you can install it with pip:
 
 ```bash
 git clone https://github.com/Stroomversnelling/etdtransform.git
@@ -40,16 +40,16 @@ etdtransform.options.weather_folder = 'KNMI_weather_data_folder_path' # path to 
 etdtransform.options.weather_file = 'path_to_KNMI_stations_file' # path to the KNMI weather stations data file
 ```
 
-## Loading data as Ibis tables
+## Loading mapped data as Ibis tables
 
-Typically, we will first load data from parquet files stored in folders as Ibis tables and after the selecting the right columns and filtering the desired rows, and pontentially merging with other data, we will transform it to a in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.
+Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and after the selecting the right columns and filtering the desired rows, and merging with other required data, we will transform it to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.
 
-There are two main types of ETD datasets:
+There are two main types of aggregated ETD datasets:
 
-- data for connected unit in the built environment, such as a household or a charging point, and
-- project level data, an aggregated collection of network connected units.
+- data for individually connected units in the built environment, such as a household or, perhaps in the future, a charging point, and
+- project level data, an aggregated collection of network connected units based on `ProjectIdBSV` and often representing a limited geographic scope, e.g. a neighborhood.
 
-Building units are usually a single household and may represent an apartment or other home. The data from building units is described in the `etlmap` packge. At the moment, all bulding units are households.
+Building units are usually a single household and may represent an apartment or other home. The data from building units is described in the `etdmap` package. 
 
 To load household data, use the following:
 
@@ -145,17 +145,17 @@ df_calculated = get_hh_table('5min', 'calculated').select(
 ).to_pandas()
 ```
 
-## Transformations to prepare datasets for loading
+## Transformations to prepare datasets for loading (advanced)
 
 After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.
 
-While most users will not apply these transformations, at the moment, some of the following operations require large amounts of RAM and can surpass 100GB of RAM. Please ensure you have enough RAM available if you are processing the data.
+_While most users will not need to apply these transformations as the datasets will already have been aggregated, some of the following operations require large amounts of RAM and can surpass 100GB of RAM to run efficiently. Please consider whether you have enough RAM and time available if you are processing the data. In the future, we could reduce the RAM requirements if needed._
 
 ### Combining individual building unit data
 
 This step will create a single dataset and remove households marked in the household metadata to not be used (‘Meenemen’). Households with poor data, including missing variables or large amounts of missing data or other data anomolies that cannot be automatically cleaned are marked 0 so they are not included. All other households are marked 1 to include in our transformations.
 
-For nearly 300 househoulds, it requires over 25GB of RAM. This function will save `household_default.parquet`.
+For nearly 300 househoulds, it requires over 25GB of RAM to run efficiently. This function will save `household_default.parquet`.
 
 ```python
 from etdtransform import aggregate_hh_data_5min
@@ -170,22 +170,24 @@ aggregate_hh_data_5min() # this will generate the `household_default.parquet` fi
 
 Ideally, each data provider has provided 5 minute resolution for all the devices. In some cases, not all variables are available at this level of granularity and in others interval may be 15 minutes or more. In cases where data is given at 5 minute intervals, we take columns that have longer intervals and impute missing values where possible.
 
-Gaps in data are filled in different ways based on the patterns we found in the raw data. There are a few different imputation types of imputation that are used:
+Gaps in data are filled in different ways based on the patterns we found in the raw data. There are a few different imputation techniques that are used to impute the **expected change in cumulative variables**:
 - Filling in 0s where there is a gap in data but no subsequent change in later cumulative values
-- Filling in 0s where the cumulative value have decreased but should not. For example, when an energy meter counter is reset to 0 and then increases again. The assumption is that there has been no real change.
-- Filling in based on the project average change where there is no data in a household but data is available from other households in the same project. This average is scaled so that the change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.
-- Filling in linearly where there is insufficient data from other households to calcualte an average change over the period.
+- Filling in 0s where the cumulative value have decreased but should not normally. For example, when an energy meter counter is reset to 0 and then increases again. The assumption is that there has been no real change.
+- Filling in based on the _project average change_ where there is no data in a household but data is available from other households in the same project. This average is scaled so that the change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.
+- Filling in linearly where there is insufficient data from other households to calculate an average change over the period.
 
-When project average change is used, the scaling factor is calculated with the ratio between:
+Some of these imputation methods will reduce the variance of the dataset. Taking this into account, it is important to exclude datasets with too much missing data and consider this during analysis and interpretation as several measures such as the IQR or standard deviation may be sensitive to the imputation. By carefully selecting datasets and ensure project data is never missing from many households at any one point in time, these effects are very small.
+
+When the project average change is used, the scaling factor is calculated with the ratio between:
 
 - the difference between cumulative values in the household before and after the gap in data, e.g. if the last cumulative value was 222 and the next was 322, then the gap jump is 100, and
 - the sum of project change over the same period, e.g the average change in this variable over all households in the project is 50.
 
-The calculated ratio would be 100/50 = 2 so each average change is multiplied by 2.0 and this values are used to fill in the gap.
+The calculated ratio would be 100/50 = 2 so each average change is multiplied by 2.0 and these scaled values are used to fill in the gap.
 
-Outliers are defined by first making a dataset per project of the maximum value per variable per household.  Then double the 95 percentile value per project is used as an upper bound for the household maximum. If the household maximum for the variable is within the bound, it is included in the averages difference calculation. By definition, this will exclude 0 to 5 percent of households per project so the resulting average should be representative and useful for imputation.
+Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% - 95%  of households in each registered moment per project so the resulting average should be representative and useful for imputation.
 
-#### Preparing for imputation of household data
+#### 1. Loading mapped data
 
 For this step, the data is read from the `household_default.parquet` in the path provided.
 
@@ -197,20 +199,14 @@ from etdtransform.impute import sort_for_impute, prepare_diffs_for_impute, imput
 etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
 
 df = read_hh_data(interval = 'default')
+
 ```
 
-#### Calculating diff columns and average change per time step
+#### 2. Calculating diff columns and average change per time step
 
 We prepare the imputation by first calculating the differences between the consecutive values in cumulative columns to get the change every 5 minutes. These `diff` columns will be added to the dataframe.
 
 The average `diff` per 5 minutes in a project is used to impute values.  The average difference between timesteps for all cumulative variables is saved in a series of files by `prepare_diffs_for_impute()`.
-
-Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this excludes 0 to 5 percent of households per project so the resulting average should be representative and useful for imputation.
-
-Additional files saved to the aggregate folder are:
-
-- `household_diff_max_bounds.parquet `: maximum differences per variable and the boundary values used to exclude outliers
-- `avg_diffs.parquet`: the average difference per variable per project used for imputation
 
 ```python
 # pre-sort rows to speed up the process
@@ -222,22 +218,26 @@ cum_cols_list = ['Zon-opwekTotaal', 'ElektriciteitsgebruikWarmtepomp']
 prepare_diffs_for_impute(df, project_id_column='ProjectIdBSV', cumulative_columns=cum_cols_list, sorted = True)
 ```
 
+Additional files saved to the aggregate folder are:
+
+- `household_diff_max_bounds.parquet `: maximum differences per variable and the boundary values used to exclude outliers
+- `avg_diffs.parquet`: the average difference per variable per project used for imputation
+
 #### Imputation
 
-Finally, `impute_hh_data_5min()` will save the imputed dataset in the aggregate folder:
-
-- `household_imputed.parquet`: the resulting imputed dataset with helper columns to identify imputation and methods of imputation
-
-And a series of summary files:
-
-- `impute_summary_project.parquet`: a summary of imputation per project
-- `impute_summary_household.parquet`: a summary of imputation per household
-
-It is possible to use arguments to pass pre-processed or sampled households to this function and to avoid sorting the column or recalculating differences if they have already been calculated previously. This can be useful as the dataset generated is very large with all the helper columns.
+Finally, `impute_hh_data_5min()` will save the imputed dataset in the aggregate folder.
 
 ```python
 impute_hh_data_5min(df, cum_cols=cum_cols_list, sorted=True, diffs_calculated=True)
 ```
+
+Files are:
+
+- `household_imputed.parquet`: the resulting imputed dataset with helper columns to identify imputation and methods of imputation
+- `impute_summary_project.parquet`: a summary of imputation per project
+- `impute_summary_household.parquet`: a summary of imputation per household
+
+It is possible to use arguments to pass pre-processed or sampled households to this function and to avoid sorting the column or recalculating differences if they have already been calculated previously. This can be useful as the dataset generated is very large.
 
 __As of Fall 2024, most of the imputation is now much faster with the use of a series of simple vectorized operations instead of applying functions over the data. The trade off is that the imputation code is a little less readable.__
 

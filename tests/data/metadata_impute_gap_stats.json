@@ -1,0 +1,83 @@
+{
+    "num_rows": 100,
+    "num_columns": 11,
+    "column_details": {
+        "ProjectIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "2",
+                "null_count": 0
+            }
+        },
+        "HuisIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitNetgebruikHoogDiff",
+                "max": "Zon-opwekTotaalDiff",
+                "null_count": 0
+            }
+        },
+        "diff_col_total": {
+            "statistics": {
+                "min": "16778.5853125785",
+                "max": "79237.31756990979",
+                "null_count": 0
+            }
+        },
+        "cum_col_min_max_diff": {
+            "statistics": {
+                "min": "16779.225541692325",
+                "max": "79237.31756990864",
+                "null_count": 0
+            }
+        },
+        "deviation": {
+            "statistics": {
+                "min": "-6796.543314301365",
+                "max": "4.547109710983932e-08",
+                "null_count": 0
+            }
+        },
+        "missing": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "element": {
+            "statistics": {
+                "min": "4",
+                "max": "18",
+                "null_count": 60
+            }
+        },
+        "imputed": {
+            "statistics": {
+                "min": "0",
+                "max": "105119",
+                "null_count": 0
+            }
+        },
+        "imputed_na": {
+            "statistics": {
+                "min": "-52890",
+                "max": "0",
+                "null_count": 0
+            }
+        },
+        "bitwise_methods": {
+            "statistics": {
+                "min": "-120",
+                "max": "16",
+                "null_count": 0
+            }
+        }
+    }
+}
