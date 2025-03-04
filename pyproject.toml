@@ -16,7 +16,7 @@ requires-python = ">= 3.9"
 dependencies = [
     "pandas>=2.2",
     "ibis-framework",
-    "git+https://github.com/Stroomversnelling/etdmap#egg=etdmap"
+    "etdmap @ git+https://github.com/Stroomversnelling/etdmap@main"
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 
