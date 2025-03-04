@@ -6,6 +6,26 @@ __pycache__/
 # C extensions
 *.so
 
+# datafile extensions
+data_processing.log
+data_summary.csv
+*.log
+*/*.log
+*.csv
+*.xlsx
+*.ipynb
+*.html
+test_output.txt
+*.parquet
+*/*.parquet
+*.yaml
+
+# All quarto directories for html exports
+*_files
+
+# gitignore exceptions to above extensions
+!.\config_test_template.yaml
+
 # Distribution / packaging
 .Python
 build/
