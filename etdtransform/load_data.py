@@ -62,7 +62,7 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
 def join_index_table(
     tbl: ibis.Expr,
     index_table: Optional[ibis.Expr] = None,
-    index_join_columns: List[str] = ["HuisCode", "ProjectIdBSV"],
+    index_join_columns: List[str] = ["HuisIdBSV", "ProjectIdBSV"],
 ) -> ibis.Expr:
     """
     Joins a given table with an index table on specified columns.
