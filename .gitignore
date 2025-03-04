@@ -1,3 +1,21 @@
+# datafile extensions
+*.log
+*/*.log
+*.csv
+!etdmodel.csv
+*.xlsx
+*.ipynb
+*.html
+*.parquet
+*/*.parquet
+*.yaml
+
+# All quarto directories for html exports
+*_files
+
+# gitignore exceptions to above extensions
+!.\config_test_template.yaml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
