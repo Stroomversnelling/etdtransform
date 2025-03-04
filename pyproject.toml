@@ -15,13 +15,14 @@ maintainers = [
 requires-python = ">= 3.9"
 dependencies = [
     "pandas>=2.2",
-    "ibis-framework"
+    "ibis-framework",
+    "git+https://github.com/Stroomversnelling/etdmap#egg=etdmap"
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 
 
 [project.urls]
-repository = "https://github.com/Stroomversnelling/etdmap"
+repository = "https://github.com/Stroomversnelling/etdtransform"
 
 [project.optional-dependencies]
 docs = [
@@ -29,6 +30,7 @@ docs = [
     "sphinx-rtd-theme",
     "numpydoc",
     "myst-parser",
+    "git+https://github.com/Stroomversnelling/etdmap#egg=etdmap"
 ]
 ruffing = ["ruff"]
 pytesting = ["pytest>=7"]
