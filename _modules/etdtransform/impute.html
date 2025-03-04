@@ -1,0 +1,902 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>etdtransform.impute &mdash; etdtransform - &#34;Energietransitie Dataset&#34; transformation and loading package 2025 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=cb975c41"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            etdtransform - "Energietransitie Dataset" transformation and loading package
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../source/modules.html">etdtransform</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">etdtransform - "Energietransitie Dataset" transformation and loading package</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">etdtransform.impute</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for etdtransform.impute</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">math</span><span class="w"> </span><span class="kn">import</span> <span class="n">floor</span><span class="p">,</span> <span class="n">isclose</span><span class="p">,</span> <span class="n">log10</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">etdtransform</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.vectorized_impute</span><span class="w"> </span><span class="kn">import</span> <span class="n">impute_and_normalize</span>
+
+
+<div class="viewcode-block" id="calculate_average_diff">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.calculate_average_diff">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">calculate_average_diff</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">project_id_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">diff_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate average differences for specified columns grouped by project and reading date.</span>
+
+<span class="sd">    This function computes the average differences for the specified columns,</span>
+<span class="sd">    excluding outliers based on a 95th percentile threshold. It&#39;s used to prepare</span>
+<span class="sd">    data for imputation of missing values.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame containing the data.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+<span class="sd">    diff_columns : list[str]</span>
+<span class="sd">        A list of column names for which to calculate average differences.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    dict</span>
+<span class="sd">        A dictionary where keys are column names and values are dictionaries containing:</span>
+<span class="sd">        - &#39;avg_diff&#39;: DataFrame with average differences</span>
+<span class="sd">        - &#39;upper_bounds&#39;: DataFrame with upper bounds for outlier exclusion</span>
+<span class="sd">        - &#39;household_max_with_bounds&#39;: DataFrame with household maximum values and bounds</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function uses a 95th percentile threshold to exclude outliers when calculating</span>
+<span class="sd">    averages. The threshold is doubled to create an upper bound for inclusion in the</span>
+<span class="sd">    average calculation.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - Negative difference values will raise a ValueError.</span>
+<span class="sd">    - Missing values in the resulting average columns will be logged as errors.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Calculating Diff column averages.&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">safe_quantile</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">col_name</span><span class="p">):</span>
+        <span class="n">filtered_group</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="n">group</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">1e-8</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">filtered_group</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">({</span><span class="n">col_name</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">},</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Float64&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">({</span><span class="n">col_name</span><span class="p">:</span> <span class="n">filtered_group</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span><span class="o">.</span><span class="n">quantile</span><span class="p">(</span><span class="mf">0.95</span><span class="p">)})</span>
+
+    <span class="c1"># per Diff column max per house</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Calculating max values per household.&quot;</span><span class="p">)</span>
+    <span class="n">household_max</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])[</span><span class="n">diff_columns</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="n">household_max</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">diff_columns</span>
+    <span class="p">]</span>
+
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">diff_columns</span><span class="p">:</span>
+        <span class="n">household_max</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">household_max</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span>
+            <span class="s2">&quot;Float64&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">avg_diff_dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">diff_columns</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Handling column: </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Calculating the 95th percentile (upper bound) for </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="n">upper_bounds</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">household_max</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">project_id_column</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">safe_quantile</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+        <span class="p">)</span>
+        <span class="n">upper_bounds</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_upper_bound&quot;</span><span class="p">]</span>
+        <span class="n">upper_bounds</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_upper_bound&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">upper_bounds</span><span class="p">[</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_upper_bound&quot;</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Identifying households to include for </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="n">household_max_with_bounds</span> <span class="o">=</span> <span class="n">household_max</span><span class="p">[</span>
+            <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span><span class="p">]</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">upper_bounds</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="n">project_id_column</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="n">include_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">household_max_with_bounds</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_huis_max&quot;</span><span class="p">]</span>
+            <span class="o">&lt;</span> <span class="n">household_max_with_bounds</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_upper_bound&quot;</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="n">households_to_include</span> <span class="o">=</span> <span class="n">household_max_with_bounds</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">include_mask</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Filtering the dataframe for </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="n">df_filtered</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">]][</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">households_to_include</span><span class="p">)</span>
+        <span class="p">][[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">]]</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Checking for negative Diff values in </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">df_filtered</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Negative Diff values found&quot;</span><span class="p">)</span>
+        <span class="c1"># df_filtered[df_filtered[col]&lt;0][col] = pd.NA</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Calculating the average differences for </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="n">avg_diff</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df_filtered</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">])[</span><span class="n">col</span><span class="p">]</span>
+            <span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+            <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+        <span class="p">)</span>
+        <span class="n">avg_diff</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_avg&quot;</span><span class="p">]</span>
+        <span class="n">impute_na</span> <span class="o">=</span> <span class="n">avg_diff</span><span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;_avg&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">impute_na</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Average column `</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_avg` has </span><span class="si">{</span><span class="n">impute_na</span><span class="si">}</span><span class="s2"> missing impute values.&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+
+        <span class="n">avg_diff_dict</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;avg_diff&quot;</span><span class="p">:</span> <span class="n">avg_diff</span><span class="p">,</span>
+            <span class="s2">&quot;upper_bounds&quot;</span><span class="p">:</span> <span class="n">upper_bounds</span><span class="p">,</span>
+            <span class="s2">&quot;household_max_with_bounds&quot;</span><span class="p">:</span> <span class="n">household_max_with_bounds</span><span class="p">,</span>
+        <span class="p">}</span>
+
+    <span class="k">return</span> <span class="n">avg_diff_dict</span></div>
+
+
+
+<div class="viewcode-block" id="concatenate_household_max_with_bounds">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.concatenate_household_max_with_bounds">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">concatenate_household_max_with_bounds</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Concatenate household maximum values and bounds for all columns.</span>
+
+<span class="sd">    This function combines the household maximum values and upper bounds</span>
+<span class="sd">    for all columns in the avg_diff_dict into a single DataFrame.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    avg_diff_dict : dict</span>
+<span class="sd">        A dictionary containing average difference data for each column.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        A DataFrame containing concatenated household maximum values and bounds</span>
+<span class="sd">        for all columns.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function assumes that the &#39;household_max_with_bounds&#39; key exists in each</span>
+<span class="sd">    dictionary within avg_diff_dict and contains the columns &#39;ProjectIdBSV&#39; (or other specified project id column),</span>
+<span class="sd">    &#39;HuisIdBSV&#39;, &#39;{col}_huis_max&#39;, and &#39;{col}_upper_bound&#39;.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">first_key</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">))</span>
+    <span class="n">key_columns</span> <span class="o">=</span> <span class="n">avg_diff_dict</span><span class="p">[</span><span class="n">first_key</span><span class="p">][</span><span class="s2">&quot;household_max_with_bounds&quot;</span><span class="p">][</span>
+        <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span>
+    <span class="p">]</span>
+    <span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">key_columns</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="n">avg_diff_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">max_bound</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;household_max_with_bounds&quot;</span><span class="p">][</span>
+            <span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;_huis_max&quot;</span><span class="p">,</span> <span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;_upper_bound&quot;</span><span class="p">]</span>
+        <span class="p">]</span>
+        <span class="n">columns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">max_bound</span><span class="p">)</span>
+    <span class="n">result_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result_df</span></div>
+
+
+
+<div class="viewcode-block" id="concatenate_avg_diff_columns">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.concatenate_avg_diff_columns">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">concatenate_avg_diff_columns</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Concatenate average difference columns for all variables.</span>
+
+<span class="sd">    This function combines the average difference columns for all variables</span>
+<span class="sd">    in the avg_diff_dict into a single DataFrame.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    avg_diff_dict : dict</span>
+<span class="sd">        A dictionary containing average difference data for each column.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        A DataFrame containing concatenated average difference columns</span>
+<span class="sd">        for all variables.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function assumes that the &#39;avg_diff&#39; key exists in each dictionary</span>
+<span class="sd">    within avg_diff_dict and contains the columns &#39;ProjectIdBSV&#39; or specified project_id_column, &#39;ReadingDate&#39;,</span>
+<span class="sd">    and &#39;{col}_avg&#39;.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">first_key</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">))</span>
+    <span class="n">key_columns</span> <span class="o">=</span> <span class="n">avg_diff_dict</span><span class="p">[</span><span class="n">first_key</span><span class="p">][</span><span class="s2">&quot;avg_diff&quot;</span><span class="p">][</span>
+        <span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">]</span>
+    <span class="p">]</span>
+    <span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">key_columns</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="n">avg_diff_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">avg_col</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;avg_diff&quot;</span><span class="p">][</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;_avg&quot;</span><span class="p">]</span>
+        <span class="n">columns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">avg_col</span><span class="p">)</span>
+    <span class="n">result_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result_df</span></div>
+
+
+
+<div class="viewcode-block" id="equal_sig_fig">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.equal_sig_fig">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">equal_sig_fig</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">sig_figs</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compare two numbers for equality up to a specified number of significant figures.</span>
+
+<span class="sd">    This function rounds both numbers to the specified number of significant figures</span>
+<span class="sd">    and then compares them for equality using a relative tolerance that scales with</span>
+<span class="sd">    the magnitude of the numbers.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    a : float</span>
+<span class="sd">        The first number to compare.</span>
+<span class="sd">    b : float</span>
+<span class="sd">        The second number to compare.</span>
+<span class="sd">    sig_figs : int</span>
+<span class="sd">        The number of significant figures to consider for comparison.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    bool</span>
+<span class="sd">        True if the numbers are equal up to the specified number of significant figures,</span>
+<span class="sd">        False otherwise.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function uses the `isclose` function from the `math` module to compare the</span>
+<span class="sd">    rounded numbers with a relative tolerance based on the number of significant figures.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Define a helper function to scale the number to significant figures</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">round_to_sig_figs</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">sig_figs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">x</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="mi">0</span>
+        <span class="k">return</span> <span class="nb">round</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">sig_figs</span> <span class="o">-</span> <span class="nb">int</span><span class="p">(</span><span class="n">floor</span><span class="p">(</span><span class="n">log10</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">x</span><span class="p">))))</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Round both numbers to the specified significant figures</span>
+    <span class="n">a_rounded</span> <span class="o">=</span> <span class="n">round_to_sig_figs</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">sig_figs</span><span class="p">)</span>
+    <span class="n">b_rounded</span> <span class="o">=</span> <span class="n">round_to_sig_figs</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">sig_figs</span><span class="p">)</span>
+
+    <span class="c1"># Apply a relative tolerance that scales with the magnitude of the numbers</span>
+    <span class="n">tolerance</span> <span class="o">=</span> <span class="mi">10</span> <span class="o">**</span> <span class="p">(</span><span class="o">-</span><span class="n">sig_figs</span><span class="p">)</span>
+
+    <span class="c1"># Use isclose to compare with relative tolerance</span>
+    <span class="k">return</span> <span class="n">isclose</span><span class="p">(</span><span class="n">a_rounded</span><span class="p">,</span> <span class="n">b_rounded</span><span class="p">,</span> <span class="n">rel_tol</span><span class="o">=</span><span class="n">tolerance</span><span class="p">)</span></div>
+
+
+
+
+
+<div class="viewcode-block" id="validate_household_column">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.validate_household_column">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate_household_column</span><span class="p">(</span><span class="n">household_df</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">,</span> <span class="n">huis_code</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Validate a household column for data quality and completeness.</span>
+
+<span class="sd">    This function checks a specific column in a household DataFrame for missing values,</span>
+<span class="sd">    zero values, and lack of change. It logs warnings and information about the data quality.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    household_df : pd.DataFrame</span>
+<span class="sd">        The DataFrame containing household data.</span>
+<span class="sd">    cum_col : str</span>
+<span class="sd">        The name of the cumulative column to validate.</span>
+<span class="sd">    huis_code : str</span>
+<span class="sd">        The unique identifier for the household.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    bool</span>
+<span class="sd">        True if the column passes all checks, False otherwise.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function is currently unused in the main processing pipeline.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - Logs a warning if more than 40% of values in the column are missing.</span>
+<span class="sd">    - Logs information about the number of missing values, zero values, and lack of change.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">n_na</span> <span class="o">=</span> <span class="n">household_df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">len_df</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">household_df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">n_na</span> <span class="o">==</span> <span class="n">len_df</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has all </span><span class="si">{</span><span class="n">n_na</span><span class="si">}</span><span class="s2"> missing values in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">len_df</span><span class="si">}</span><span class="s2"> records. Skipping column.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">elif</span> <span class="n">n_na</span> <span class="o">/</span> <span class="n">len_df</span> <span class="o">&gt;</span> <span class="mf">0.4</span><span class="p">:</span>
+        <span class="n">percent_na</span> <span class="o">=</span> <span class="mi">100</span> <span class="o">*</span> <span class="n">n_na</span> <span class="o">/</span> <span class="n">len_df</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="n">percent_na</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">% missing values in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">. Consider removing.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="n">n_na</span><span class="si">}</span><span class="s2"> missing values in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">len_df</span><span class="si">}</span><span class="s2"> records.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">round</span><span class="p">(</span><span class="n">household_df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span> <span class="mi">10</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has no non-zero values in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">. Skipping column.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="nb">round</span><span class="p">(</span><span class="n">household_df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">household_df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="mi">10</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has no change in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">. Skipping column.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="nb">round</span><span class="p">(</span><span class="n">household_df</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">Diff&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span> <span class="mi">10</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;HuisIdBSV </span><span class="si">{</span><span class="n">huis_code</span><span class="si">}</span><span class="s2"> has no non-zero values in </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">Diff before imputation.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="kc">True</span></div>
+
+
+
+<span class="c1"># currently unused - apply as a sense check to ensure not too many values are missing</span>
+<div class="viewcode-block" id="get_reading_date_imputation_stats">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.get_reading_date_imputation_stats">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_reading_date_imputation_stats</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">,</span> <span class="n">cumulative_columns</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate imputation statistics for each reading date and cumulative column.</span>
+
+<span class="sd">    This function computes various statistics related to imputation for each reading date</span>
+<span class="sd">    and cumulative column, including the number of imputed values, missing values, and</span>
+<span class="sd">    original values.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The DataFrame containing the data.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+<span class="sd">    cumulative_columns : list</span>
+<span class="sd">        A list of cumulative column names to analyze.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        A DataFrame containing imputation statistics for each reading date and column.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function is currently unused but can be applied as a sense check to ensure</span>
+<span class="sd">    not too many values are missing.</span>
+
+<span class="sd">    The resulting DataFrame includes the following columns:</span>
+<span class="sd">    - project_id_column</span>
+<span class="sd">    - ReadingDate</span>
+<span class="sd">    - column</span>
+<span class="sd">    - imputed</span>
+<span class="sd">    - na</span>
+<span class="sd">    - total_records</span>
+<span class="sd">    - original</span>
+<span class="sd">    - percent_imputed</span>
+<span class="sd">    - percent_na</span>
+<span class="sd">    - percent_original</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">grouped</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">])</span>
+    <span class="n">total_stats</span> <span class="o">=</span> <span class="n">grouped</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s2">&quot;total_records&quot;</span><span class="p">)</span>
+
+    <span class="n">df_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">cumulative_columns</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Calculating imputation statistics by ReadingDate for </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">diff_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">Diff&quot;</span>
+        <span class="n">is_imputed_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">_is_imputed&quot;</span>
+
+        <span class="n">imputed_stats</span> <span class="o">=</span> <span class="n">grouped</span><span class="p">[</span><span class="n">is_imputed_col</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s2">&quot;imputed&quot;</span><span class="p">)</span>
+        <span class="n">na_stats</span> <span class="o">=</span> <span class="n">grouped</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s2">&quot;na&quot;</span><span class="p">)</span>
+
+        <span class="n">stats_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">imputed_stats</span><span class="p">,</span> <span class="n">na_stats</span><span class="p">,</span> <span class="n">total_stats</span><span class="p">],</span>
+            <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">ignore_index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="c1"># stats_df = pd.concat([imputed_stats, na_stats, total_stats], axis=1).reset_index()</span>
+
+        <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;original&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;imputed&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;na&quot;</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;percent_imputed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;imputed&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">]</span>
+        <span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;percent_na&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;na&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;percent_original&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;original&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">]</span>
+        <span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="n">stats_df</span><span class="p">[</span><span class="s2">&quot;column&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">col</span>
+
+        <span class="c1"># Append the DataFrame to the list</span>
+        <span class="n">df_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">stats_df</span><span class="p">)</span>
+
+    <span class="c1"># Concatenate all the DataFrames in the list</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Concatenating the reading date statistics&quot;</span><span class="p">)</span>
+    <span class="n">imputation_reading_date_stats_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
+        <span class="n">df_list</span><span class="p">,</span>
+        <span class="n">ignore_index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">imputation_reading_date_stats_df</span></div>
+
+
+
+<div class="viewcode-block" id="sort_for_impute">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.sort_for_impute">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">sort_for_impute</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sort the DataFrame to prepare for imputation.</span>
+
+<span class="sd">    This function sorts the input DataFrame by project ID, household ID, and reading date.</span>
+<span class="sd">    Sorting is necessary to ensure correct imputation of missing values.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame to be sorted.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The sorted DataFrame.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    The sorting order is: project ID, household ID (HuisIdBSV), and reading date (ReadingDate).</span>
+<span class="sd">    This order is crucial for the imputation process to work correctly.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Sorting to prepare for imputation.&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="n">by</span><span class="o">=</span><span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">])</span></div>
+
+
+
+<div class="viewcode-block" id="get_diff_columns">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.get_diff_columns">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_diff_columns</span><span class="p">(</span><span class="n">cumulative_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generate difference column names from cumulative column names.</span>
+
+<span class="sd">    This function takes a list of cumulative column names and returns a list of</span>
+<span class="sd">    corresponding difference column names by appending &#39;Diff&#39; to each name.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    cumulative_columns : list</span>
+<span class="sd">        A list of cumulative column names.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    list</span>
+<span class="sd">        A list of difference column names.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function is used to create names for columns that will store the differences</span>
+<span class="sd">    between consecutive cumulative values.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">cumulative_columns</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="prepare_diffs_for_impute">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.prepare_diffs_for_impute">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">prepare_diffs_for_impute</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">project_id_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">cumulative_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>
+    <span class="nb">sorted</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Prepare difference columns for imputation.</span>
+
+<span class="sd">    This function calculates average differences, combines them, and prepares</span>
+<span class="sd">    household maximum and bound information for imputation.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame containing the data.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+<span class="sd">    cumulative_columns : list</span>
+<span class="sd">        A list of cumulative column names.</span>
+<span class="sd">    sorted : bool, optional</span>
+<span class="sd">        Whether the DataFrame is already sorted. Default is False.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    tuple</span>
+<span class="sd">        A tuple containing:</span>
+<span class="sd">        - diff_columns: list of difference column names</span>
+<span class="sd">        - diffs: DataFrame with average differences</span>
+<span class="sd">        - max_bound: DataFrame with household maximum and bound information</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function performs the following steps:</span>
+<span class="sd">    1. Sorts the DataFrame if not already sorted.</span>
+<span class="sd">    2. Calculates average differences for each cumulative column.</span>
+<span class="sd">    3. Combines average differences and household maximum/bound information.</span>
+<span class="sd">    4. Saves the results to parquet files for later use.</span>
+
+<span class="sd">    The resulting files are saved in the directory specified by</span>
+<span class="sd">    etdtransform.options.aggregate_folder_path.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">sorted</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">sort_for_impute</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">)</span>
+
+    <span class="n">diff_columns</span> <span class="o">=</span> <span class="n">get_diff_columns</span><span class="p">(</span><span class="n">cumulative_columns</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting to prepare diffs.&quot;</span><span class="p">)</span>
+    <span class="n">avg_diff_dict</span> <span class="o">=</span> <span class="n">calculate_average_diff</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">,</span> <span class="n">diff_columns</span><span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Combining average diff columns.&quot;</span><span class="p">)</span>
+    <span class="n">diffs</span> <span class="o">=</span> <span class="n">concatenate_avg_diff_columns</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Combining household diff maximum and bounds used for diff columns.&quot;</span><span class="p">)</span>
+    <span class="n">max_bound</span> <span class="o">=</span> <span class="n">concatenate_household_max_with_bounds</span><span class="p">(</span><span class="n">avg_diff_dict</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving average diff columns in avg_diffs.parquet&quot;</span><span class="p">)</span>
+    <span class="n">diffs</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;avg_diffs.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="s2">&quot;Saving household diff max and bounds used in household_diff_max_bounds.parquet&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">max_bound</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;household_diff_max_bounds.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">diff_columns</span><span class="p">,</span> <span class="n">diffs</span><span class="p">,</span> <span class="n">max_bound</span></div>
+
+
+
+<div class="viewcode-block" id="read_diffs">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.read_diffs">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_diffs</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Read average differences from a parquet file.</span>
+
+<span class="sd">    This function reads the average differences data from a parquet file</span>
+<span class="sd">    located in the aggregate folder specified in the etdtransform options.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        A DataFrame containing the average differences data.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    The function assumes that the &#39;avg_diffs.parquet&#39; file exists in the</span>
+<span class="sd">    aggregate folder path specified in etdtransform.options.aggregate_folder_path.</span>
+
+<span class="sd">    This function is typically used to load pre-calculated average differences</span>
+<span class="sd">    for use in imputation processes.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;avg_diffs.parquet&quot;</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="process_and_impute">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.impute.process_and_impute">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">process_and_impute</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">project_id_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">cumulative_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>
+    <span class="nb">sorted</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">diffs_calculated</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">optimized</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Process and impute missing values in the dataset.</span>
+
+<span class="sd">    This function performs data processing and imputation on the input DataFrame.</span>
+<span class="sd">    It can either calculate differences or load pre-calculated differences,</span>
+<span class="sd">    and then applies imputation methods to fill missing values.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame containing the data to be processed and imputed.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project IDs.</span>
+<span class="sd">    cumulative_columns : list</span>
+<span class="sd">        A list of cumulative column names to be processed.</span>
+<span class="sd">    sorted : bool, optional</span>
+<span class="sd">        Whether the DataFrame is already sorted. Default is False.</span>
+<span class="sd">    diffs_calculated : bool, optional</span>
+<span class="sd">        Whether differences have already been calculated. Default is False.</span>
+<span class="sd">    optimized : bool, optional</span>
+<span class="sd">        Whether to use optimized imputation methods. Default is False.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    tuple</span>
+<span class="sd">        A tuple containing:</span>
+<span class="sd">        - df: The processed and imputed DataFrame</span>
+<span class="sd">        - imputation_summary_house: Summary of imputation statistics per house</span>
+<span class="sd">        - imputation_summary_project: Summary of imputation statistics per project</span>
+<span class="sd">        - imputation_reading_date_stats_df: Statistics of imputation by reading date</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function performs the following steps:</span>
+<span class="sd">    1. Sorts the DataFrame if not already sorted.</span>
+<span class="sd">    2. Loads or calculates differences.</span>
+<span class="sd">    3. Merges average differences into the household DataFrame.</span>
+<span class="sd">    4. Applies imputation methods (either optimized or standard).</span>
+<span class="sd">    5. Calculates and saves imputation statistics.</span>
+<span class="sd">    6. Provides warnings for high imputation percentages.</span>
+
+<span class="sd">    The function saves various statistics and summary files in the</span>
+<span class="sd">    aggregate folder specified in etdtransform.options.aggregate_folder_path.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - Logs warnings if any house or project has more than 40% imputed values.</span>
+<span class="sd">    - Logs warnings if any reading date has more than 40% imputed values.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">sorted</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">sort_for_impute</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">diffs_calculated</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading average diffs from file...&quot;</span><span class="p">)</span>
+        <span class="n">diffs</span> <span class="o">=</span> <span class="n">read_diffs</span><span class="p">()</span>
+        <span class="n">max_bound</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;household_diff_max_bounds.parquet&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">diff_columns</span><span class="p">,</span> <span class="n">diffs</span><span class="p">,</span> <span class="n">max_bound</span> <span class="o">=</span> <span class="n">prepare_diffs_for_impute</span><span class="p">(</span>
+            <span class="n">df</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
+            <span class="n">project_id_column</span><span class="o">=</span><span class="n">project_id_column</span><span class="p">,</span>
+            <span class="n">cumulative_columns</span><span class="o">=</span><span class="n">cumulative_columns</span><span class="p">,</span>
+            <span class="nb">sorted</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="s2">&quot;Merging the average differences into the household dataframe for imputation.&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">diffs</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Merge completed.&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">optimized</span><span class="p">:</span>
+        <span class="n">optimized_label</span> <span class="o">=</span> <span class="s2">&quot;_optimized&quot;</span>
+        <span class="n">df</span><span class="p">,</span> <span class="n">imputation_gap_stats_df</span><span class="p">,</span> <span class="n">imputation_reading_date_stats_df</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">impute_and_normalize_optimized</span><span class="p">(</span>
+                <span class="n">df</span><span class="p">,</span>
+                <span class="n">cumulative_columns</span><span class="p">,</span>
+                <span class="n">project_id_column</span><span class="p">,</span>
+                <span class="n">max_bound</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">optimized_label</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="n">df</span><span class="p">,</span> <span class="n">imputation_gap_stats_df</span><span class="p">,</span> <span class="n">imputation_reading_date_stats_df</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">impute_and_normalize</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">cumulative_columns</span><span class="p">,</span> <span class="n">project_id_column</span><span class="p">,</span> <span class="n">max_bound</span><span class="p">)</span>
+        <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving imputation gap statistics...&quot;</span><span class="p">)</span>
+    <span class="n">imputation_gap_stats_df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;impute_gap_stats</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Summarizing imputation_gap_stats_df per house and column&quot;</span><span class="p">)</span>
+    <span class="n">imputation_summary_house</span> <span class="o">=</span> <span class="n">imputation_gap_stats_df</span><span class="p">[</span>
+        <span class="p">[</span>
+            <span class="n">project_id_column</span><span class="p">,</span>
+            <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;column&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;diff_col_total&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;cum_col_min_max_diff&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;missing&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;imputed&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;imputed_na&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;methods&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;bitwise_methods&quot;</span><span class="p">,</span>
+        <span class="p">]</span>
+    <span class="p">]</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Calculating the total records for each house&quot;</span><span class="p">)</span>
+    <span class="n">total_records_house</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;total_records&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Merging total records with house imputation summary&quot;</span><span class="p">)</span>
+    <span class="n">imputation_summary_house</span> <span class="o">=</span> <span class="n">imputation_summary_house</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+        <span class="n">total_records_house</span><span class="p">,</span>
+        <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">imputation_summary_house</span><span class="p">[</span><span class="s2">&quot;percentage_imputed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">imputation_summary_house</span><span class="p">[</span><span class="s2">&quot;imputed&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">imputation_summary_house</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Summarizing imputation_gap_stats_df per project and column&quot;</span><span class="p">)</span>
+    <span class="n">imputation_summary_project</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">imputation_gap_stats_df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;column&quot;</span><span class="p">])</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;bitwise_methods&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">bitwise_or</span><span class="o">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">x</span><span class="p">),</span>
+                <span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">()</span><span class="o">.</span><span class="n">union</span><span class="p">(</span><span class="o">*</span><span class="n">x</span><span class="p">)),</span>
+                <span class="s2">&quot;missing&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;imputed&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;imputed_na&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+            <span class="p">},</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="s2">&quot;Calculate the total records for each project and column from the original dataframe&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">total_records_project</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">project_id_column</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;total_records&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Merge total records with project imputation summary&quot;</span><span class="p">)</span>
+    <span class="n">imputation_summary_project</span> <span class="o">=</span> <span class="n">imputation_summary_project</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+        <span class="n">total_records_project</span><span class="p">,</span>
+        <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="n">project_id_column</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">imputation_summary_project</span><span class="p">[</span><span class="s2">&quot;percentage_imputed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">imputation_summary_project</span><span class="p">[</span><span class="s2">&quot;imputed&quot;</span><span class="p">]</span>
+        <span class="o">/</span> <span class="n">imputation_summary_project</span><span class="p">[</span><span class="s2">&quot;total_records&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Provide warnings if any house has &gt; 40</span><span class="si">% i</span><span class="s2">mputed&quot;</span><span class="p">)</span>
+    <span class="n">over_40_percent_imputed_house</span> <span class="o">=</span> <span class="n">imputation_summary_house</span><span class="p">[</span>
+        <span class="n">imputation_summary_house</span><span class="p">[</span><span class="s2">&quot;percentage_imputed&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">40</span>
+    <span class="p">]</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">over_40_percent_imputed_house</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;House </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;HuisIdBSV&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">, Column </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;column&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;percentage_imputed&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">% imputed values.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Provide warnings if any project has &gt; 40</span><span class="si">% i</span><span class="s2">mputed&quot;</span><span class="p">)</span>
+    <span class="n">over_40_percent_imputed_project</span> <span class="o">=</span> <span class="n">imputation_summary_project</span><span class="p">[</span>
+        <span class="n">imputation_summary_project</span><span class="p">[</span><span class="s2">&quot;percentage_imputed&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">40</span>
+    <span class="p">]</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">over_40_percent_imputed_project</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Project </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="n">project_id_column</span><span class="p">]</span><span class="si">}</span><span class="s2">, Column </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;column&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;percentage_imputed&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">% imputed values.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">imputation_reading_date_stats_df</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Provide warnings if any ReadingDates are over 40</span><span class="si">% i</span><span class="s2">mputed values&quot;</span><span class="p">)</span>
+        <span class="n">over_40_percent_imputed_dates</span> <span class="o">=</span> <span class="n">imputation_reading_date_stats_df</span><span class="p">[</span>
+            <span class="n">imputation_reading_date_stats_df</span><span class="p">[</span><span class="s2">&quot;percent_imputed&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">40</span>
+        <span class="p">]</span>
+        <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">over_40_percent_imputed_dates</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;ReadingDate </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;ReadingDate&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">, Project </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="n">project_id_column</span><span class="p">]</span><span class="si">}</span><span class="s2">, Column </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;column&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;percent_imputed&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">% imputed values.&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Not calculating reading date stats&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">imputation_summary_house</span><span class="p">,</span>
+        <span class="n">imputation_summary_project</span><span class="p">,</span>
+        <span class="n">imputation_reading_date_stats_df</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Nicolas Dickinson, Marten Witkamp, Petra Izeboud.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

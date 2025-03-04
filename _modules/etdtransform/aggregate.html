@@ -1,0 +1,1295 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>etdtransform.aggregate &mdash; etdtransform - &#34;Energietransitie Dataset&#34; transformation and loading package 2025 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=cb975c41"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            etdtransform - "Energietransitie Dataset" transformation and loading package
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../source/modules.html">etdtransform</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">etdtransform - "Energietransitie Dataset" transformation and loading package</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">etdtransform.aggregate</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for etdtransform.aggregate</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ibis</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdmap.data_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">cumulative_columns</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdmap.index_helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_index</span><span class="p">,</span> <span class="n">update_meenemen</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">etdtransform</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.calculated_columns</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_calculated_columns_imputed_data</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.impute</span><span class="w"> </span><span class="kn">import</span> <span class="n">process_and_impute</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Aggregating the data for a given time interval</span>
+<span class="sd">Example intervals:</span>
+<span class="sd">1 hour: &#39;1h&#39;</span>
+<span class="sd">15 min: &#39;15min&#39;</span>
+<span class="sd">5 min: &#39;5min&#39;</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+
+<div class="viewcode-block" id="read_hh_data">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.read_hh_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_hh_data</span><span class="p">(</span><span class="n">interval</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="n">metadata_columns</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Read household data from a parquet file and optionally add index columns to.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    interval : str, optional</span>
+<span class="sd">        The time interval of the data to read, by default &quot;default&quot;</span>
+<span class="sd">    metadata_columns : list, optional</span>
+<span class="sd">        Additional columns to include from the index, by default None</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The household data with optional index columns added</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function reads parquet files from a predefined folder path.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">metadata_columns</span><span class="p">:</span>
+        <span class="n">metadata_columns</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;household_</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">add_index_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">metadata_columns</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="add_index_columns">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.add_index_columns">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">add_index_columns</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Add index columns to the given DataFrame.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    columns : list, optional</span>
+<span class="sd">        Additional columns to include from the index, by default None</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The DataFrame with added index columns</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function merges the input DataFrame with an index DataFrame based on &#39;HuisIdBSV&#39; and &#39;ProjectIdBSV&#39;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">columns</span><span class="p">:</span>
+        <span class="n">index_df</span><span class="p">,</span> <span class="n">index_path</span> <span class="o">=</span> <span class="n">read_index</span><span class="p">()</span>
+        <span class="n">columns_to_select</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">columns</span><span class="p">]</span>
+        <span class="n">columns_to_select</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">columns_to_select</span><span class="p">))</span>
+        <span class="n">index_df</span> <span class="o">=</span> <span class="n">index_df</span><span class="p">[</span><span class="n">columns_to_select</span><span class="p">]</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">index_df</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">df</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_hh_data_5min">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_hh_data_5min">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_hh_data_5min</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate household data into 5-minute intervals.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function reads individual household parquet files, concatenates them,</span>
+<span class="sd">    and saves the result as a single parquet file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting to aggregate household data.&quot;</span><span class="p">)</span>
+
+    <span class="n">index_df</span> <span class="o">=</span> <span class="n">update_meenemen</span><span class="p">()</span>
+
+    <span class="n">data_frames</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">index_df</span> <span class="o">=</span> <span class="n">index_df</span><span class="p">[</span><span class="n">index_df</span><span class="p">[</span><span class="s2">&quot;Meenemen&quot;</span><span class="p">]]</span>
+
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">index_df</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">huis_id_bsv</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span>
+        <span class="n">project_code</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">]</span>
+        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;household_</span><span class="si">{</span><span class="n">huis_id_bsv</span><span class="si">}</span><span class="s2">_table.parquet&quot;</span>
+
+        <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">mapped_folder_path</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
+        <span class="n">household_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
+
+        <span class="n">household_df</span><span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">project_code</span>
+        <span class="n">household_df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">huis_id_bsv</span>
+
+        <span class="n">data_frames</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">household_df</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Added </span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Concatenate all HH dataframes.&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">data_frames</span><span class="p">,</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving HH data to parquet file.&quot;</span><span class="p">)</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;household_default.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="impute_hh_data_5min">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.impute_hh_data_5min">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">impute_hh_data_5min</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">cum_cols</span><span class="o">=</span><span class="n">cumulative_columns</span><span class="p">,</span>
+    <span class="nb">sorted</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">diffs_calculated</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">optimized</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Impute missing values in household data and save results.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame, optional</span>
+<span class="sd">        The input DataFrame, if None it will be read from a file</span>
+<span class="sd">    cum_cols : list, optional</span>
+<span class="sd">        List of cumulative columns to process, by default cumulative_columns</span>
+<span class="sd">    sorted : bool, optional</span>
+<span class="sd">        Whether the data is already sorted, by default False</span>
+<span class="sd">    diffs_calculated : bool, optional</span>
+<span class="sd">        Whether differences are already calculated, by default False</span>
+<span class="sd">    optimized : bool, optional</span>
+<span class="sd">        Whether to use optimized processing, by default False</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The imputed household data</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function performs imputation, calculates differences, and saves various summary statistics.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading HH data from parquet file.&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">df</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">read_hh_data</span><span class="p">(</span><span class="n">interval</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="n">metadata_columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">])</span>
+
+    <span class="c1"># Call the imputation function</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting the imputation.&quot;</span><span class="p">)</span>
+
+    <span class="c1"># df = apply_rolling_iqr_imputation(</span>
+    <span class="c1">#     df=df,</span>
+    <span class="c1">#     time_col=&quot;ReadingDate&quot;,</span>
+    <span class="c1">#     variable_names=cum_cols,</span>
+    <span class="c1">#     group_vars=[&quot;HuisIdBSV&quot;],</span>
+    <span class="c1">#     iqr_factor=1.5,</span>
+    <span class="c1">#     window_weeks=4,</span>
+    <span class="c1">#     min_valid_ratio=.4</span>
+    <span class="c1">#     )</span>
+
+    <span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">imputation_summary_house</span><span class="p">,</span>
+        <span class="n">imputation_summary_project</span><span class="p">,</span>
+        <span class="n">imputation_reading_date_stats_df</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">process_and_impute</span><span class="p">(</span>
+        <span class="n">df</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
+        <span class="n">project_id_column</span><span class="o">=</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span>
+        <span class="n">cumulative_columns</span><span class="o">=</span><span class="n">cum_cols</span><span class="p">,</span>
+        <span class="nb">sorted</span><span class="o">=</span><span class="nb">sorted</span><span class="p">,</span>
+        <span class="n">diffs_calculated</span><span class="o">=</span><span class="n">diffs_calculated</span><span class="p">,</span>
+        <span class="n">optimized</span><span class="o">=</span><span class="n">optimized</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">diff_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">cumulative_columns</span><span class="p">]</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Averaging all diffs by project and reading date.&quot;</span><span class="p">)</span>
+
+    <span class="n">aggregated_diff</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;ReadingDate&quot;</span><span class="p">])[</span><span class="n">diff_columns</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving results&quot;</span><span class="p">)</span>
+    <span class="c1"># Save the results</span>
+
+    <span class="n">modified_household_dfs</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">_huis_code</span><span class="p">,</span> <span class="n">household_df</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">cumulative_columns</span><span class="p">:</span>
+            <span class="n">household_df</span><span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Original&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">household_df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>  <span class="c1"># rename</span>
+            <span class="n">household_df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">household_df</span><span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">cumsum</span><span class="p">()</span>
+            <span class="n">household_df</span><span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Check&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">household_df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">-</span> <span class="n">household_df</span><span class="p">[</span><span class="n">col</span> <span class="o">+</span> <span class="s2">&quot;Original&quot;</span><span class="p">]</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span>
+
+        <span class="n">modified_household_dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">household_df</span><span class="p">)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">modified_household_dfs</span><span class="p">,</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Re-arranging columns.&quot;</span><span class="p">)</span>
+    <span class="c1"># df = rearrange_model_columns(household_df=df)</span>
+
+    <span class="c1"># df.drop(columns=diff_columns)</span>
+
+    <span class="k">if</span> <span class="n">optimized</span><span class="p">:</span>
+        <span class="n">optimized_label</span> <span class="o">=</span> <span class="s2">&quot;_optimized&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">optimized_label</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving files.&quot;</span><span class="p">)</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;household_imputed</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">aggregated_diff</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;household_aggregated_diff</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">imputation_summary_house</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;impute_summary_household</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">imputation_summary_project</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;impute_summary_project</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">imputation_reading_date_stats_df</span><span class="p">:</span>
+        <span class="n">imputation_reading_date_stats_df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+                <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s2">&quot;impute_summary_reading_date</span><span class="si">{</span><span class="n">optimized_label</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Done&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="add_calculated_columns_to_hh_data">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.add_calculated_columns_to_hh_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">add_calculated_columns_to_hh_data</span><span class="p">(</span><span class="n">df</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Add calculated columns to household data and save the result.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame, optional</span>
+<span class="sd">        The input DataFrame, if None it will be read from a file</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The DataFrame with added calculated columns</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function adds calculated columns to the household data and saves the result as a parquet file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading imputed data from parquet file.&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">df</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">read_hh_data</span><span class="p">(</span><span class="n">interval</span><span class="o">=</span><span class="s2">&quot;imputed&quot;</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Calculating: &quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">add_calculated_columns_imputed_data</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Saving calculated columns to file: household_calculated.parquet&quot;</span><span class="p">)</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;household_calculated.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="read_aggregate">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.read_aggregate">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_aggregate</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">interval</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Read an aggregate parquet file.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    name : str</span>
+<span class="sd">        The name of the aggregate</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval of the aggregate</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregate data</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function reads a parquet file based on the provided name and interval.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">safe_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\W+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">name</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">safe_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">),</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="get_aggregate_table">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.get_aggregate_table">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_aggregate_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">interval</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Get an aggregate table as an ibis table.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    name : str</span>
+<span class="sd">        The name of the aggregate</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval of the aggregate</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    ibis.Table</span>
+<span class="sd">        The aggregate data as an ibis table</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function reads a parquet file and returns it as an ibis table.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">safe_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\W+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">name</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span>
+    <span class="n">parquet_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">safe_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">ibis</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">parquet_path</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="resample_hh_data">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_hh_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_hh_data</span><span class="p">(</span><span class="n">df</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">intervals</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;60min&quot;</span><span class="p">,</span> <span class="s2">&quot;15min&quot;</span><span class="p">,</span> <span class="s2">&quot;5min&quot;</span><span class="p">)):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample household data to different time intervals.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame, optional</span>
+<span class="sd">        The input DataFrame, if None it will be read from a file</span>
+<span class="sd">    intervals : tuple, optional</span>
+<span class="sd">        The time intervals to resample to, by default (&quot;60min&quot;, &quot;15min&quot;, &quot;5min&quot;)</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples household data to specified time intervals and saves the results.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">group_column</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">df</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading data with calculated columns to resample hh data&quot;</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">read_hh_data</span><span class="p">(</span><span class="n">interval</span><span class="o">=</span><span class="s2">&quot;calculated&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="s2">&quot;If passing a dataframe to resample_hh_data() be sure to use a copy as it may be modified in place.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">interval</span> <span class="ow">in</span> <span class="n">intervals</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;-- Starting household resampling with </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2"> intervals --&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;5min&quot;</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;-- 5min interval - applying shortcut without transformation --&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">columns_to_copy</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span>
+                <span class="o">*</span><span class="n">group_column</span><span class="p">,</span>
+                <span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="n">aggregation_variables</span><span class="o">.</span><span class="n">keys</span><span class="p">()),</span>
+            <span class="p">]</span>
+
+            <span class="k">for</span> <span class="n">_var</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">aggregation_variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">validator_column</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;validator_column&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">validator_column</span><span class="p">:</span>
+                    <span class="n">columns_to_copy</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">validator_column</span><span class="p">)</span>
+
+            <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">columns_to_copy</span><span class="p">]</span>
+
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">min interval - removing variables that do not pass filters&quot;</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">aggregation_variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">validator_column</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;validator_column&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">validator_column</span><span class="p">:</span>
+                    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="n">validator_column</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;-- </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">-min interval - saving file household_5min.parquet --&quot;</span>
+            <span class="p">)</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="s2">&quot;household_5min.parquet&quot;</span><span class="p">),</span>
+                <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">resample_and_save</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="n">interval</span><span class="p">,</span> <span class="n">alt_name</span><span class="o">=</span><span class="s2">&quot;household&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_project_data">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_project_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_project_data</span><span class="p">(</span><span class="n">intervals</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;5min&quot;</span><span class="p">,</span> <span class="s2">&quot;15min&quot;</span><span class="p">,</span> <span class="s2">&quot;60min&quot;</span><span class="p">)):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate project data for different time intervals.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    intervals : tuple, optional</span>
+<span class="sd">        The time intervals to aggregate, by default (&quot;5min&quot;, &quot;15min&quot;, &quot;60min&quot;)</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function aggregates project data for specified time intervals and saves the results.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">group_column</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">interval</span> <span class="ow">in</span> <span class="n">intervals</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;-- Starting </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> aggregation with </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2"> intervals --&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">read_hh_data</span><span class="p">(</span><span class="n">interval</span><span class="o">=</span><span class="n">interval</span><span class="p">)</span>
+        <span class="n">aggregate_and_save</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="n">interval</span><span class="p">,</span> <span class="n">alt_name</span><span class="o">=</span><span class="s2">&quot;project&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="c1"># def aggregate_weerstation_data(index_df):</span>
+<span class="c1">#     group_column = [&#39;Weerstation&#39;]</span>
+<span class="c1">#     intervals = [&#39;5min&#39;, &#39;15min&#39;, &#39;60min&#39;]</span>
+<span class="c1">#     for interval in intervals:</span>
+<span class="c1">#         logging.info(f&#39;-- Starting {group_column} aggregation with {interval} intervals --&#39;)</span>
+<span class="c1">#         df = read_hh_data(interval = interval, metadata_columns = [&#39;Weerstation&#39;])</span>
+<span class="c1">#         aggregate_and_save(df, group_column, interval=interval)</span>
+
+
+<div class="viewcode-block" id="aggregate_and_save">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_and_save">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_and_save</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">group_column</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">),</span>
+    <span class="n">interval</span><span class="o">=</span><span class="s2">&quot;5min&quot;</span><span class="p">,</span>
+    <span class="n">alt_name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate data and save the result.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    group_column : tuple, optional</span>
+<span class="sd">        The column(s) to group by, by default (&quot;ProjectIdBSV&quot;)</span>
+<span class="sd">    interval : str, optional</span>
+<span class="sd">        The time interval for aggregation, by default &quot;5min&quot;</span>
+<span class="sd">    alt_name : str, optional</span>
+<span class="sd">        An alternative name for the output file, by default None</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function aggregates data, merges with size information, and saves the result as a parquet file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df_grouped</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="n">group_column</span><span class="p">)])</span>
+    <span class="n">df_size</span> <span class="o">=</span> <span class="n">df_grouped</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;n&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">alt_name</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">alt_name</span> <span class="o">=</span> <span class="n">group_column</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">aggregate_by_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">group_column</span><span class="o">=</span><span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">df_size</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">df_size</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="n">group_column</span><span class="p">)],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+    <span class="n">safe_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\W+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">alt_name</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">safe_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_by_columns">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_by_columns">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_by_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate data by columns.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function aggregates data for each variable defined in aggregation_variables.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">first</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">combined_results</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">aggregation_variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;In loop for to aggregate by column </span><span class="si">{</span><span class="n">var</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">method</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;aggregate_method&quot;</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;diff_cumsum&quot;</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">first</span>
+            <span class="ow">and</span> <span class="n">var</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span> <span class="ow">in</span> <span class="n">combined_results</span><span class="o">.</span><span class="n">columns</span>
+        <span class="p">):</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">aggregate_diff_cumsum</span><span class="p">(</span>
+                <span class="n">df</span><span class="p">,</span>
+                <span class="n">var</span><span class="p">,</span>
+                <span class="n">group_column</span><span class="p">,</span>
+                <span class="n">size</span><span class="p">,</span>
+                <span class="n">combined_results</span><span class="o">=</span><span class="n">combined_results</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">aggregate_variable</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">first</span><span class="p">:</span>
+            <span class="n">combined_results</span> <span class="o">=</span> <span class="n">result</span>
+            <span class="n">first</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">combined_results</span> <span class="o">=</span> <span class="n">combined_results</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+                <span class="n">result</span><span class="p">,</span>
+                <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span>
+                <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Combining aggregated dataset grouped by: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">combined_results</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_variable">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_variable">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_variable</span><span class="p">(</span><span class="n">df_grouped</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate a single variable.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df_grouped : pd.DataFrame</span>
+<span class="sd">        The grouped DataFrame</span>
+<span class="sd">    var : str</span>
+<span class="sd">        The variable to aggregate</span>
+<span class="sd">    config : dict</span>
+<span class="sd">        Configuration for the aggregation</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame for the variable</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function aggregates a single variable based on the specified method in the config.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> : column </span><span class="si">{</span><span class="n">var</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">method</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;aggregate_method&quot;</span><span class="p">]</span>
+
+    <span class="c1"># not including validator columns as they are not aggregated in the household data atm</span>
+    <span class="c1"># validator_column = config.get(&#39;validator_column&#39;)</span>
+
+    <span class="n">columns_to_select</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">,</span> <span class="n">var</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;diff_cumsum&quot;</span><span class="p">:</span>
+        <span class="n">columns_to_select</span> <span class="o">=</span> <span class="p">[</span><span class="o">*</span><span class="n">columns_to_select</span><span class="p">,</span> <span class="n">var</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span><span class="p">]</span>
+
+    <span class="c1"># if validator_column:</span>
+    <span class="c1">#     columns_to_copy.append(validator_column)</span>
+
+    <span class="n">df_copy</span> <span class="o">=</span> <span class="n">df_grouped</span><span class="p">[</span><span class="n">columns_to_select</span><span class="p">]</span>
+
+    <span class="c1"># if validator_column:</span>
+    <span class="c1">#     df_copy.loc[df_copy[validator_column] != True, var] = pd.NA</span>
+
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;sum&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">aggregate_sum</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span> <span class="n">size</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">aggregate_max</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span> <span class="n">size</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;avg&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">aggregate_avg</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span> <span class="n">size</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;diff_cumsum&quot;</span><span class="p">:</span>
+        <span class="c1"># ReadingDate left out here to allow cumsum to proceed per project with pre-sorted rows</span>
+        <span class="k">return</span> <span class="n">aggregate_diff_cumsum</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span></div>
+
+
+
+<span class="c1"># would be smarter to do these variables with method diff_sum only after calculating the average Diff columns</span>
+<div class="viewcode-block" id="aggregate_diff_cumsum">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_diff_cumsum">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_diff_cumsum</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">combined_results</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate cumulative sum of differences.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to aggregate</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+<span class="sd">    combined_results : pd.DataFrame, optional</span>
+<span class="sd">        Previously combined results, by default None</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function calculates the cumulative sum of differences for the specified column.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">diff_column</span> <span class="o">=</span> <span class="n">column</span> <span class="o">+</span> <span class="s2">&quot;Diff&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Aggregate cumsum of diff column: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">diff_column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">combined_results</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Calculating Diff as not included.&quot;</span><span class="p">)</span>
+        <span class="n">aggregated</span> <span class="o">=</span> <span class="n">aggregate_avg</span><span class="p">(</span>
+            <span class="n">df</span><span class="p">,</span>
+            <span class="n">diff_column</span><span class="p">,</span>
+            <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span>
+            <span class="n">size</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Diff precalculated. No need to recalculate. Making a copy.&quot;</span><span class="p">)</span>
+        <span class="n">aggregated</span> <span class="o">=</span> <span class="n">combined_results</span><span class="p">[</span>
+            <span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">,</span> <span class="n">diff_column</span><span class="p">]</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Transform average diff to calculate cumsum: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">Diff&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">aggregated</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">aggregated</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)[</span><span class="n">diff_column</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="o">.</span><span class="n">cumsum</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Add missing values&quot;</span><span class="p">)</span>
+    <span class="n">aggregated</span><span class="p">[</span><span class="n">aggregated</span><span class="p">[</span><span class="n">diff_column</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()][</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Drop column&quot;</span><span class="p">)</span>
+    <span class="n">aggregated</span> <span class="o">=</span> <span class="n">aggregated</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="n">diff_column</span><span class="p">])</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Finished&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">aggregated</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_sum">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_sum">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_sum</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate sum of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to aggregate</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function calculates the sum of the specified column, requiring at least 60% of values to be present.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;aggregate sum: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">grouped</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+    <span class="n">aggregated</span> <span class="o">=</span> <span class="n">grouped</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="nb">sum</span><span class="p">,</span> <span class="n">min_count</span><span class="o">=</span><span class="n">size</span><span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mf">0.6</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">aggregated</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_max">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_max">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_max</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate maximum of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to aggregate</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function calculates the maximum of the specified column, requiring at least 60% of values to be present.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;aggregate sum: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">grouped</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+    <span class="n">aggregated</span> <span class="o">=</span> <span class="n">grouped</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="nb">max</span><span class="p">,</span> <span class="n">min_count</span><span class="o">=</span><span class="n">size</span><span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mf">0.6</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">aggregated</span></div>
+
+
+
+<div class="viewcode-block" id="aggregate_avg">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.aggregate_avg">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aggregate_avg</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Aggregate average of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to aggregate</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    size : pd.DataFrame</span>
+<span class="sd">        DataFrame containing size information</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The aggregated DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function calculates the average of the specified column, requiring at least 60% of values to be present.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;aggregate avg: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Group by the specified column</span>
+    <span class="n">grouped</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+
+    <span class="c1"># Aggregate with sum and count</span>
+    <span class="n">aggregated</span> <span class="o">=</span> <span class="n">grouped</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">sum_agg</span><span class="o">=</span><span class="p">(</span><span class="n">column</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">),</span>
+        <span class="n">count_agg</span><span class="o">=</span><span class="p">(</span><span class="n">column</span><span class="p">,</span> <span class="s2">&quot;count&quot;</span><span class="p">),</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+
+    <span class="n">aggregated</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+        <span class="n">aggregated</span><span class="p">[</span><span class="s2">&quot;count_agg&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">size</span><span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mf">0.6</span><span class="p">,</span>
+        <span class="n">aggregated</span><span class="p">[</span><span class="s2">&quot;sum_agg&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">aggregated</span><span class="p">[</span><span class="s2">&quot;count_agg&quot;</span><span class="p">],</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">aggregated</span> <span class="o">=</span> <span class="n">aggregated</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sum_agg&quot;</span><span class="p">,</span> <span class="s2">&quot;count_agg&quot;</span><span class="p">])</span>
+
+    <span class="k">return</span> <span class="n">aggregated</span></div>
+
+
+
+<div class="viewcode-block" id="resample_and_save">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_and_save">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_and_save</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">group_column</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">),</span>
+    <span class="n">interval</span><span class="o">=</span><span class="s2">&quot;5min&quot;</span><span class="p">,</span>
+    <span class="n">alt_name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample data and save the result.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    group_column : tuple, optional</span>
+<span class="sd">        The column(s) to group by, by default (&quot;ProjectIdBSV&quot;, &quot;HuisIdBSV&quot;)</span>
+<span class="sd">    interval : str, optional</span>
+<span class="sd">        The time interval for resampling, by default &quot;5min&quot;</span>
+<span class="sd">    alt_name : str, optional</span>
+<span class="sd">        An alternative name for the output file, by default None</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples data and saves the result as a parquet file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">alt_name</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">alt_name</span> <span class="o">=</span> <span class="s2">&quot;_&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">resample_by_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">group_column</span><span class="o">=</span><span class="n">group_column</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="n">interval</span><span class="p">)</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">safe_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;\W+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">alt_name</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">safe_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">),</span>
+        <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;pyarrow&quot;</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="resample_by_columns">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_by_columns">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_by_columns</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">group_column</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">interval</span><span class="o">=</span><span class="s2">&quot;15min&quot;</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample data by columns.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    group_column : list, optional</span>
+<span class="sd">        The column(s) to group by, by default None</span>
+<span class="sd">    interval : str, optional</span>
+<span class="sd">        The time interval for resampling, by default &quot;15min&quot;</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The resampled DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples data for each variable defined in aggregation_variables.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># resampled_dfs = []</span>
+    <span class="k">if</span> <span class="n">group_column</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">group_column</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;ProjectIdBSV&quot;</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;5min&quot;</span><span class="p">:</span>
+        <span class="n">min_count</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="k">elif</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;15min&quot;</span><span class="p">:</span>
+        <span class="n">min_count</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="k">elif</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;60min&quot;</span><span class="p">:</span>
+        <span class="n">min_count</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="k">elif</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;6h&quot;</span><span class="p">:</span>
+        <span class="n">min_count</span> <span class="o">=</span> <span class="mi">72</span>
+    <span class="k">elif</span> <span class="n">interval</span> <span class="o">==</span> <span class="s2">&quot;24h&quot;</span><span class="p">:</span>
+        <span class="n">min_count</span> <span class="o">=</span> <span class="mi">288</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Unknown interval &quot;</span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s1">&quot;&#39;</span><span class="p">)</span>
+
+    <span class="c1"># Generate the initial dataset with only group_column and ReadingDate</span>
+    <span class="n">df_copy</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">group_column</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="n">combined_results</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df_copy</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="n">interval</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">size</span><span class="p">()</span>
+        <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+        <span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">aggregation_variables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;in loop for </span><span class="si">{</span><span class="n">var</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">resample_variable</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">)</span>
+        <span class="n">combined_results</span> <span class="o">=</span> <span class="n">combined_results</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
+            <span class="n">result</span><span class="p">,</span>
+            <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">group_column</span><span class="p">],</span>
+            <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Combining dataset: </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">combined_results</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">combined_results</span></div>
+
+
+
+<div class="viewcode-block" id="resample_variable">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_variable">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_variable</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample a single variable.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    var : str</span>
+<span class="sd">        The variable to resample</span>
+<span class="sd">    config : dict</span>
+<span class="sd">        Configuration for the resampling</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval for resampling</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    min_count : int</span>
+<span class="sd">        The minimum count required for resampling</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The resampled DataFrame for the variable</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples a single variable based on the specified method in the config.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">: column </span><span class="si">{</span><span class="n">var</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">method</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s2">&quot;resample_method&quot;</span><span class="p">]</span>
+    <span class="n">validator_column</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;validator_column&quot;</span><span class="p">)</span>
+
+    <span class="n">columns_to_copy</span> <span class="o">=</span> <span class="p">[</span><span class="o">*</span><span class="n">group_column</span><span class="p">,</span> <span class="n">var</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">validator_column</span><span class="p">:</span>
+        <span class="n">columns_to_copy</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">validator_column</span><span class="p">)</span>
+    <span class="n">df_copy</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">columns_to_copy</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="c1"># Filter by validator column if specified</span>
+    <span class="k">if</span> <span class="n">validator_column</span><span class="p">:</span>
+        <span class="n">df_copy</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df_copy</span><span class="p">[</span><span class="n">validator_column</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;sum&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">resample_sum</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">resample_max</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;avg&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">resample_avg</span><span class="p">(</span><span class="n">df_copy</span><span class="p">,</span> <span class="n">var</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="resample_max">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_max">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_max</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample maximum of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to resample</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval for resampling</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    min_count : int</span>
+<span class="sd">        The minimum count required for resampling</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The resampled DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples the maximum of the specified column.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;resample max: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">resampled</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)[</span><span class="n">column</span><span class="p">]</span>
+        <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="n">interval</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">min_count</span><span class="o">=</span><span class="n">min_count</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">resampled</span></div>
+
+
+
+<div class="viewcode-block" id="resample_sum">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_sum">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_sum</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample sum of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to resample</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval for resampling</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by</span>
+<span class="sd">    min_count : int</span>
+<span class="sd">        The minimum count required for resampling</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The resampled DataFrame</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples the sum of the specified column.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;resample sum: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">resampled</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)[</span><span class="n">column</span><span class="p">]</span>
+        <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="n">interval</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">min_count</span><span class="o">=</span><span class="n">min_count</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="c1"># resampled = df.groupby(group_column)[column].resample(interval).apply(</span>
+    <span class="c1">#     lambda x: pd.NA if x.isnull().any() else x.sum()</span>
+    <span class="c1"># ).reset_index()</span>
+    <span class="c1"># resampled = resampled.groupby(&#39;ReadingDate&#39;)[column].apply(</span>
+    <span class="c1">#     lambda x: pd.NA if x.isnull().any() else x.sum()</span>
+    <span class="c1"># ).reset_index()</span>
+    <span class="k">return</span> <span class="n">resampled</span></div>
+
+
+
+<div class="viewcode-block" id="resample_avg">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.aggregate.resample_avg">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_avg</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">interval</span><span class="p">,</span> <span class="n">group_column</span><span class="p">,</span> <span class="n">min_count</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample average of a column.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pd.DataFrame</span>
+<span class="sd">        The input DataFrame.</span>
+<span class="sd">    column : str</span>
+<span class="sd">        The column to resample.</span>
+<span class="sd">    interval : str</span>
+<span class="sd">        The time interval for resampling.</span>
+<span class="sd">    group_column : list</span>
+<span class="sd">        The column(s) to group by.</span>
+<span class="sd">    min_count : int</span>
+<span class="sd">        The minimum count required for resampling.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pd.DataFrame</span>
+<span class="sd">        The resampled DataFrame.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function resamples the average of the specified column, requiring at least `min_count` values to be present.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;resample avg: </span><span class="si">{</span><span class="n">group_column</span><span class="si">}</span><span class="s2"> / </span><span class="si">{</span><span class="n">interval</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">resampled</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">group_column</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="n">interval</span><span class="p">)[</span><span class="n">column</span><span class="p">]</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">([</span><span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;count&quot;</span><span class="p">])</span>
+        <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="n">resampled</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+        <span class="n">resampled</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">min_count</span><span class="p">,</span>
+        <span class="n">resampled</span><span class="p">[</span><span class="s2">&quot;sum&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">resampled</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">],</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">resampled</span> <span class="o">=</span> <span class="n">resampled</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;count&quot;</span><span class="p">])</span>
+    <span class="c1"># resampled = df.groupby(group_column)[column].resample(interval).apply(</span>
+    <span class="c1">#     lambda x: pd.NA if x.isnull().any() else x.mean()</span>
+    <span class="c1"># ).reset_index()</span>
+    <span class="c1"># resampled = resampled.groupby(&#39;ReadingDate&#39;)[column].apply(</span>
+    <span class="c1">#     lambda x: pd.NA if x.isnull().any() else x.mean()</span>
+    <span class="c1"># ).reset_index()</span>
+    <span class="k">return</span> <span class="n">resampled</span></div>
+
+
+
+<span class="c1"># List of variables with their corresponding aggregation methods - lines marked with ## need a check of the methods - consider for some using &#39;last_value&#39; for instantaneous variables</span>
+
+<span class="n">aggregation_variables</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;ElektriciteitNetgebruikHoogDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitNetgebruikHoog&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitNetgebruikLaagDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitNetgebruikLaag&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitTerugleveringHoogDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitTerugleveringHoog&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitTerugleveringLaagDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitTerugleveringLaag&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="c1">## &#39;ElektriciteitVermogen&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_elektriciteit_vermogen&#39;},</span>
+    <span class="c1">## &#39;Gasgebruik&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikWTWDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitsgebruikWTW&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikWarmtepompDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitsgebruikWarmtepomp&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikBoosterDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitsgebruikBooster&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikBoilervatDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitsgebruikBoilervat&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikRadiatorDiff&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="c1">#&#39;ElektriciteitsgebruikRadiator&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="c1">## &#39;TemperatuurWarmTapwater&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_temperatuur_warm_tapwater&#39;},</span>
+    <span class="c1">## &#39;TemperatuurWoonkamer&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_temperatuur_woonkamer&#39;},</span>
+    <span class="c1">## &#39;TemperatuurSetpointWoonkamer&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_temperatuur_setpoint_woonkamer&#39;},</span>
+    <span class="c1">## &#39;WarmteproductieWarmtepomp&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;},</span>
+    <span class="c1">## &#39;WatergebruikWarmTapwater&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;},</span>
+    <span class="c1">## &#39;Zon-opwekMomentaan&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_zon_opwek_momentaan&#39;},</span>
+    <span class="s2">&quot;ZonopwekBruto&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">},</span>
+    <span class="c1">#&#39;Zon-opwekTotaal&#39;: {&#39;resample_method&#39;: &#39;max&#39;, &#39;aggregate_method&#39;: &#39;diff_cumsum&#39;},</span>
+    <span class="c1">## &#39;CO2&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_co2&#39;},</span>
+    <span class="c1">## &#39;Luchtvochtigheid&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_luchtvochtigheid&#39;},</span>
+    <span class="c1">## &#39;Ventilatiedebiet&#39;: {&#39;resample_method&#39;: &#39;avg&#39;, &#39;aggregate_method&#39;: &#39;avg&#39;, &#39;validator_column&#39;: &#39;validate_ventilatiedebiet&#39;},</span>
+    <span class="s2">&quot;TerugleveringTotaalNetto&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikTotaalNetto&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;Netuitwisseling&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikTotaalWarmtepomp&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikTotaalGebouwgebonden&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikTotaalHuishoudelijk&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;Zelfgebruik&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">},</span>
+    <span class="s2">&quot;ElektriciteitsgebruikTotaalBruto&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;resample_method&quot;</span><span class="p">:</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;aggregate_method&quot;</span><span class="p">:</span> <span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+<span class="p">}</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Nicolas Dickinson, Marten Witkamp, Petra Izeboud.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

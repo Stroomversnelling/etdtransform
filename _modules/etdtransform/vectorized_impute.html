@@ -1,0 +1,943 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>etdtransform.vectorized_impute &mdash; etdtransform - &#34;Energietransitie Dataset&#34; transformation and loading package 2025 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=cb975c41"></script>
+      <script src="../../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            etdtransform - "Energietransitie Dataset" transformation and loading package
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../source/modules.html">etdtransform</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">etdtransform - "Energietransitie Dataset" transformation and loading package</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">etdtransform.vectorized_impute</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for etdtransform.vectorized_impute</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">IntFlag</span><span class="p">,</span> <span class="n">auto</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">etdmap.record_validators</span><span class="w"> </span><span class="kn">import</span> <span class="n">thresholds_dict</span>
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s1">&#39;ImputeType&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;apply_thresholds&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;drop_temp_cols&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;impute_and_normalize&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;methods_to_bitwise&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;process_gap_and_cumulative_groups&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;process_imputation_vectorized&#39;</span>
+<span class="p">]</span>
+
+<div class="viewcode-block" id="methods_to_bitwise">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.methods_to_bitwise">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">methods_to_bitwise</span><span class="p">(</span><span class="n">methods_column</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert methods to bitwise representation.</span>
+
+<span class="sd">    This function takes a column of methods and converts each method to a bitwise</span>
+<span class="sd">    representation. Each method is represented by a bit in the resulting integer.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    methods_column : array-like</span>
+<span class="sd">        A column containing lists of method numbers.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    numpy.ndarray</span>
+<span class="sd">        An array of integers where each integer represents the bitwise</span>
+<span class="sd">        representation of the methods for that row.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    The function assumes that method numbers start from 1 and correspond to</span>
+<span class="sd">    bit positions (method 1 = bit 0, method 2 = bit 1, etc.).</span>
+
+<span class="sd">    This vectorized version is optimized for performance with NumPy.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">bitwise_values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">methods_column</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">methods</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">methods_column</span><span class="p">):</span>
+        <span class="n">bitwise_value</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">method</span> <span class="ow">in</span> <span class="n">methods</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">method</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">bitwise_value</span> <span class="o">|=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span>
+                    <span class="n">method</span> <span class="o">-</span> <span class="mi">1</span>
+                <span class="p">)</span>  <span class="c1"># Same logic as before, but faster with NumPy</span>
+        <span class="n">bitwise_values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">bitwise_value</span>
+
+    <span class="k">return</span> <span class="n">bitwise_values</span></div>
+
+
+
+<div class="viewcode-block" id="apply_thresholds">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.apply_thresholds">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">apply_thresholds</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">lower_bound</span><span class="p">,</span>
+    <span class="n">upper_bound</span><span class="p">,</span>
+    <span class="n">diff_col</span><span class="p">,</span>
+    <span class="n">avg_col</span><span class="p">,</span>
+    <span class="n">impute_type_col</span><span class="p">,</span>
+    <span class="n">is_imputed_col</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Apply thresholds to difference column and update imputation flags.</span>
+
+<span class="sd">    This function applies lower and upper bounds to a difference column in the</span>
+<span class="sd">    DataFrame. Values outside these bounds are replaced with average values,</span>
+<span class="sd">    and corresponding imputation flags are updated.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        The input DataFrame containing the data.</span>
+<span class="sd">    lower_bound : float</span>
+<span class="sd">        The lower threshold for the difference column.</span>
+<span class="sd">    upper_bound : float</span>
+<span class="sd">        The upper threshold for the difference column.</span>
+<span class="sd">    diff_col : str</span>
+<span class="sd">        The name of the difference column to apply thresholds to.</span>
+<span class="sd">    avg_col : str</span>
+<span class="sd">        The name of the column containing average values to use for imputation.</span>
+<span class="sd">    impute_type_col : str</span>
+<span class="sd">        The name of the column indicating the imputation type.</span>
+<span class="sd">    is_imputed_col : str</span>
+<span class="sd">        The name of the column indicating whether a value is imputed.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pandas.DataFrame</span>
+<span class="sd">        The DataFrame with thresholds applied and imputation flags updated.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function modifies the input DataFrame in-place and also returns it.</span>
+<span class="sd">    Values outside the thresholds are replaced with average values and marked</span>
+<span class="sd">    as imputed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="p">((</span><span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">lower_bound</span><span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">upper_bound</span><span class="p">))</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span>
+        <span class="n">diff_col</span>
+    <span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">avg_col</span><span class="p">]</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="n">ImputeType</span><span class="o">.</span><span class="n">NONE</span><span class="p">)</span> <span class="o">|</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">THRESHOLD_ADJUSTED</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="impute_and_normalize">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.impute_and_normalize">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">impute_and_normalize</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">cumulative_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>
+    <span class="n">project_id_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">max_bound</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Perform vectorized imputation and normalization on cumulative columns/ This function applies imputation techniques to fill missing values in</span>
+<span class="sd">    cumulative columns and normalizes the data. It uses vectorized operations</span>
+<span class="sd">    for improved performance.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        The input DataFrame containing the data to be imputed and normalized.</span>
+<span class="sd">    cumulative_columns : list</span>
+<span class="sd">        A list of column names representing cumulative variables to be processed.</span>
+<span class="sd">    project_id_column : str</span>
+<span class="sd">        The name of the column containing project identifiers.</span>
+<span class="sd">    max_bound : pandas.DataFrame</span>
+<span class="sd">        A DataFrame containing maximum bounds for each variable.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    tuple</span>
+<span class="sd">        A tuple containing three elements:</span>
+<span class="sd">        - df : pandas.DataFrame</span>
+<span class="sd">            The imputed and normalized DataFrame.</span>
+<span class="sd">        - imputation_gap_stats_df : pandas.DataFrame</span>
+<span class="sd">            Statistics about the imputation process for each gap.</span>
+<span class="sd">        - imputation_reading_date_stats_df : None or pandas.DataFrame</span>
+<span class="sd">            Statistics about imputation by reading date (if calculated).</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function applies various imputation methods based on the nature of</span>
+<span class="sd">    the missing data and the available information. It handles different</span>
+<span class="sd">    scenarios such as gaps in data, zero jumps, and negative jumps.</span>
+
+<span class="sd">    The function also calculates and returns statistics about the imputation</span>
+<span class="sd">    process, which can be useful for quality assessment.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - The function may modify the input DataFrame in-place.</span>
+<span class="sd">    - Imputation methods may introduce bias or affect the variance of the data.</span>
+<span class="sd">    - Large amounts of imputed data may significantly affect analysis results.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting to impute cumulative column diffs (vectorized).&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">calculate_imputation_gap_stats</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">):</span>
+        <span class="n">diff_column_total</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="n">cum_column_total_difference</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">group</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+        <span class="n">difference_in_calculation</span> <span class="o">=</span> <span class="n">diff_column_total</span> <span class="o">-</span> <span class="n">cum_column_total_difference</span>
+        <span class="n">missing_count</span> <span class="o">=</span> <span class="p">(</span><span class="o">~</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">())</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="n">methods</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">group</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span><span class="o">.</span><span class="n">dropna</span><span class="p">())</span>
+        <span class="n">imputed_count</span> <span class="o">=</span> <span class="p">(</span><span class="n">group</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">())</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="n">imputed_na_count</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">-</span> <span class="n">imputed_count</span>
+
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;column&quot;</span><span class="p">:</span> <span class="n">diff_col</span><span class="p">,</span>
+                <span class="s2">&quot;diff_col_total&quot;</span><span class="p">:</span> <span class="n">diff_column_total</span><span class="p">,</span>
+                <span class="s2">&quot;cum_col_min_max_diff&quot;</span><span class="p">:</span> <span class="n">cum_column_total_difference</span><span class="p">,</span>
+                <span class="s2">&quot;deviation&quot;</span><span class="p">:</span> <span class="n">difference_in_calculation</span><span class="p">,</span>
+                <span class="s2">&quot;missing&quot;</span><span class="p">:</span> <span class="n">missing_count</span><span class="p">,</span>
+                <span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="n">methods</span><span class="p">,</span>
+                <span class="s2">&quot;imputed&quot;</span><span class="p">:</span> <span class="n">imputed_count</span><span class="p">,</span>
+                <span class="s2">&quot;imputed_na&quot;</span><span class="p">:</span> <span class="n">imputed_na_count</span><span class="p">,</span>
+            <span class="p">},</span>
+        <span class="p">)</span>
+
+    <span class="n">imputation_gap_stats</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">cum_col</span> <span class="ow">in</span> <span class="n">cumulative_columns</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Starting </span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2"> vectorized imputation&quot;</span><span class="p">)</span>
+
+        <span class="n">temp_cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">,</span> <span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span>
+
+        <span class="n">diff_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">Diff&quot;</span>
+        <span class="n">old_diff_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cum_col</span><span class="si">}</span><span class="s2">OldDiff&quot;</span>
+        <span class="n">is_imputed_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">_is_imputed&quot;</span>
+        <span class="n">impute_type_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">_impute_type&quot;</span>
+        <span class="n">avg_col</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">_avg&quot;</span>
+
+        <span class="n">df</span><span class="p">[</span><span class="n">old_diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span>
+
+        <span class="n">drop_temp_cols</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">logLeftoverError</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;No values to impute in </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">. Only checking thresholds.&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span>
+                <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
+                <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span>
+                <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Apply thresholds to remove physically impossible outliers&quot;</span><span class="p">)</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">apply_thresholds</span><span class="p">(</span>
+                <span class="n">df</span><span class="p">,</span>
+                <span class="n">lower_bound</span><span class="o">=</span><span class="n">thresholds_dict</span><span class="p">[</span><span class="n">diff_col</span><span class="p">][</span><span class="s2">&quot;Min&quot;</span><span class="p">],</span>
+                <span class="n">upper_bound</span><span class="o">=</span><span class="n">thresholds_dict</span><span class="p">[</span><span class="n">diff_col</span><span class="p">][</span><span class="s2">&quot;Max&quot;</span><span class="p">],</span>
+                <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+                <span class="n">avg_col</span><span class="o">=</span><span class="n">avg_col</span><span class="p">,</span>
+                <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+                <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+            <span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Defining </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2"> gap groups&quot;</span><span class="p">)</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">process_gap_and_cumulative_groups</span><span class="p">(</span>
+                <span class="n">df</span><span class="p">,</span>
+                <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+                <span class="n">cum_col</span><span class="o">=</span><span class="n">cum_col</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Imputing </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">process_imputation_vectorized</span><span class="p">(</span>
+                <span class="n">df</span><span class="p">,</span>
+                <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+                <span class="n">cum_col</span><span class="o">=</span><span class="n">cum_col</span><span class="p">,</span>
+                <span class="n">avg_col</span><span class="o">=</span><span class="n">avg_col</span><span class="p">,</span>
+                <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+                <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="n">remaining_na</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">remaining_na</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">remaining_na</span><span class="si">}</span><span class="s2"> missing values still exist in column </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">. Check masks and imputation logic.&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Calculating </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2"> imputation gap stats&quot;</span><span class="p">)</span>
+        <span class="n">imputation_gap_stats</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">project_id_column</span><span class="p">,</span> <span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">calculate_imputation_gap_stats</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">reset_index</span><span class="p">(),</span>
+        <span class="p">)</span>
+
+        <span class="n">drop_temp_cols</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">temp_cols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">,</span> <span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">])</span>
+
+        <span class="n">drop_temp_cols</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">logLeftoverError</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">imputation_gap_stats_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">imputation_gap_stats</span><span class="p">,</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">imputation_gap_stats_df</span><span class="p">[</span><span class="s2">&quot;bitwise_methods&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">methods_to_bitwise</span><span class="p">(</span>
+        <span class="n">imputation_gap_stats_df</span><span class="p">[</span><span class="s2">&quot;methods&quot;</span><span class="p">],</span>
+    <span class="p">)</span>
+
+    <span class="n">imputation_reading_date_stats_df</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">return</span> <span class="n">df</span><span class="p">,</span> <span class="n">imputation_gap_stats_df</span><span class="p">,</span> <span class="n">imputation_reading_date_stats_df</span></div>
+
+
+
+<div class="viewcode-block" id="drop_temp_cols">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.drop_temp_cols">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">drop_temp_cols</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">temp_cols</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">logLeftoverError</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Drop temporary columns from the DataFrame.</span>
+
+<span class="sd">    This function removes specified temporary columns from the DataFrame.</span>
+<span class="sd">    If no columns are specified, it drops a predefined set of temporary columns.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        The DataFrame from which to drop columns.</span>
+<span class="sd">    temp_cols : list, optional</span>
+<span class="sd">        A list of column names to drop. If None, a default set of temporary</span>
+<span class="sd">        columns will be used.</span>
+<span class="sd">    logLeftoverError : bool, optional</span>
+<span class="sd">        If True, log an error message for any leftover columns to be removed.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function modifies the DataFrame in-place.</span>
+
+<span class="sd">    The default set of temporary columns includes various intermediate</span>
+<span class="sd">    calculation columns used in the imputation process.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - If logLeftoverError is True and there are columns to be dropped, an error</span>
+<span class="sd">      message will be logged, which might indicate unintended remnants in the</span>
+<span class="sd">      data processing pipeline.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">temp_cols</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">temp_cols</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="s2">&quot;gap_start&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;gap_group&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;gap_jump_is_na_mask&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;gap_jump&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;house_impute_factor&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;avg_na&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;impute_jump&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;impute_na&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;impute_values&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;impute_na_ratio&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;cum_value_encountered&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;prev_cum_value&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;end_cum_value&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;impute_type_old&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;gap_length&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;no_diff_mask&quot;</span>
+            <span class="p">]</span>
+
+
+    <span class="n">cols_to_drop</span> <span class="o">=</span> <span class="p">[</span><span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">temp_cols</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">logLeftoverError</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">cols_to_drop</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;There are some leftover columns to remove from the code: </span><span class="si">{</span><span class="n">cols_to_drop</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">df</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">cols_to_drop</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="process_gap_and_cumulative_groups">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.process_gap_and_cumulative_groups">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">process_gap_and_cumulative_groups</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Process gap and cumulative value groups in the DataFrame.</span>
+
+<span class="sd">    This function identifies gaps in the data, creates gap groups, and</span>
+<span class="sd">    establishes cumulative value groups based on the presence of NA values</span>
+<span class="sd">    and transitions between households.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        The DataFrame to process.</span>
+<span class="sd">    diff_col : str</span>
+<span class="sd">        The name of the difference column to analyze for gaps.</span>
+<span class="sd">    cum_col : str</span>
+<span class="sd">        The name of the cumulative column to use for value grouping.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pandas.DataFrame</span>
+<span class="sd">        The processed DataFrame with added columns for gap and cumulative</span>
+<span class="sd">        value grouping.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function adds several temporary columns to the DataFrame:</span>
+<span class="sd">    - &#39;gap_start&#39;: Identifies the start of a diff column gap or transition between households.</span>
+<span class="sd">    - &#39;gap_group&#39;: Groups consecutive NA values in diff columns.</span>
+<span class="sd">    - &#39;cum_value_encountered&#39;: Marks where a non-NA value is encountered in cumulative column.</span>
+<span class="sd">    - &#39;cumulative_value_group&#39;: Groups gaps based on cumulative values.</span>
+<span class="sd">    - &#39;gap_length&#39;: The length of each gap group.</span>
+
+<span class="sd">    These columns are crucial for the subsequent imputation process. It returns only for further imputation:</span>
+<span class="sd">    - &#39;cumulative_value_group&#39;</span>
+<span class="sd">    - &#39;gap_length&#39;</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - This function modifies the input DataFrame in-place.</span>
+<span class="sd">    - The added columns should be handled carefully in subsequent processing steps.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">temp_cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;gap_start&quot;</span><span class="p">,</span> <span class="s2">&quot;gap_group&quot;</span><span class="p">,</span> <span class="s2">&quot;cum_value_encountered&quot;</span><span class="p">]</span>
+
+    <span class="c1"># Step 1: Identify NA values in diff_col</span>
+    <span class="n">is_na_mask</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span>
+
+    <span class="c1"># Step 2: Identify gap start only for NA values and transitions between households</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_start&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">is_na_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="o">~</span><span class="n">is_na_mask</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="kc">False</span><span class="p">)))</span> <span class="o">|</span> <span class="p">(</span>
+        <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">&amp;</span> <span class="n">is_na_mask</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Step 3: Create gap groups by cumulative sum, but now ensure it doesn&#39;t increment unnecessarily at house boundaries</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_start&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">cumsum</span><span class="p">()</span>
+
+    <span class="c1"># Step 4: Ensure non-NA values are not included in any gap group</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">mask</span><span class="p">(</span><span class="o">~</span><span class="n">is_na_mask</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">)</span>
+
+    <span class="c1"># Step 5: Mark the end of a group where a non-NA value is encountered in cum_col</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cum_value_encountered&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">is_na_mask</span>
+
+    <span class="c1"># Step 6: Adjust cumulative group logic to handle gaps without cumulative values</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cum_value_encountered&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">|</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_start&quot;</span><span class="p">]</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">cumsum</span><span class="p">()</span>
+
+    <span class="c1"># Step 7: Ensure that the group continues when there is no cumulative value in the gap</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">ffill</span><span class="p">()</span>
+
+    <span class="c1"># Step 8: Ensure non-NA values in diff_col don&#39;t belong to a group</span>
+
+    <span class="c1"># Combine all conditions</span>
+    <span class="n">exclude_mask</span> <span class="o">=</span> <span class="o">~</span><span class="n">is_na_mask</span>
+
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">mask</span><span class="p">(</span>
+        <span class="n">exclude_mask</span><span class="p">,</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Step 7: Add the count of records in each group consistently for all rows in the group</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span>
+
+    <span class="n">drop_temp_cols</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">temp_cols</span><span class="o">=</span><span class="n">temp_cols</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="process_imputation_vectorized">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.process_imputation_vectorized">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">process_imputation_vectorized</span><span class="p">(</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="n">diff_col</span><span class="p">,</span>
+    <span class="n">cum_col</span><span class="p">,</span>
+    <span class="n">avg_col</span><span class="p">,</span>
+    <span class="n">impute_type_col</span><span class="p">,</span>
+    <span class="n">is_imputed_col</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Perform vectorized imputation on the DataFrame.</span>
+
+<span class="sd">    This function applies various imputation methods to fill missing values</span>
+<span class="sd">    in the difference column based on cumulative values and average differences.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas.DataFrame</span>
+<span class="sd">        The DataFrame to impute.</span>
+<span class="sd">    diff_col : str</span>
+<span class="sd">        The name of the difference column to impute.</span>
+<span class="sd">    cum_col : str</span>
+<span class="sd">        The name of the cumulative column used for imputation.</span>
+<span class="sd">    avg_col : str</span>
+<span class="sd">        The name of the column containing average differences.</span>
+<span class="sd">    impute_type_col : str</span>
+<span class="sd">        The name of the column to store imputation type.</span>
+<span class="sd">    is_imputed_col : str</span>
+<span class="sd">        The name of the column to indicate whether a value is imputed.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    pandas.DataFrame</span>
+<span class="sd">        The DataFrame with imputed values and additional columns indicating</span>
+<span class="sd">        imputation types and statistics.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    This function applies several imputation methods for diff columns:</span>
+<span class="sd">    - Filling with zeros for flat or near-zero gaps</span>
+<span class="sd">    - Linear filling for positive gaps with near-zero impute jumps</span>
+<span class="sd">    - Scaled impute value filling for positive gaps with positive impute jumps</span>
+<span class="sd">    - Handling cases with no gap jump (e.g., at the start or end of the dataset)</span>
+
+<span class="sd">    The function also applies thresholds to remove physically impossible outliers.</span>
+
+<span class="sd">    Warnings</span>
+<span class="sd">    --------</span>
+<span class="sd">    - This function modifies the input DataFrame in-place.</span>
+<span class="sd">    - The imputation process may introduce bias, especially in cases with large gaps</span>
+<span class="sd">      or when a significant portion of the data is imputed.</span>
+<span class="sd">    - The function assumes that the input data has been properly prepared and sorted.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_prev_value_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">):</span>
+        <span class="c1"># Shift by one to get the immediate previous time step value before the group and make sure no other time step is there</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="n">first_in_group_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="p">)</span> <span class="o">&amp;</span> <span class="o">~</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">())</span>
+
+        <span class="n">first_in_house</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># remove all values that are not the first in the group or that are from another household</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span>
+            <span class="o">~</span><span class="n">first_in_group_mask</span> <span class="o">|</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span> <span class="o">|</span> <span class="n">first_in_house</span><span class="p">,</span>
+            <span class="s2">&quot;prev_cum_value&quot;</span><span class="p">,</span>
+        <span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+
+        <span class="c1"># Remove negative previous values, as they are not valid for imputation</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+
+        <span class="c1"># fill for each group</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">)[</span>
+            <span class="s2">&quot;prev_cum_value&quot;</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">ffill</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">ensure_Float64</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;CumCol&quot;</span><span class="p">,</span> <span class="s2">&quot;CumColDiff&quot;</span><span class="p">,</span> <span class="s2">&quot;diff_avg&quot;</span><span class="p">]):</span>
+        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">columns</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="s2">&quot;Float64&quot;</span><span class="p">:</span>
+                <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s1"> dtype is &quot;</span><span class="si">{</span><span class="n">df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s1">&quot;. Attempting to convert.&#39;</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="c1"># Attempt to convert the column to Float64</span>
+                    <span class="n">df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;Float64&quot;</span><span class="p">)</span>
+                    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2"> successfully converted to Float64.&quot;</span><span class="p">)</span>
+                <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                    <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to convert </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2"> to Float64: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                    <span class="k">raise</span> <span class="n">e</span>
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_gap_stats</span><span class="p">(</span><span class="n">df</span><span class="p">):</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump_is_na_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
+        <span class="p">)</span>
+
+        <span class="c1"># df[&#39;no_diff_mask&#39;] = df[&#39;cumulative_value_group&#39;].notna() &amp; (df[&#39;prev_cum_value&#39;].isna() | df[&#39;end_cum_value&#39;].isna() | (df[&#39;gap_jump&#39;] &lt;= 0))</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_impute_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">avg_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">):</span>
+        <span class="c1"># add impute jump and tracking of missing values</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;avg_na&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">avg_col</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_na&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">)[</span><span class="s2">&quot;avg_na&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span>
+            <span class="s2">&quot;sum&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_values&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">avg_col</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_values&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;Negative impute jump - not allowed - check averages&quot;</span><span class="p">)</span>
+
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_na_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_na&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_jump&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">)[</span>
+            <span class="s2">&quot;impute_values&quot;</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;sum&quot;</span><span class="p">)</span>
+
+        <span class="c1"># calculate cumulative total for household for scaling the averages (optional)</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_proportional_adjustment_to_impute</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">avg_col</span><span class="p">):</span>
+        <span class="c1"># Calculate the proportional adjustment to impute averages</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;comparable_to_impute_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="o">~</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;avg_na&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;diff_avg_sum&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">avg_col</span><span class="p">]</span>
+            <span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;comparable_to_impute_mask&quot;</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;sum&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cum_diff_sum&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">diff_col</span><span class="p">]</span>
+            <span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;comparable_to_impute_mask&quot;</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])</span>
+            <span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;sum&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="n">comparable_counts</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)[</span>
+            <span class="s2">&quot;comparable_to_impute_mask&quot;</span>
+        <span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;sum&quot;</span><span class="p">)</span>
+        <span class="n">total_counts</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span>
+        <span class="n">not_enough_comparable</span> <span class="o">=</span> <span class="n">comparable_counts</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">total_counts</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;house_impute_factor&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;diff_avg_sum&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cum_diff_sum&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span>
+            <span class="p">[</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">),</span> <span class="o">-</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)],</span>
+            <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;house_impute_factor&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;house_impute_factor&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span><span class="o">.</span><span class="n">mask</span><span class="p">(</span><span class="n">not_enough_comparable</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="n">temp_cols</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s2">&quot;gap_jump_is_na_mask&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;gap_jump&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;house_impute_factor&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;avg_na&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;impute_jump&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;impute_na&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;impute_values&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;impute_na_ratio&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;cum_value_encountered&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;prev_cum_value&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;end_cum_value&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;impute_type_old&quot;</span><span class="p">,</span>
+    <span class="p">]</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Ensuring </span><span class="si">{</span><span class="p">[</span><span class="n">cum_col</span><span class="p">,</span><span class="w"> </span><span class="n">diff_col</span><span class="p">,</span><span class="w"> </span><span class="n">avg_col</span><span class="p">]</span><span class="si">}</span><span class="s2"> are Float64&quot;</span><span class="p">)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">ensure_Float64</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="n">cum_col</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">avg_col</span><span class="p">])</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up previous value column&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">setup_prev_value_columns</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">cum_col</span><span class="p">)</span>
+
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">)[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span>
+        <span class="s2">&quot;last&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">NA</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up gap calculations&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">setup_gap_stats</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up impute columns&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">setup_impute_columns</span><span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">avg_col</span><span class="o">=</span><span class="n">avg_col</span><span class="p">,</span>
+        <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+        <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up proportional adjustment to mpute&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">setup_proportional_adjustment_to_impute</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span> <span class="n">avg_col</span><span class="o">=</span><span class="n">avg_col</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">impute_with_gap_jump</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">):</span>
+        <span class="n">has_gap_jump_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="o">~</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump_is_na_mask&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
+        <span class="p">)</span>
+
+        <span class="c1">## if has gap jump</span>
+        <span class="c1"># negative gap jump</span>
+        <span class="n">flat_gap_jump_mask</span> <span class="o">=</span> <span class="n">has_gap_jump_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEGATIVE_GAP_JUMP</span>
+
+        <span class="c1"># gap jump near zero - fill with zeros</span>
+        <span class="n">flat_gap_jump_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">has_gap_jump_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">1e-8</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEAR_ZERO_GAP_JUMP</span>
+
+        <span class="c1"># positive gap jump and impute jump near zero - linear fill</span>
+        <span class="c1"># round(gap_jump / gap_length,10)</span>
+        <span class="n">positive_gap_linear_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">has_gap_jump_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mf">1e-8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_jump&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">1e-8</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_linear_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_linear_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">],</span>
+            <span class="mi">10</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_linear_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">LINEAR_FILL</span>
+
+        <span class="c1"># positive gap jump and positive impute jump and - scaled impute value fill</span>
+        <span class="c1"># (optional for future: add logic to look at impute_na_ratio)</span>
+        <span class="n">positive_gap_scaled_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">has_gap_jump_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mf">1e-8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;impute_jump&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mf">1e-8</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="s2">&quot;impute_values&quot;</span><span class="p">]</span>
+            <span class="o">*</span> <span class="p">(</span>
+                <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span>
+                <span class="o">/</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="s2">&quot;impute_jump&quot;</span><span class="p">]</span>
+            <span class="p">),</span>
+            <span class="mi">10</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">SCALED_FILL</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Impute with gap jump&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">impute_with_gap_jump</span><span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+        <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+        <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">impute_wo_gap_jump</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">):</span>
+        <span class="n">wo_gap_jump_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump_is_na_mask&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
+        <span class="p">)</span>
+
+        <span class="c1">###</span>
+        <span class="c1">## else no gap jump:</span>
+        <span class="c1"># no starting value for gap and no end value - throw an exception</span>
+        <span class="n">nogpjump_no_start_no_end_value_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">wo_gap_jump_mask</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">nogpjump_no_start_no_end_value_mask</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No next value or last value for a gap. Whole column empty?&quot;</span><span class="p">)</span>
+            <span class="n">house_no_diff_values</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)[</span><span class="n">diff_col</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span>
+            <span class="p">)</span>
+
+            <span class="c1"># raise Exception(f&#39;No next value or last value for a gap.&#39;)</span>
+
+        <span class="c1">### has end value but no start value for gap</span>
+        <span class="n">nogpjump_has_end_value_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">wo_gap_jump_mask</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span>
+        <span class="p">)</span>
+
+        <span class="c1">#### has end value is 0 - fill with 0 - type 6</span>
+        <span class="n">nogpjump_has_end_value_zero_mask</span> <span class="o">=</span> <span class="n">nogpjump_has_end_value_mask</span> <span class="o">&amp;</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">1e-8</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">ZERO_END_VALUE</span>
+
+        <span class="c1">#### end value &gt; 0 - fill with impute values - type 7</span>
+        <span class="n">nogpjump_has_end_value_positive_mask</span> <span class="o">=</span> <span class="n">nogpjump_has_end_value_mask</span> <span class="o">&amp;</span> <span class="p">(</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">1e-8</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span>
+            <span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span>
+            <span class="s2">&quot;impute_values&quot;</span><span class="p">,</span>
+        <span class="p">]</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">POSITIVE_END_VALUE</span>
+
+        <span class="c1">#### end value &lt; 0 - raise exception</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
+                <span class="s2">&quot;Negative next value at end of gap - that is not supposed to happen!&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+
+        <span class="c1">### start value but no end value for gap - fill with impute values</span>
+        <span class="n">nogpjump_has_start_value_mask</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">wo_gap_jump_mask</span> <span class="o">&amp;</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;prev_cum_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="s2">&quot;impute_values&quot;</span><span class="p">]</span>
+            <span class="o">*</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="s2">&quot;house_impute_factor&quot;</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NO_END_VALUE</span>
+
+        <span class="k">return</span> <span class="n">df</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Impute without gap jump&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">impute_wo_gap_jump</span><span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+        <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+        <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Apply thresholds to remove physically impossible outliers&quot;</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">apply_thresholds</span><span class="p">(</span>
+        <span class="n">df</span><span class="p">,</span>
+        <span class="n">lower_bound</span><span class="o">=</span><span class="n">thresholds_dict</span><span class="p">[</span><span class="n">diff_col</span><span class="p">][</span><span class="s2">&quot;Min&quot;</span><span class="p">],</span>
+        <span class="n">upper_bound</span><span class="o">=</span><span class="n">thresholds_dict</span><span class="p">[</span><span class="n">diff_col</span><span class="p">][</span><span class="s2">&quot;Max&quot;</span><span class="p">],</span>
+        <span class="n">diff_col</span><span class="o">=</span><span class="n">diff_col</span><span class="p">,</span>
+        <span class="n">avg_col</span><span class="o">=</span><span class="n">avg_col</span><span class="p">,</span>
+        <span class="n">impute_type_col</span><span class="o">=</span><span class="n">impute_type_col</span><span class="p">,</span>
+        <span class="n">is_imputed_col</span><span class="o">=</span><span class="n">is_imputed_col</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Households without a cumulative sum above 0 or all cum_col values are NA</span>
+    <span class="n">house_no_cum_sum</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;sum&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">0</span>
+    <span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">)[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Households where max - min cumulative sum is not &gt; 0</span>
+    <span class="n">houses_cum_min_max</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;max&quot;</span><span class="p">)</span>
+        <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="n">cum_col</span><span class="p">]</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;HuisIdBSV&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;min&quot;</span><span class="p">)</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">0</span>
+
+    <span class="n">drop_temp_cols</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">temp_cols</span><span class="o">=</span><span class="n">temp_cols</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="ImputeType">
+<a class="viewcode-back" href="../../source/etdtransform.html#etdtransform.vectorized_impute.ImputeType">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">ImputeType</span><span class="p">(</span><span class="n">IntFlag</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Enumeration of imputation types used in the vectorized imputation process.</span>
+
+<span class="sd">    This class defines the different types of imputation methods applied</span>
+<span class="sd">    during the vectorized imputation process for handling missing or</span>
+<span class="sd">    problematic data in time series.</span>
+
+<span class="sd">    Attributes</span>
+<span class="sd">    ----------</span>
+<span class="sd">    NONE : int</span>
+<span class="sd">        Represents no imputation.</span>
+<span class="sd">    NEGATIVE_GAP_JUMP : int</span>
+<span class="sd">        Represents a negative gap jump. Fills with zeros (potentially a meter reset)</span>
+<span class="sd">    NEAR_ZERO_GAP_JUMP : int</span>
+<span class="sd">        Represents a gap jump near zero. Fills with zeros (no change).</span>
+<span class="sd">    LINEAR_FILL : int</span>
+<span class="sd">        Represents a linear fill for positive gaps with near-zero impute jumps based on average.</span>
+<span class="sd">    SCALED_FILL : int</span>
+<span class="sd">        Represents a scaled fill for positive gaps with positive impute jumps based on average.</span>
+<span class="sd">    ZERO_END_VALUE : int</span>
+<span class="sd">        Represents imputation when end value is zero and there is no start value. Fills with zeros.</span>
+<span class="sd">    POSITIVE_END_VALUE : int</span>
+<span class="sd">        Represents imputation when end value is positive but there is no start value. Fills with averages.</span>
+<span class="sd">    NO_END_VALUE : int</span>
+<span class="sd">        Represents imputation when there is no end value. Fills with averages.</span>
+<span class="sd">    THRESHOLD_ADJUSTED : int</span>
+<span class="sd">        Represents values adjusted due to threshold violations. This happens after imputation and could be triggered by imputed values.</span>
+
+<span class="sd">    Notes</span>
+<span class="sd">    -----</span>
+<span class="sd">    The enumeration values are automatically assigned using auto().</span>
+<span class="sd">    The THRESHOLD_ADJUSTED flag can be combined with other imputation types.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">NONE</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">NEGATIVE_GAP_JUMP</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">NEAR_ZERO_GAP_JUMP</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">LINEAR_FILL</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">SCALED_FILL</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">ZERO_END_VALUE</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">POSITIVE_END_VALUE</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">NO_END_VALUE</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
+    <span class="n">THRESHOLD_ADJUSTED</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Nicolas Dickinson, Marten Witkamp, Petra Izeboud.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
