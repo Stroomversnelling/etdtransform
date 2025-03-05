@@ -9,7 +9,7 @@ etdtransform - "Energietransitie Dataset" transformation and loading package doc
 
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
+   :caption: Functions
 
    source/modules
 
