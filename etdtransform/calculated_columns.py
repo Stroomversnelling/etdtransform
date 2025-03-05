@@ -436,8 +436,15 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
     """
     original_index = group.index
 
-    group = group.sort_values(by=["YYYYMMDD", "HH"])
-
+    if ("YYYYMMDD" in group.columns) and ("HH" in group.columns):
+        group = group.sort_values(by=["YYYYMMDD", "HH"])
+    elif "ReadingDate" in group.columns:
+        group = group.sort_values(by=["ReadingDate"])
+    else:
+        raise ValueError(
+            "Required columns missing in DataFrame."
+            "Required at least 'YYYYMMDD' and 'HH' or 'ReadingDate'"
+            )
     coldest_period = pd.Series(False, index=group.index)
     lowest_rolling_avg = group[avg_var].min()
     lowest_rolling_avg_rows = group[group[avg_var] == lowest_rolling_avg]

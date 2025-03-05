@@ -19,6 +19,7 @@ from etdtransform.knmi import (
     weather_columns,
 )
 
+
 def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
     """
     Reads household data tables for different intervals and joins them with an index table.
@@ -46,6 +47,11 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
             etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
         )
         household_table = ibis.read_parquet(household_parquet)
+
+        # conversions for files that are in the 'old' (pre-package) format.
+        if "HuisIdBSV" not in household_table.columns:
+            household_table = household_table.rename(HuisIdBSV="HuisCode")
+        
         hh_joined = join_index_table(household_table)
 
         if include_weather:
@@ -85,7 +91,11 @@ def join_index_table(
         index_table = ibis.read_parquet(
             os.path.join(etdtransform.options.mapped_folder_path, "index.parquet")
         )
-    
+
+    # conversion for old (pre-package version) files:
+    if "HuisIdBSV" not in index_table.columns:
+        index_table = index_table.rename(HuisIdBSV="HuisCode")
+
     return tbl.left_join(index_table, index_join_columns)
 
 def get_weather_data_table() -> ibis.Expr:
