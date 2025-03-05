@@ -449,7 +449,11 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
     lowest_rolling_avg = group[avg_var].min()
     lowest_rolling_avg_rows = group[group[avg_var] == lowest_rolling_avg]
 
-    needed_timesteps = 24 * days
+    # needed_timesteps = 24 * days
+    timedelta = (
+        group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
+    ).total_seconds()
+    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
 
     # Rolling average looks backwards, so the plot also needs to do that.
     for idx in lowest_rolling_avg_rows.index:
@@ -541,6 +545,7 @@ def switch_multiplier(interval_choice):
 
 intervals = ["5min", "15min", "60min", "24h"]
 
+
 def add_normalized_datetime(
     x,
     reference_date=pd.Timestamp("2023-01-02"),
@@ -564,12 +569,12 @@ def add_normalized_datetime(
         The DataFrame or Table with a new column 'normalized_datetime'.
     """
     if isinstance(x, pd.DataFrame):
-        x["time_of_day"] = x[datetime_column].dt.time
-        x["day_of_week"] = x[datetime_column].dt.dayofweek  # Monday=0, Sunday=6
+        x.loc[:, "time_of_day"] = x[datetime_column].dt.time.copy()
+        x.loc[:,"day_of_week"] = x[datetime_column].dt.dayofweek.copy()  # Monday=0, Sunday=6
 
-        x["normalized_datetime"] = x["time_of_day"].apply(
+        x.loc[:,"normalized_datetime"] = x["time_of_day"].apply(
             lambda t: datetime.combine(reference_date + pd.Timedelta(days=0), t),
-        ) + pd.to_timedelta(x["day_of_week"], unit="D")
+        ).copy() + pd.to_timedelta(x["day_of_week"], unit="D")
 
         return x
     elif isinstance(x, ibis.expr.types.Expr):
