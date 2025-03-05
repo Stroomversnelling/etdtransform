@@ -1,7 +1,6 @@
-# etdtransform
-__"Energietransitie Dataset" transformation and loading package__
+# About etdtransform - "Energietransitie Dataset" transformation and loading package
 
-`etdtransform` package provides the required helpers to work with the `Energietransitie Dataset` (ETD). The ETD is a model defining important variables for energy in the built environment, which are used to inform policy and planning decisions in the Netherlands. For an overview of the ETD and all documentation, see <a href="https://energietransitiedataset.nl/">https://energietransitiedataset.nl/</a>.
+The `etdtransform` package provides the required helpers to work with the `Energietransitie Dataset` (ETD). The ETD is a model defining important variables for energy in the built environment, which are used to inform policy and planning decisions in the Netherlands. For an overview of the ETD and all documentation, see <a href="https://energietransitiedataset.nl/">https://energietransitiedataset.nl/</a>.
 
 It depends on `etdmap` for the ETD data model definitions and for some data loading functions. It is expected that any datasets used have already been mapped and undergone basic quality control. See `etdmap` for more information.
 
