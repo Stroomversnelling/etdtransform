@@ -4,17 +4,17 @@ The `etdtransform` package provides the required helpers to work with the `Energ
 
 It depends on `etdmap` for the ETD data model definitions and for some data loading functions. It is expected that any datasets used have already been mapped and undergone basic quality control. See `etdmap` for more information.
 
-## License
+# License
 
 The package may only be used for open processing. You agree to publicly share the intended application, obtained insights, and applied calculation methods under the same license.
 
-## Citation
+# Citation
 
 If you use this package or any code in this package or refer to output, please use the following citations for attribution:
 
 _Witkamp, Dickinson, Izeboud (2024). etdtransform: A Python package for improving the data quality of data in the Energietransitie Dataset (ETD) model._
 
-## Installation
+# Installation
 
 If you want to use this package on its own, you can install it with pip:
 
@@ -24,7 +24,7 @@ cd etdtransform
 pip install .
 ```
 
-### Developing and contributing
+# Developing and contributing
 
 If you would like to contribute to the package code, we would create an environment and install it in editable mode:
 
@@ -36,7 +36,7 @@ source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
 pip install -e .
 ```
 
-## Configuration
+# Configuration
 
 To use most functions in this package, one needs to configure options so that the location of the mapped files created with `etdmap` and the location of aggregated data created with this package is defined up front.
 
@@ -49,7 +49,7 @@ etdtransform.options.weather_folder = 'KNMI_weather_data_folder_path' # path to 
 etdtransform.options.weather_file = 'path_to_KNMI_stations_file' # path to the KNMI weather stations data file
 ```
 
-## Loading mapped data as Ibis tables
+# Loading mapped data as Ibis tables
 
 Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and - after selecting the appropriate columns and filtering the desired rows, and merging with other required data - transforming them to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.
 
@@ -154,13 +154,13 @@ df_calculated = get_hh_table('5min', 'calculated').select(
 ).to_pandas()
 ```
 
-## Transformations to prepare datasets for loading (advanced)
+# Transformations to prepare datasets for loading (advanced)
 
 After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.
 
 _While most users will not need to apply these transformations as the datasets will already have been aggregated, some of the following operations require large amounts of RAM and can surpass 100GB of RAM to run efficiently. Please consider whether you have enough RAM and time available if you are processing the data. In the future, we could reduce the RAM requirements if needed._
 
-### Combining individual building unit data
+## Combining individual building unit data
 
 This step will create a single dataset and remove households marked in the household metadata to not be used (‘Meenemen’). Households with poor data, including missing variables or large amounts of missing data or other data anomolies that cannot be automatically cleaned are marked 0 so they are not included. All other households are marked 1 to include in our transformations.
 
@@ -175,7 +175,7 @@ etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder
 aggregate_hh_data_5min() # this will generate the `household_default.parquet` file in the aggregate data folder
 ```
 
-### Imputation to fill gaps
+## Imputation to fill gaps
 
 Ideally, each data provider has provided 5 minute resolution for all the devices. In some cases, not all variables are available at this level of granularity and in others interval may be 15 minutes or more. In cases where data is given at 5 minute intervals, we take columns that have longer intervals and impute missing values where possible.
 
@@ -196,7 +196,7 @@ The calculated ratio would be 100/50 = 2 so each average change is multiplied by
 
 Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% to 95% of households in each registered moment per project so the resulting average should be representative and useful for imputation.
 
-#### 1. Loading mapped data
+### 1. Loading mapped data
 
 For this step, the data is read from the `household_default.parquet` in the path provided.
 
@@ -211,7 +211,7 @@ df = read_hh_data(interval = 'default')
 
 ```
 
-#### 2. Calculating diff columns and average change per time step
+### 2. Calculating diff columns and average change per time step
 
 We prepare the imputation by first calculating the differences between the consecutive values in cumulative columns to get the change every 5 minutes. These `diff` columns will be added to the dataframe.
 
@@ -232,7 +232,7 @@ Additional files saved to the aggregate folder are:
 - `household_diff_max_bounds.parquet `: maximum differences per variable and the boundary values used to exclude outliers
 - `avg_diffs.parquet`: the average difference per variable per project used for imputation
 
-#### Imputation
+### Imputation
 
 Finally, `impute_hh_data_5min()` will save the imputed dataset in the aggregate folder.
 
@@ -250,7 +250,7 @@ It is possible to use arguments to pass pre-processed or sampled households to t
 
 __As of Fall 2024, most of the imputation is now much faster with the use of a series of simple vectorized operations instead of applying functions over the data. The trade off is that the imputation code is a little less readable.__
 
-### Add calculated columns
+## Add calculated columns
 
 ```python
 
@@ -263,7 +263,7 @@ df_calculated = add_calculated_columns_to_hh_data(df_imputed)
 
 ```
 
-### Resampling to different time intervals
+## Resampling to different time intervals
 
 ```python
 
@@ -277,7 +277,7 @@ resample_hh_data(intervals=["60min", "15min"]) # loads the household_calculated.
 
 ```
 
-### Aggregation of household data to project level data
+## Aggregation of household data to project level data
 
 
 ```python
@@ -296,7 +296,7 @@ aggregate_project_data(intervals=["60min", "15min"]) # aggregates all households
 
 ```
 
-## Loading complete datasets at once
+# Loading complete datasets at once
 
 It is not recommended to load the complete datasets in one go. It will take a lot of time to load and require a significant amount of RAM to store all the data in memory at once. Rather use `get_hh_table()` as described above.`
 
@@ -321,7 +321,7 @@ df_5min = read_hh_data(interval="5min")
 
 ```
 
-## Weather data
+# Weather data
 
 Weather data is downloaded from KNMI and combined with project metadata to identify weather data for the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.
 
