@@ -82,25 +82,27 @@
 <h2>About etdtransform<a class="headerlink" href="#about-etdtransform" title="Link to this heading"></a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">etdtransform</span></code> package provides the required helpers to work with the <code class="docutils literal notranslate"><span class="pre">Energietransitie</span> <span class="pre">Dataset</span></code> (ETD). The ETD is a model defining important variables for energy in the built environment, which are used to inform policy and planning decisions in the Netherlands. For an overview of the ETD and all documentation, see <a href="https://energietransitiedataset.nl/">https://energietransitiedataset.nl/</a>.</p>
 <p>It depends on <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> for the ETD data model definitions and for some data loading functions. It is expected that any datasets used have already been mapped and undergone basic quality control. See <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> for more information.</p>
+</section>
 <section id="license">
-<h3>License<a class="headerlink" href="#license" title="Link to this heading"></a></h3>
+<h2>License<a class="headerlink" href="#license" title="Link to this heading"></a></h2>
 <p>The package may only be used for open processing. You agree to publicly share the intended application, obtained insights, and applied calculation methods under the same license.</p>
 </section>
 <section id="citation">
-<h3>Citation<a class="headerlink" href="#citation" title="Link to this heading"></a></h3>
+<h2>Citation<a class="headerlink" href="#citation" title="Link to this heading"></a></h2>
 <p>If you use this package or any code in this package or refer to output, please use the following citations for attribution:</p>
 <p><em>Witkamp, Dickinson, Izeboud (2024). etdtransform: A Python package for improving the data quality of data in the Energietransitie Dataset (ETD) model.</em></p>
 </section>
 <section id="installation">
-<h3>Installation<a class="headerlink" href="#installation" title="Link to this heading"></a></h3>
+<h2>Installation<a class="headerlink" href="#installation" title="Link to this heading"></a></h2>
 <p>If you want to use this package on its own, you can install it with pip:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/Stroomversnelling/etdtransform.git
 <span class="nb">cd</span><span class="w"> </span>etdtransform
 pip<span class="w"> </span>install<span class="w"> </span>.
 </pre></div>
 </div>
+</section>
 <section id="developing-and-contributing">
-<h4>Developing and contributing<a class="headerlink" href="#developing-and-contributing" title="Link to this heading"></a></h4>
+<h2>Developing and contributing<a class="headerlink" href="#developing-and-contributing" title="Link to this heading"></a></h2>
 <p>If you would like to contribute to the package code, we would create an environment and install it in editable mode:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/Stroomversnelling/etdtransform.git
 <span class="nb">cd</span><span class="w"> </span>etdtransform
@@ -110,9 +112,8 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </pre></div>
 </div>
 </section>
-</section>
 <section id="configuration">
-<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading"></a></h3>
+<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading"></a></h2>
 <p>To use most functions in this package, one needs to configure options so that the location of the mapped files created with <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> and the location of aggregated data created with this package is defined up front.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">etdtransform</span>
 
@@ -124,7 +125,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="loading-mapped-data-as-ibis-tables">
-<h3>Loading mapped data as Ibis tables<a class="headerlink" href="#loading-mapped-data-as-ibis-tables" title="Link to this heading"></a></h3>
+<h2>Loading mapped data as Ibis tables<a class="headerlink" href="#loading-mapped-data-as-ibis-tables" title="Link to this heading"></a></h2>
 <p>Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and - after selecting the appropriate columns and filtering the desired rows, and merging with other required data - transforming them to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.</p>
 <p>There are two main types of aggregated ETD datasets:</p>
 <ul class="simple">
@@ -222,11 +223,11 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="transformations-to-prepare-datasets-for-loading-advanced">
-<h3>Transformations to prepare datasets for loading (advanced)<a class="headerlink" href="#transformations-to-prepare-datasets-for-loading-advanced" title="Link to this heading"></a></h3>
+<h2>Transformations to prepare datasets for loading (advanced)<a class="headerlink" href="#transformations-to-prepare-datasets-for-loading-advanced" title="Link to this heading"></a></h2>
 <p>After data from different data sources are mapped to the ETD data model using the <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.</p>
 <p><em>While most users will not need to apply these transformations as the datasets will already have been aggregated, some of the following operations require large amounts of RAM and can surpass 100GB of RAM to run efficiently. Please consider whether you have enough RAM and time available if you are processing the data. In the future, we could reduce the RAM requirements if needed.</em></p>
 <section id="combining-individual-building-unit-data">
-<h4>Combining individual building unit data<a class="headerlink" href="#combining-individual-building-unit-data" title="Link to this heading"></a></h4>
+<h3>Combining individual building unit data<a class="headerlink" href="#combining-individual-building-unit-data" title="Link to this heading"></a></h3>
 <p>This step will create a single dataset and remove households marked in the household metadata to not be used (‘Meenemen’). Households with poor data, including missing variables or large amounts of missing data or other data anomolies that cannot be automatically cleaned are marked 0 so they are not included. All other households are marked 1 to include in our transformations.</p>
 <p>For nearly 300 househoulds, it requires over 25GB of RAM to run efficiently. This function will save <code class="docutils literal notranslate"><span class="pre">household_default.parquet</span></code>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform</span><span class="w"> </span><span class="kn">import</span> <span class="n">aggregate_hh_data_5min</span>
@@ -239,7 +240,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="imputation-to-fill-gaps">
-<h4>Imputation to fill gaps<a class="headerlink" href="#imputation-to-fill-gaps" title="Link to this heading"></a></h4>
+<h3>Imputation to fill gaps<a class="headerlink" href="#imputation-to-fill-gaps" title="Link to this heading"></a></h3>
 <p>Ideally, each data provider has provided 5 minute resolution for all the devices. In some cases, not all variables are available at this level of granularity and in others interval may be 15 minutes or more. In cases where data is given at 5 minute intervals, we take columns that have longer intervals and impute missing values where possible.</p>
 <p>Gaps in data are filled in different ways based on the patterns we found in the raw data. There are a few different imputation techniques that are used to impute the <strong>expected change in cumulative variables</strong>:</p>
 <ul class="simple">
@@ -257,7 +258,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <p>The calculated ratio would be 100/50 = 2 so each average change is multiplied by 2.0 and these scaled values are used to fill in the gap.</p>
 <p>Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% to 95% of households in each registered moment per project so the resulting average should be representative and useful for imputation.</p>
 <section id="loading-mapped-data">
-<h5>1. Loading mapped data<a class="headerlink" href="#loading-mapped-data" title="Link to this heading"></a></h5>
+<h4>1. Loading mapped data<a class="headerlink" href="#loading-mapped-data" title="Link to this heading"></a></h4>
 <p>For this step, the data is read from the <code class="docutils literal notranslate"><span class="pre">household_default.parquet</span></code> in the path provided.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">etdtransform</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
@@ -271,7 +272,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="calculating-diff-columns-and-average-change-per-time-step">
-<h5>2. Calculating diff columns and average change per time step<a class="headerlink" href="#calculating-diff-columns-and-average-change-per-time-step" title="Link to this heading"></a></h5>
+<h4>2. Calculating diff columns and average change per time step<a class="headerlink" href="#calculating-diff-columns-and-average-change-per-time-step" title="Link to this heading"></a></h4>
 <p>We prepare the imputation by first calculating the differences between the consecutive values in cumulative columns to get the change every 5 minutes. These <code class="docutils literal notranslate"><span class="pre">diff</span></code> columns will be added to the dataframe.</p>
 <p>The average <code class="docutils literal notranslate"><span class="pre">diff</span></code> per 5 minutes in a project is used to impute values.  The average difference between timesteps for all cumulative variables is saved in a series of files by <code class="docutils literal notranslate"><span class="pre">prepare_diffs_for_impute()</span></code>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># pre-sort rows to speed up the process</span>
@@ -290,7 +291,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </ul>
 </section>
 <section id="imputation">
-<h5>Imputation<a class="headerlink" href="#imputation" title="Link to this heading"></a></h5>
+<h4>Imputation<a class="headerlink" href="#imputation" title="Link to this heading"></a></h4>
 <p>Finally, <code class="docutils literal notranslate"><span class="pre">impute_hh_data_5min()</span></code> will save the imputed dataset in the aggregate folder.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">impute_hh_data_5min</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">cum_cols</span><span class="o">=</span><span class="n">cum_cols_list</span><span class="p">,</span> <span class="nb">sorted</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">diffs_calculated</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -306,7 +307,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </section>
 </section>
 <section id="add-calculated-columns">
-<h4>Add calculated columns<a class="headerlink" href="#add-calculated-columns" title="Link to this heading"></a></h4>
+<h3>Add calculated columns<a class="headerlink" href="#add-calculated-columns" title="Link to this heading"></a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.calculated_columns</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_calculated_columns_to_hh_data</span>
@@ -319,7 +320,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="resampling-to-different-time-intervals">
-<h4>Resampling to different time intervals<a class="headerlink" href="#resampling-to-different-time-intervals" title="Link to this heading"></a></h4>
+<h3>Resampling to different time intervals<a class="headerlink" href="#resampling-to-different-time-intervals" title="Link to this heading"></a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.calculated_columns</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_calculated_columns_to_hh_data</span>
@@ -333,7 +334,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="aggregation-of-household-data-to-project-level-data">
-<h4>Aggregation of household data to project level data<a class="headerlink" href="#aggregation-of-household-data-to-project-level-data" title="Link to this heading"></a></h4>
+<h3>Aggregation of household data to project level data<a class="headerlink" href="#aggregation-of-household-data-to-project-level-data" title="Link to this heading"></a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.calculated_columns</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_calculated_columns_to_hh_data</span>
@@ -352,7 +353,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </section>
 </section>
 <section id="loading-complete-datasets-at-once">
-<h3>Loading complete datasets at once<a class="headerlink" href="#loading-complete-datasets-at-once" title="Link to this heading"></a></h3>
+<h2>Loading complete datasets at once<a class="headerlink" href="#loading-complete-datasets-at-once" title="Link to this heading"></a></h2>
 <p>It is not recommended to load the complete datasets in one go. It will take a lot of time to load and require a significant amount of RAM to store all the data in memory at once. Rather use <code class="docutils literal notranslate"><span class="pre">get_hh_table()</span></code> as described above.`</p>
 <p>Some of the older workflows still do this:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
@@ -375,9 +376,8 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="weather-data">
-<h3>Weather data<a class="headerlink" href="#weather-data" title="Link to this heading"></a></h3>
+<h2>Weather data<a class="headerlink" href="#weather-data" title="Link to this heading"></a></h2>
 <p>Weather data is downloaded from KNMI and combined with project metadata to identify weather data for the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.</p>
-</section>
 </section>
 </section>
 <section id="indices-and-tables">
