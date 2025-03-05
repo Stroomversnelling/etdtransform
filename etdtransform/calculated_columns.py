@@ -459,11 +459,14 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
     lowest_rolling_avg = group[avg_var].min()
     lowest_rolling_avg_rows = group[group[avg_var] == lowest_rolling_avg]
 
-    # needed_timesteps = 24 * days
-    time_delta = (
-        group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
-    ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
+    # weather data has day-data
+    needed_timesteps = 24 * days
+    if "ReadingDate" in group.columns:  # Assuming YYYYMMDD and HH are present
+        time_delta = (
+            group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
+        ).total_seconds()
+        needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
+
     # Rolling average looks backwards, so the plot also needs to do that.
     for idx in lowest_rolling_avg_rows.index:
         end_idx = group.index.get_loc(idx)
