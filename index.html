@@ -139,13 +139,13 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </section>
 <section id="loading-mapped-data-as-ibis-tables">
 <h3>Loading mapped data as Ibis tables<a class="headerlink" href="#loading-mapped-data-as-ibis-tables" title="Link to this heading"></a></h3>
-<p>Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and after the selecting the right columns and filtering the desired rows, and merging with other required data, we will transform it to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.</p>
+<p>Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and - after selecting the appropriate columns and filtering the desired rows, and merging with other required data - transforming them to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.</p>
 <p>There are two main types of aggregated ETD datasets:</p>
 <ul class="simple">
 <li><p>data for individually connected units in the built environment, such as a household or, perhaps in the future, a charging point, and</p></li>
 <li><p>project level data, an aggregated collection of network connected units based on <code class="docutils literal notranslate"><span class="pre">ProjectIdBSV</span></code> and often representing a limited geographic scope, e.g. a neighborhood.</p></li>
 </ul>
-<p>Building units are usually a single household and may represent an apartment or other home. The data from building units is described in the <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> package.</p>
+<p>Building units are usually a single household and may represent an apartment or other type of home. The data from building units is described in the <code class="docutils literal notranslate"><span class="pre">etdmap</span></code> package.</p>
 <p>To load household data, use the following:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.load_data</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_household_tables</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ibis</span>
@@ -184,7 +184,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 
 </pre></div>
 </div>
-<p>Projects are a collection of connected units. Often these were redeveloped at the same time or are geographically clustered. It can be a proxy for a neighborhood. Each project has also its own metadata.</p>
+<p>Projects are a collection of connected units (mostly: homes) with similar characteristics. Often these were redeveloped at the same time using similar insulation and installation choices. It can be a proxy for a neighborhood. Each project has its own metadata.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.load_data</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_project_tables</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ibis</span>
@@ -258,18 +258,18 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <p>Gaps in data are filled in different ways based on the patterns we found in the raw data. There are a few different imputation techniques that are used to impute the <strong>expected change in cumulative variables</strong>:</p>
 <ul class="simple">
 <li><p>Filling in 0s where there is a gap in data but no subsequent change in later cumulative values</p></li>
-<li><p>Filling in 0s where the cumulative value have decreased but should not normally. For example, when an energy meter counter is reset to 0 and then increases again. The assumption is that there has been no real change.</p></li>
-<li><p>Filling in based on the <em>project average change</em> where there is no data in a household but data is available from other households in the same project. This average is scaled so that the change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.</p></li>
-<li><p>Filling in linearly where there is insufficient data from other households to calculate an average change over the period.</p></li>
+<li><p>Filling in 0s where the cumulative value has decreased but should not normally. For example, when a cumulative energy meter counter jumps down to 0 and then increases again to the value it had before the jump to 0. The assumption is that there has been no real change and there was a data registration anomaly.</p></li>
+<li><p>Filling in based on the <em>project average change</em> where there is no data in a household but data is available from other households in the same project. This average is scaled so that the total change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.</p></li>
+<li><p>Filling in linearly where there is insufficient data from other households to calculate an average change over the period. This is only applied on cumulative variables and when the missing data covers a small time period.</p></li>
 </ul>
 <p>Some of these imputation methods will reduce the variance of the dataset. Taking this into account, it is important to exclude datasets with too much missing data and consider this during analysis and interpretation as several measures such as the IQR or standard deviation may be sensitive to the imputation. By carefully selecting datasets and ensure project data is never missing from many households at any one point in time, these effects are very small.</p>
 <p>When the project average change is used, the scaling factor is calculated with the ratio between:</p>
 <ul class="simple">
 <li><p>the difference between cumulative values in the household before and after the gap in data, e.g. if the last cumulative value was 222 and the next was 322, then the gap jump is 100, and</p></li>
-<li><p>the sum of project change over the same period, e.g the average change in this variable over all households in the project is 50.</p></li>
+<li><p>the sum of project change over the same period, e.g the average change in this variable over all households in the project, for this example taken to be 50.</p></li>
 </ul>
 <p>The calculated ratio would be 100/50 = 2 so each average change is multiplied by 2.0 and these scaled values are used to fill in the gap.</p>
-<p>Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% - 95%  of households in each registered moment per project so the resulting average should be representative and useful for imputation.</p>
+<p>Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% to 95% of households in each registered moment per project so the resulting average should be representative and useful for imputation.</p>
 <section id="loading-mapped-data">
 <h5>1. Loading mapped data<a class="headerlink" href="#loading-mapped-data" title="Link to this heading"></a></h5>
 <p>For this step, the data is read from the <code class="docutils literal notranslate"><span class="pre">household_default.parquet</span></code> in the path provided.</p>
@@ -368,7 +368,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <section id="loading-complete-datasets-at-once">
 <h3>Loading complete datasets at once<a class="headerlink" href="#loading-complete-datasets-at-once" title="Link to this heading"></a></h3>
 <p>It is not recommended to load the complete datasets in one go. It will take a lot of time to load and require a significant amount of RAM to store all the data in memory at once. Rather use <code class="docutils literal notranslate"><span class="pre">get_hh_table()</span></code> as described above.`</p>
-<p>Some of the older workflows still do this.</p>
+<p>Some of the older workflows still do this:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">etdtransform.aggregate</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_hh_data</span>
 
 <span class="n">etdtransform</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">aggregate_folder</span> <span class="o">=</span> <span class="s1">&#39;aggregate_folder_path&#39;</span> <span class="c1"># path to folder where aggregated files are stored</span>
@@ -390,7 +390,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </section>
 <section id="weather-data">
 <h3>Weather data<a class="headerlink" href="#weather-data" title="Link to this heading"></a></h3>
-<p>Weather data is downloaded from KNMI and combined with project metadata to identify the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.</p>
+<p>Weather data is downloaded from KNMI and combined with project metadata to identify weather data for the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.</p>
 </section>
 </section>
 </section>
