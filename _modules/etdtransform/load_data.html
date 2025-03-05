@@ -124,7 +124,7 @@
         <span class="c1"># conversions for files that are in the &#39;old&#39; (pre-package) format.</span>
         <span class="k">if</span> <span class="s2">&quot;HuisIdBSV&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">household_table</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
             <span class="n">household_table</span> <span class="o">=</span> <span class="n">household_table</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">HuisIdBSV</span><span class="o">=</span><span class="s2">&quot;HuisCode&quot;</span><span class="p">)</span>
-        
+
         <span class="n">hh_joined</span> <span class="o">=</span> <span class="n">join_index_table</span><span class="p">(</span><span class="n">household_table</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">include_weather</span><span class="p">:</span>
@@ -375,10 +375,11 @@
     <span class="p">)</span>
 
     <span class="c1"># Extract hour (HH) and date (YYYYMMDD) for the join</span>
-    <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">mutate</span><span class="p">(</span>
-        <span class="n">HH</span><span class="o">=</span><span class="n">tbl</span><span class="o">.</span><span class="n">ReadingDate</span><span class="o">.</span><span class="n">hour</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
-        <span class="n">YYYYMMDD</span><span class="o">=</span><span class="n">tbl</span><span class="o">.</span><span class="n">ReadingDate</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y%m</span><span class="si">%d</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;int&quot;</span><span class="p">),</span>
-    <span class="p">)</span>
+    <span class="k">if</span> <span class="s1">&#39;YYYYMMDD&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">tbl</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">mutate</span><span class="p">(</span>
+            <span class="n">HH</span><span class="o">=</span><span class="n">tbl</span><span class="o">.</span><span class="n">ReadingDate</span><span class="o">.</span><span class="n">hour</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="n">YYYYMMDD</span><span class="o">=</span><span class="n">tbl</span><span class="o">.</span><span class="n">ReadingDate</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y%m</span><span class="si">%d</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;int&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
 
     <span class="c1"># Join with weather data</span>
     <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">left_join</span><span class="p">(</span>
@@ -473,12 +474,13 @@
             <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">,</span>
         <span class="p">)</span>
 
-        <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;HH&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%H&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
-        <span class="p">)</span>
-        <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;YYYYMMDD&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y%m</span><span class="si">%d</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
-        <span class="p">)</span>
+        <span class="k">if</span> <span class="s2">&quot;YYYYMMDD&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">dfs</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;HH&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%H&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="p">)</span>
+            <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;YYYYMMDD&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">][</span><span class="s2">&quot;ReadingDate&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y%m</span><span class="si">%d</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+            <span class="p">)</span>
 
         <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span>
             <span class="n">dfs</span><span class="p">[</span><span class="n">interval</span><span class="p">],</span>
