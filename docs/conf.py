@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath('../etdtransform'))
 project = 'etdtransform - "Energietransitie Dataset" transformation and loading package'
 copyright = '2025, Nicolas Dickinson, Marten Witkamp, Petra Izeboud'
 author = 'Nicolas Dickinson, Marten Witkamp, Petra Izeboud'
-release = '2025'
+release = '0.1.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
