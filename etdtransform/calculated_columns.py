@@ -192,7 +192,7 @@ def add_rolling_avg(
     """
     group = group.sort_values("ReadingDate")
 
-    timedelta = (
+    time_delta = (
         group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
     ).total_seconds()
     needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
@@ -450,10 +450,10 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
     lowest_rolling_avg_rows = group[group[avg_var] == lowest_rolling_avg]
 
     # needed_timesteps = 24 * days
-    timedelta = (
+    time_delta = (
         group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
     ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
+    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
 
     # Rolling average looks backwards, so the plot also needs to do that.
     for idx in lowest_rolling_avg_rows.index:
@@ -496,10 +496,10 @@ def mark_highest_peak(group, var="ElektriciteitsgebruikTotaalNetto", days=6):
     highest_peak = group[var].max()
     highest_peak_rows = group[group[var] == highest_peak]
 
-    timedelta = (
+    time_delta = (
         group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
     ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
+    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
 
     for idx in highest_peak_rows.index:
         start_idx = group.index.get_loc(idx) - math.ceil(needed_timesteps / 2)
