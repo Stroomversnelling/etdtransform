@@ -280,7 +280,7 @@ def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr]
 
     # Join project table with project weather station data
     tbl = tbl.left_join(
-        weather_station_table, tbl.ProjectIdBSV == weather_station_table.ProjectIdBSV
+        weather_station_table, tbl.Weerstation == weather_station_table.Weerstation
     ).select(
         [
             tbl,
