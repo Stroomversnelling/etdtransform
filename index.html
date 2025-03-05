@@ -78,12 +78,83 @@
 <li class="toctree-l1"><a class="reference internal" href="source/modules.html">etdtransform</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="source/etdtransform.html">etdtransform package</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#submodules">Submodules</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.aggregate">etdtransform.aggregate module</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.calculated_columns">etdtransform.calculated_columns module</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.impute">etdtransform.impute module</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.knmi">etdtransform.knmi module</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.load_data">etdtransform.load_data module</a></li>
-<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.vectorized_impute">etdtransform.vectorized_impute module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.aggregate">etdtransform.aggregate module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.read_hh_data"><code class="docutils literal notranslate"><span class="pre">read_hh_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.add_index_columns"><code class="docutils literal notranslate"><span class="pre">add_index_columns()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_hh_data_5min"><code class="docutils literal notranslate"><span class="pre">aggregate_hh_data_5min()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.impute_hh_data_5min"><code class="docutils literal notranslate"><span class="pre">impute_hh_data_5min()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.add_calculated_columns_to_hh_data"><code class="docutils literal notranslate"><span class="pre">add_calculated_columns_to_hh_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.read_aggregate"><code class="docutils literal notranslate"><span class="pre">read_aggregate()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.get_aggregate_table"><code class="docutils literal notranslate"><span class="pre">get_aggregate_table()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_hh_data"><code class="docutils literal notranslate"><span class="pre">resample_hh_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_project_data"><code class="docutils literal notranslate"><span class="pre">aggregate_project_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_and_save"><code class="docutils literal notranslate"><span class="pre">aggregate_and_save()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_by_columns"><code class="docutils literal notranslate"><span class="pre">aggregate_by_columns()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_variable"><code class="docutils literal notranslate"><span class="pre">aggregate_variable()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_diff_cumsum"><code class="docutils literal notranslate"><span class="pre">aggregate_diff_cumsum()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_sum"><code class="docutils literal notranslate"><span class="pre">aggregate_sum()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_max"><code class="docutils literal notranslate"><span class="pre">aggregate_max()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.aggregate_avg"><code class="docutils literal notranslate"><span class="pre">aggregate_avg()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_and_save"><code class="docutils literal notranslate"><span class="pre">resample_and_save()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_by_columns"><code class="docutils literal notranslate"><span class="pre">resample_by_columns()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_variable"><code class="docutils literal notranslate"><span class="pre">resample_variable()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_max"><code class="docutils literal notranslate"><span class="pre">resample_max()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_sum"><code class="docutils literal notranslate"><span class="pre">resample_sum()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.aggregate.resample_avg"><code class="docutils literal notranslate"><span class="pre">resample_avg()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.calculated_columns">etdtransform.calculated_columns module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.add_calculated_columns_imputed_data"><code class="docutils literal notranslate"><span class="pre">add_calculated_columns_imputed_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.add_rolling_avg"><code class="docutils literal notranslate"><span class="pre">add_rolling_avg()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.get_highest_avg_period"><code class="docutils literal notranslate"><span class="pre">get_highest_avg_period()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.gelijktijdigheid"><code class="docutils literal notranslate"><span class="pre">gelijktijdigheid()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.get_lowest_avg_period"><code class="docutils literal notranslate"><span class="pre">get_lowest_avg_period()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.mark_coldest_two_weeks"><code class="docutils literal notranslate"><span class="pre">mark_coldest_two_weeks()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.mark_highest_peak"><code class="docutils literal notranslate"><span class="pre">mark_highest_peak()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.switch_multiplier"><code class="docutils literal notranslate"><span class="pre">switch_multiplier()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.calculated_columns.add_normalized_datetime"><code class="docutils literal notranslate"><span class="pre">add_normalized_datetime()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.impute">etdtransform.impute module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.calculate_average_diff"><code class="docutils literal notranslate"><span class="pre">calculate_average_diff()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.concatenate_household_max_with_bounds"><code class="docutils literal notranslate"><span class="pre">concatenate_household_max_with_bounds()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.concatenate_avg_diff_columns"><code class="docutils literal notranslate"><span class="pre">concatenate_avg_diff_columns()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.equal_sig_fig"><code class="docutils literal notranslate"><span class="pre">equal_sig_fig()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.validate_household_column"><code class="docutils literal notranslate"><span class="pre">validate_household_column()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.get_reading_date_imputation_stats"><code class="docutils literal notranslate"><span class="pre">get_reading_date_imputation_stats()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.sort_for_impute"><code class="docutils literal notranslate"><span class="pre">sort_for_impute()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.get_diff_columns"><code class="docutils literal notranslate"><span class="pre">get_diff_columns()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.prepare_diffs_for_impute"><code class="docutils literal notranslate"><span class="pre">prepare_diffs_for_impute()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.read_diffs"><code class="docutils literal notranslate"><span class="pre">read_diffs()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.impute.process_and_impute"><code class="docutils literal notranslate"><span class="pre">process_and_impute()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.knmi">etdtransform.knmi module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.knmi.get_project_weather_station_data"><code class="docutils literal notranslate"><span class="pre">get_project_weather_station_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.knmi.get_weather_data"><code class="docutils literal notranslate"><span class="pre">get_weather_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.knmi.load_knmi_weather_data"><code class="docutils literal notranslate"><span class="pre">load_knmi_weather_data()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.load_data">etdtransform.load_data module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.get_household_tables"><code class="docutils literal notranslate"><span class="pre">get_household_tables()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.join_index_table"><code class="docutils literal notranslate"><span class="pre">join_index_table()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.get_weather_data_table"><code class="docutils literal notranslate"><span class="pre">get_weather_data_table()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.get_weather_station_table"><code class="docutils literal notranslate"><span class="pre">get_weather_station_table()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.join_weather_data"><code class="docutils literal notranslate"><span class="pre">join_weather_data()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.get_project_tables"><code class="docutils literal notranslate"><span class="pre">get_project_tables()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.load_data.get_dfs"><code class="docutils literal notranslate"><span class="pre">get_dfs()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform.vectorized_impute">etdtransform.vectorized_impute module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.ImputeType"><code class="docutils literal notranslate"><span class="pre">ImputeType</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.apply_thresholds"><code class="docutils literal notranslate"><span class="pre">apply_thresholds()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.drop_temp_cols"><code class="docutils literal notranslate"><span class="pre">drop_temp_cols()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.impute_and_normalize"><code class="docutils literal notranslate"><span class="pre">impute_and_normalize()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.methods_to_bitwise"><code class="docutils literal notranslate"><span class="pre">methods_to_bitwise()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.process_gap_and_cumulative_groups"><code class="docutils literal notranslate"><span class="pre">process_gap_and_cumulative_groups()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="source/etdtransform.html#etdtransform.vectorized_impute.process_imputation_vectorized"><code class="docutils literal notranslate"><span class="pre">process_imputation_vectorized()</span></code></a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="source/etdtransform.html#module-etdtransform">Module contents</a></li>
 </ul>
 </li>
