@@ -279,8 +279,14 @@ def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr]
         weather_station_table = get_weather_station_table()
 
     # Join project table with project weather station data
+
+    if 'Weerstation' in tbl.columns():
+        tbl = tbl.drop('Weerstation')
+    if 'STN' in tbl.columns():
+        tbl = tbl.drop('STN')
+
     tbl = tbl.left_join(
-        weather_station_table, tbl.Weerstation == weather_station_table.Weerstation
+        weather_station_table, tbl.ProjectIdBSV == weather_station_table.ProjectIdBSV
     ).select(
         [
             tbl,
