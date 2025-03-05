@@ -248,10 +248,15 @@ def get_highest_avg_period(group, avg_var="RollingAverage", days=14):
     highest_rolling_avg = group[avg_var].max()
     highest_rolling_avg_rows = group[group[avg_var] == highest_rolling_avg]
 
-    timedelta = (
-        group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
-    ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
+    # if directly from weather station, timestamp is in hours.
+    needed_timesteps = 24 * days
+
+    # if reading data is in columns, we can determine the timestamp
+    if 'ReadingData' in group.columns:
+        time_delta = (
+            group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
+        ).total_seconds()
+        needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
 
     for idx in highest_rolling_avg_rows.index:
         # start_time = group.loc[idx, 'ReadingDate']
@@ -374,10 +379,15 @@ def get_lowest_avg_period(group, avg_var="RollingAvg_Temperatuur", days=14):
     lowest_rolling_avg = group[avg_var].min()
     lowest_rolling_avg_rows = group[group[avg_var] == lowest_rolling_avg]
 
-    timedelta = (
-        group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
-    ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
+    # if reading data is in columns, we can determine the timestamp
+    if 'ReadingData' in group.columns:
+        time_delta = (
+            group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
+        ).total_seconds()
+        needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
+    else:
+        # if directly from weather station, timestamp is in hours.
+        needed_timesteps = 24 * days
 
     for idx in lowest_rolling_avg_rows.index:
         # start_time = group.loc[idx, 'ReadingDate']
@@ -454,7 +464,6 @@ def mark_coldest_two_weeks(group, avg_var="TemperatuurRA", days=14):
         group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
     ).total_seconds()
     needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
-
     # Rolling average looks backwards, so the plot also needs to do that.
     for idx in lowest_rolling_avg_rows.index:
         end_idx = group.index.get_loc(idx)

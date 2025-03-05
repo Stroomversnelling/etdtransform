@@ -51,7 +51,7 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
         # conversions for files that are in the 'old' (pre-package) format.
         if "HuisIdBSV" not in household_table.columns:
             household_table = household_table.rename(HuisIdBSV="HuisCode")
-        
+
         hh_joined = join_index_table(household_table)
 
         if include_weather:
@@ -290,10 +290,11 @@ def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr]
     )
 
     # Extract hour (HH) and date (YYYYMMDD) for the join
-    tbl = tbl.mutate(
-        HH=tbl.ReadingDate.hour() + 1,
-        YYYYMMDD=tbl.ReadingDate.strftime("%Y%m%d").cast("int"),
-    )
+    if 'YYYYMMDD' not in tbl.columns:
+        tbl = tbl.mutate(
+            HH=tbl.ReadingDate.hour() + 1,
+            YYYYMMDD=tbl.ReadingDate.strftime("%Y%m%d").cast("int"),
+        )
 
     # Join with weather data
     tbl = tbl.left_join(
@@ -382,12 +383,13 @@ def get_dfs():
             how="left",
         )
 
-        dfs[interval]["HH"] = (
-            dfs[interval]["ReadingDate"].dt.strftime("%H").astype(int) + 1
-        )
-        dfs[interval]["YYYYMMDD"] = (
-            dfs[interval]["ReadingDate"].dt.strftime("%Y%m%d").astype(int)
-        )
+        if "YYYYMMDD" not in dfs.columns:
+            dfs[interval]["HH"] = (
+                dfs[interval]["ReadingDate"].dt.strftime("%H").astype(int) + 1
+            )
+            dfs[interval]["YYYYMMDD"] = (
+                dfs[interval]["ReadingDate"].dt.strftime("%Y%m%d").astype(int)
+            )
 
         dfs[interval] = pd.merge(
             dfs[interval],
