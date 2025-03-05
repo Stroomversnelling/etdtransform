@@ -7,10 +7,14 @@ name = "etdtransform"
 version = "0.1.0"
 description = "Mapping helper functions for EnergieTransitieDataset."
 readme = "README.md"
-authors = [{ name = "Nicolas Dickinson", email = "dickinson@washnote.com"}]
+authors = [
+    { name = "Nicolas Dickinson", email = "dickinson@washnote.com"},
+    { name = 'Petra Izeboud', email = 'petra.izeboud@live.nl'},
+    { name = "Marten Witkamp", email = "marten@wattopia.nl"},
+    ]
 maintainers = [
-    {name = "Nicolas Dickinson", email = "dickinson@washnote.com"},
-    {name = 'Petra Izeboud', email = 'petra.izeboud@live.nl'},
+    { name = "Nicolas Dickinson", email = "dickinson@washnote.com"},
+    { name = 'Petra Izeboud', email = 'petra.izeboud@live.nl'},
     ]
 requires-python = ">= 3.9"
 dependencies = [
