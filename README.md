@@ -52,14 +52,14 @@ etdtransform.options.weather_file = 'path_to_KNMI_stations_file' # path to the K
 
 ## Loading mapped data as Ibis tables
 
-Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and after the selecting the right columns and filtering the desired rows, and merging with other required data, we will transform it to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.
+Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and - after selecting the appropriate columns and filtering the desired rows, and merging with other required data - transforming them to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.
 
 There are two main types of aggregated ETD datasets:
 
 - data for individually connected units in the built environment, such as a household or, perhaps in the future, a charging point, and
 - project level data, an aggregated collection of network connected units based on `ProjectIdBSV` and often representing a limited geographic scope, e.g. a neighborhood.
 
-Building units are usually a single household and may represent an apartment or other home. The data from building units is described in the `etdmap` package. 
+Building units are usually a single household and may represent an apartment or other type of home. The data from building units is described in the `etdmap` package. 
 
 To load household data, use the following:
 
@@ -101,7 +101,7 @@ household_df = household_5min.to_pandas()
 
 ```
 
-Projects are a collection of connected units. Often these were redeveloped at the same time or are geographically clustered. It can be a proxy for a neighborhood. Each project has also its own metadata.
+Projects are a collection of connected units (mostly: homes) with similar characteristics. Often these were redeveloped at the same time using similar insulation and installation choices. It can be a proxy for a neighborhood. Each project has its own metadata.
 
 ```python
 
@@ -182,20 +182,20 @@ Ideally, each data provider has provided 5 minute resolution for all the devices
 
 Gaps in data are filled in different ways based on the patterns we found in the raw data. There are a few different imputation techniques that are used to impute the **expected change in cumulative variables**:
 - Filling in 0s where there is a gap in data but no subsequent change in later cumulative values
-- Filling in 0s where the cumulative value have decreased but should not normally. For example, when an energy meter counter is reset to 0 and then increases again. The assumption is that there has been no real change.
-- Filling in based on the _project average change_ where there is no data in a household but data is available from other households in the same project. This average is scaled so that the change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.
-- Filling in linearly where there is insufficient data from other households to calculate an average change over the period.
+- Filling in 0s where the cumulative value has decreased but should not normally. For example, when a cumulative energy meter counter jumps down to 0 and then increases again to the value it had before the jump to 0. The assumption is that there has been no real change and there was a data registration anomaly.
+- Filling in based on the _project average change_ where there is no data in a household but data is available from other households in the same project. This average is scaled so that the total change over the missing time period matches the next available cumulative value. The scaling factor is calculated with the ratio between actual change in the household and the project average change over the same period.
+- Filling in linearly where there is insufficient data from other households to calculate an average change over the period. This is only applied on cumulative variables and when the missing data covers a small time period.
 
 Some of these imputation methods will reduce the variance of the dataset. Taking this into account, it is important to exclude datasets with too much missing data and consider this during analysis and interpretation as several measures such as the IQR or standard deviation may be sensitive to the imputation. By carefully selecting datasets and ensure project data is never missing from many households at any one point in time, these effects are very small.
 
 When the project average change is used, the scaling factor is calculated with the ratio between:
 
 - the difference between cumulative values in the household before and after the gap in data, e.g. if the last cumulative value was 222 and the next was 322, then the gap jump is 100, and
-- the sum of project change over the same period, e.g the average change in this variable over all households in the project is 50.
+- the sum of project change over the same period, e.g the average change in this variable over all households in the project, for this example taken to be 50.
 
 The calculated ratio would be 100/50 = 2 so each average change is multiplied by 2.0 and these scaled values are used to fill in the gap.
 
-Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% - 95%  of households in each registered moment per project so the resulting average should be representative and useful for imputation.
+Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% to 95% of households in each registered moment per project so the resulting average should be representative and useful for imputation.
 
 #### 1. Loading mapped data
 
@@ -301,7 +301,7 @@ aggregate_project_data(intervals=["60min", "15min"]) # aggregates all households
 
 It is not recommended to load the complete datasets in one go. It will take a lot of time to load and require a significant amount of RAM to store all the data in memory at once. Rather use `get_hh_table()` as described above.`
 
-Some of the older workflows still do this.
+Some of the older workflows still do this:
 
 ```python
 from etdtransform.aggregate import read_hh_data
@@ -324,7 +324,7 @@ df_5min = read_hh_data(interval="5min")
 
 ## Weather data
 
-Weather data is downloaded from KNMI and combined with project metadata to identify the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.
+Weather data is downloaded from KNMI and combined with project metadata to identify weather data for the closest weather station for each project. Weather data is merged with household and project datasets based on the available 1 hour resolution data. This occurs during the loading step and can be skipped to speed up data processing during analysis should the weather data not be required.
 
 
 
