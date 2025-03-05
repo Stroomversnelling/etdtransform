@@ -364,8 +364,14 @@
         <span class="n">weather_station_table</span> <span class="o">=</span> <span class="n">get_weather_station_table</span><span class="p">()</span>
 
     <span class="c1"># Join project table with project weather station data</span>
+
+    <span class="k">if</span> <span class="s1">&#39;Weerstation&#39;</span> <span class="ow">in</span> <span class="n">tbl</span><span class="o">.</span><span class="n">columns</span><span class="p">():</span>
+        <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s1">&#39;Weerstation&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s1">&#39;STN&#39;</span> <span class="ow">in</span> <span class="n">tbl</span><span class="o">.</span><span class="n">columns</span><span class="p">():</span>
+        <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s1">&#39;STN&#39;</span><span class="p">)</span>
+
     <span class="n">tbl</span> <span class="o">=</span> <span class="n">tbl</span><span class="o">.</span><span class="n">left_join</span><span class="p">(</span>
-        <span class="n">weather_station_table</span><span class="p">,</span> <span class="n">tbl</span><span class="o">.</span><span class="n">Weerstation</span> <span class="o">==</span> <span class="n">weather_station_table</span><span class="o">.</span><span class="n">Weerstation</span>
+        <span class="n">weather_station_table</span><span class="p">,</span> <span class="n">tbl</span><span class="o">.</span><span class="n">ProjectIdBSV</span> <span class="o">==</span> <span class="n">weather_station_table</span><span class="o">.</span><span class="n">ProjectIdBSV</span>
     <span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
         <span class="p">[</span>
             <span class="n">tbl</span><span class="p">,</span>
