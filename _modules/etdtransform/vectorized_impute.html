@@ -180,7 +180,7 @@
     <span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
     <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">avg_col</span><span class="p">]</span>
     <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="n">ImputeType</span><span class="o">.</span><span class="n">NONE</span><span class="p">)</span> <span class="o">|</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">THRESHOLD_ADJUSTED</span>
+    <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="n">ImputeType</span><span class="o">.</span><span class="n">NONE</span><span class="o">.</span><span class="n">value</span><span class="p">)</span> <span class="o">|</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">THRESHOLD_ADJUSTED</span><span class="o">.</span><span class="n">value</span>
 
     <span class="k">return</span> <span class="n">df</span></div>
 
@@ -288,11 +288,11 @@
                 <span class="sa">f</span><span class="s2">&quot;No values to impute in </span><span class="si">{</span><span class="n">diff_col</span><span class="si">}</span><span class="s2">. Only checking thresholds.&quot;</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">df</span><span class="p">[</span><span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
-            <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
-            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int64&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int64&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
             <span class="n">df</span><span class="p">[</span><span class="s2">&quot;cumulative_value_group&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span>
                 <span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span>
-                <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span>
+                <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int64&quot;</span><span class="p">,</span>
                 <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Apply thresholds to remove physically impossible outliers&quot;</span><span class="p">)</span>
@@ -635,7 +635,7 @@
 
         <span class="c1"># calculate cumulative total for household for scaling the averages (optional)</span>
         <span class="n">df</span><span class="p">[</span><span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
-        <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">NA</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;Int64&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
 
         <span class="k">return</span> <span class="n">df</span>
 
@@ -725,7 +725,7 @@
         <span class="n">flat_gap_jump_mask</span> <span class="o">=</span> <span class="n">has_gap_jump_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEGATIVE_GAP_JUMP</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEGATIVE_GAP_JUMP</span><span class="o">.</span><span class="n">value</span>
 
         <span class="c1"># gap jump near zero - fill with zeros</span>
         <span class="n">flat_gap_jump_mask</span> <span class="o">=</span> <span class="p">(</span>
@@ -733,7 +733,7 @@
         <span class="p">)</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEAR_ZERO_GAP_JUMP</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">flat_gap_jump_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NEAR_ZERO_GAP_JUMP</span><span class="o">.</span><span class="n">value</span>
 
         <span class="c1"># positive gap jump and impute jump near zero - linear fill</span>
         <span class="c1"># round(gap_jump / gap_length,10)</span>
@@ -745,7 +745,7 @@
             <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_jump&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;gap_length&quot;</span><span class="p">],</span>
             <span class="mi">10</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_linear_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">LINEAR_FILL</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_linear_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">LINEAR_FILL</span><span class="o">.</span><span class="n">value</span>
 
         <span class="c1"># positive gap jump and positive impute jump and - scaled impute value fill</span>
         <span class="c1"># (optional for future: add logic to look at impute_na_ratio)</span>
@@ -761,7 +761,7 @@
             <span class="p">),</span>
             <span class="mi">10</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">SCALED_FILL</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">positive_gap_scaled_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">SCALED_FILL</span><span class="o">.</span><span class="n">value</span>
 
         <span class="k">return</span> <span class="n">df</span>
 
@@ -803,7 +803,7 @@
         <span class="p">)</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">is_imputed_col</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
         <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">diff_col</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">ZERO_END_VALUE</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_zero_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">ZERO_END_VALUE</span><span class="o">.</span><span class="n">value</span>
 
         <span class="c1">#### end value &gt; 0 - fill with impute values - type 7</span>
         <span class="n">nogpjump_has_end_value_positive_mask</span> <span class="o">=</span> <span class="n">nogpjump_has_end_value_mask</span> <span class="o">&amp;</span> <span class="p">(</span>
@@ -814,7 +814,7 @@
             <span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span>
             <span class="s2">&quot;impute_values&quot;</span><span class="p">,</span>
         <span class="p">]</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">POSITIVE_END_VALUE</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_end_value_positive_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">POSITIVE_END_VALUE</span><span class="o">.</span><span class="n">value</span>
 
         <span class="c1">#### end value &lt; 0 - raise exception</span>
         <span class="k">if</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;end_cum_value&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
@@ -831,7 +831,7 @@
             <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="s2">&quot;impute_values&quot;</span><span class="p">]</span>
             <span class="o">*</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="s2">&quot;house_impute_factor&quot;</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NO_END_VALUE</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">nogpjump_has_start_value_mask</span><span class="p">,</span> <span class="n">impute_type_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">ImputeType</span><span class="o">.</span><span class="n">NO_END_VALUE</span><span class="o">.</span><span class="n">value</span>
 
         <span class="k">return</span> <span class="n">df</span>
 
