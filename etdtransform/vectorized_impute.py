@@ -104,7 +104,7 @@ def apply_thresholds(
     ].notna()
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
-    df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE) | ImputeType.THRESHOLD_ADJUSTED
+    df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE.value) | ImputeType.THRESHOLD_ADJUSTED.value
 
     return df
 
@@ -209,11 +209,11 @@ def impute_and_normalize(
                 f"No values to impute in {diff_col}. Only checking thresholds.",
             )
             df[is_imputed_col] = False
-            df[impute_type_col] = pd.Series(pd.NA, dtype="Int8", index=df.index)
-            df["gap_length"] = pd.Series(pd.NA, dtype="Int8", index=df.index)
+            df[impute_type_col] = pd.Series(pd.NA, dtype="Int64", index=df.index)
+            df["gap_length"] = pd.Series(pd.NA, dtype="Int64", index=df.index)
             df["cumulative_value_group"] = pd.Series(
                 pd.NA,
-                dtype="Int8",
+                dtype="Int64",
                 index=df.index,
             )
             logging.info("Apply thresholds to remove physically impossible outliers")
@@ -547,7 +547,7 @@ def process_imputation_vectorized(
 
         # calculate cumulative total for household for scaling the averages (optional)
         df[is_imputed_col] = False
-        df[impute_type_col] = pd.Series(pd.NA, dtype="Int8", index=df.index)
+        df[impute_type_col] = pd.Series(pd.NA, dtype="Int64", index=df.index)
 
         return df
 
@@ -637,7 +637,7 @@ def process_imputation_vectorized(
         flat_gap_jump_mask = has_gap_jump_mask & (df["gap_jump"] < 0)
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEGATIVE_GAP_JUMP
+        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEGATIVE_GAP_JUMP.value
 
         # gap jump near zero - fill with zeros
         flat_gap_jump_mask = (
@@ -645,7 +645,7 @@ def process_imputation_vectorized(
         )
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEAR_ZERO_GAP_JUMP
+        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEAR_ZERO_GAP_JUMP.value
 
         # positive gap jump and impute jump near zero - linear fill
         # round(gap_jump / gap_length,10)
@@ -657,7 +657,7 @@ def process_imputation_vectorized(
             df["gap_jump"] / df["gap_length"],
             10,
         )
-        df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL
+        df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL.value
 
         # positive gap jump and positive impute jump and - scaled impute value fill
         # (optional for future: add logic to look at impute_na_ratio)
@@ -673,7 +673,7 @@ def process_imputation_vectorized(
             ),
             10,
         )
-        df.loc[positive_gap_scaled_mask, impute_type_col] = ImputeType.SCALED_FILL
+        df.loc[positive_gap_scaled_mask, impute_type_col] = ImputeType.SCALED_FILL.value
 
         return df
 
@@ -715,7 +715,7 @@ def process_imputation_vectorized(
         )
         df.loc[nogpjump_has_end_value_zero_mask, is_imputed_col] = True
         df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
-        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = ImputeType.ZERO_END_VALUE
+        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = ImputeType.ZERO_END_VALUE.value
 
         #### end value > 0 - fill with impute values - type 7
         nogpjump_has_end_value_positive_mask = nogpjump_has_end_value_mask & (
@@ -726,7 +726,7 @@ def process_imputation_vectorized(
             nogpjump_has_end_value_positive_mask,
             "impute_values",
         ]
-        df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = ImputeType.POSITIVE_END_VALUE
+        df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = ImputeType.POSITIVE_END_VALUE.value
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
@@ -743,7 +743,7 @@ def process_imputation_vectorized(
             df.loc[nogpjump_has_start_value_mask, "impute_values"]
             * df.loc[nogpjump_has_start_value_mask, "house_impute_factor"]
         )
-        df.loc[nogpjump_has_start_value_mask, impute_type_col] = ImputeType.NO_END_VALUE
+        df.loc[nogpjump_has_start_value_mask, impute_type_col] = ImputeType.NO_END_VALUE.value
 
         return df
 
