@@ -42,9 +42,10 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
         household_tbls["weather"] = get_weather_data_table()
         weather_station_table = get_weather_station_table()
 
-    for interval in intervals:
+    file_name_exts = list(intervals).append("calculated")
+    for file_name in file_name_exts:
         household_parquet = os.path.join(
-            etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
+            etdtransform.options.aggregate_folder_path, f"household_{file_name}.parquet"
         )
         household_table = ibis.read_parquet(household_parquet)
 
@@ -61,7 +62,7 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
                 weather_table=household_tbls["weather"],
             )
 
-        household_tbls[interval] = hh_joined
+        household_tbls[file_name] = hh_joined
 
     return household_tbls
 
