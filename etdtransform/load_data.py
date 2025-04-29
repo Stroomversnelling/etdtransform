@@ -7,6 +7,8 @@ import ibis.selectors as s
 import pandas as pd
 from ibis import _
 
+from etdmap.data_model import load_etdmodel
+
 import etdtransform
 from etdtransform.aggregate import (
     get_aggregate_table,
@@ -20,7 +22,7 @@ from etdtransform.knmi import (
 )
 
 
-def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
+def get_household_tables(include_weather: bool = True, include_preimputed_data: bool = False, include_calculated_data: bool = False) -> dict[str, ibis.Expr]:
     """
     Reads household data tables for different intervals and joins them with an index table.
     Optionally integrates weather data.
@@ -29,6 +31,10 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
     ----------
     include_weather : bool, optional
         If True, includes weather data in the returned tables (default is True).
+    include_preimputed_data : bool, optional
+        If True, includes the the table of household data before imputation (default is False).
+    include_calculated_data : bool, optional
+        If True, includes the the table of household data including all imputation and calulated columns before aggregation (default is False).
 
     Returns
     -------
@@ -42,26 +48,43 @@ def get_household_tables(include_weather: bool = True) -> dict[str, ibis.Expr]:
         household_tbls["weather"] = get_weather_data_table()
         weather_station_table = get_weather_station_table()
 
+    if include_preimputed_data:
+        household_parquet = os.path.join(etdtransform.options.aggregate_folder_path, "household_default.parquet")
+        household_table = ibis.read_parquet(household_parquet)
+        if "HuisIdBSV" not in household_table.columns:
+            household_table = household_table.rename(HuisIdBSV="HuisCode")
+        hh_joined = join_index_table(household_table)
+        household_tbls["default"] = hh_joined
+
+    if include_calculated_data:
+        household_parquet = os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet")
+        household_table = ibis.read_parquet(household_parquet)
+        if "HuisIdBSV" not in household_table.columns:
+            household_table = household_table.rename(HuisIdBSV="HuisCode")
+        hh_joined = join_index_table(household_table)
+        household_tbls["calculated"] = hh_joined
+
     for interval in intervals:
         household_parquet = os.path.join(
             etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
         )
         household_table = ibis.read_parquet(household_parquet)
 
-        # conversions for files that are in the 'old' (pre-package) format.
         if "HuisIdBSV" not in household_table.columns:
             household_table = household_table.rename(HuisIdBSV="HuisCode")
 
         hh_joined = join_index_table(household_table)
 
-        if include_weather:
-            hh_joined = join_weather_data(
-                hh_joined,
-                weather_station_table=weather_station_table,
-                weather_table=household_tbls["weather"],
-            )
-
         household_tbls[interval] = hh_joined
+
+    if include_weather:
+        for key in household_tbls.keys():
+            if key != "weather":
+                household_tbls[key] = join_weather_data(
+                    household_tbls[key],
+                    weather_station_table=weather_station_table,
+                    weather_table=household_tbls["weather"],
+                )
 
     return household_tbls
 
@@ -239,6 +262,17 @@ def get_weather_data_table() -> ibis.Expr:
     weather_data = weather_data.left_join(
         weekly_summary_rank, ["STN", "year", "week_of_year"]
     ).select(~s.contains("_right"))
+
+    # Add columns according to our data model
+    etdmodel =  load_etdmodel()
+    # etdmodel["KNMI"] are the old names
+    # etdmodel["Variabele"] are the new names
+
+    filtered = etdmodel.dropna(subset=["KNMI", "Variabele"]).drop_duplicates(subset=["KNMI", "Variabele"])
+    var_mapping = dict(zip(filtered["KNMI"], filtered["Variabele"]))
+
+    for old_var, new_var in var_mapping.items():
+        weather_data = weather_data.mutate(weather_data[old_var].name(new_var))
 
     # Add the transformed weather data as an Ibis table
     return weather_data

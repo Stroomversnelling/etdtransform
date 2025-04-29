@@ -7,6 +7,7 @@ import etdmap.index_helpers
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+import etdmap.data
 from test_helpers import get_metadata_parquet_file
 
 import etdtransform
@@ -32,23 +33,24 @@ def test_total_workflow_imputations():
     # true or false and not none
     assert index_df['Meenemen'].notna().all(), 'column Meenemen contains None values' 
     assert index_df['Meenemen'].map(lambda x: isinstance(x, bool)).all(), 'column Meenemen has non-boolean values'
-    assert index_df['ProjectIdBSV'].notna().all(), 'column PorjectIdBSV has None values'
+    assert index_df['ProjectIdBSV'].notna().all(), 'column ProjectIdBSV has None values'
     assert index_df['ProjectIdBSV'].dtype in [int, 'int64', 'Int64', 'int32'], "Column 'ProjectIdBSV' is not an integer dtype"
 
     # update_index
     # 10 columns
-    cum_cols_list = [
-            "ElektriciteitsgebruikBooster",
-            "ElektriciteitsgebruikBoilervat",
-            "ElektriciteitsgebruikWTW",
-            "ElektriciteitsgebruikRadiator",
-            "Zon-opwekTotaal",
-            "ElektriciteitsgebruikWarmtepomp",
-            "ElektriciteitTerugleveringLaag",
-            "ElektriciteitTerugleveringHoog",
-            "ElektriciteitNetgebruikLaag",
-            "ElektriciteitNetgebruikHoog",
-        ]
+    cum_cols_list = etdmap.data_model.cumulative_columns[0:10]
+    # cum_cols_list = [
+    #         "ElektriciteitsgebruikBooster",
+    #         "ElektriciteitsgebruikBoilervat",
+    #         "ElektriciteitsgebruikWTW",
+    #         "ElektriciteitsgebruikRadiator",
+    #         "Zon-opwekTotaal",
+    #         "ElektriciteitsgebruikWarmtepomp",
+    #         "ElektriciteitTerugleveringLaag",
+    #         "ElektriciteitTerugleveringHoog",
+    #         "ElektriciteitNetgebruikLaag",
+    #         "ElektriciteitNetgebruikHoog",
+    #     ]
     # Aggregate mapped date (not in 'all' workflow)
     aggregate_hh_data_5min()
     # Check if columns were added and if length of file is correct

@@ -1097,12 +1097,18 @@ aggregation_variables = {
     ## 'WarmteproductieWarmtepomp': {'resample_method': 'max', 'aggregate_method': 'avg'},
     ## 'WatergebruikWarmTapwater': {'resample_method': 'max', 'aggregate_method': 'avg'},
     ## 'Zon-opwekMomentaan': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_zon_opwek_momentaan'},
-    "ZonopwekBruto": {"resample_method": "sum", "aggregate_method": "avg"},
+    "ZonopwekBruto": {
+        "resample_method": "sum", 
+        "aggregate_method": "avg"
+        },
     #'Zon-opwekTotaal': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
     ## 'CO2': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_co2'},
     ## 'Luchtvochtigheid': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_luchtvochtigheid'},
     ## 'Ventilatiedebiet': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_ventilatiedebiet'},
-    "TerugleveringTotaalNetto": {"resample_method": "sum", "aggregate_method": "avg"},
+    "TerugleveringTotaalNetto": {
+        "resample_method": "sum", 
+        "aggregate_method": "avg"
+        },
     "ElektriciteitsgebruikTotaalNetto": {
         "resample_method": "sum",
         "aggregate_method": "avg",
