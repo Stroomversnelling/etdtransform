@@ -195,7 +195,7 @@ def add_rolling_avg(
     time_delta = (
         group["ReadingDate"].iloc[1] - group["ReadingDate"].iloc[0]
     ).total_seconds()
-    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / timedelta)
+    needed_timesteps = int(pd.Timedelta(days=days).total_seconds() / time_delta)
 
     group[avg_var] = (
         group[var]
