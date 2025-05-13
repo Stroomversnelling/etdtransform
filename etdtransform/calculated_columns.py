@@ -56,14 +56,15 @@ def add_calculated_columns_imputed_data(df, fillna = True):
         ].fillna(0)
 
         logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
-        df["ElektriciteitsgebruikTotaalWarmtepomp"] = df[
-            "ElektriciteitsgebruikWarmtepompDiff"
-        ].fillna(0) + df["ElektriciteitsgebruikBoosterDiff"].fillna(0)
+        df["ElektriciteitsgebruikTotaalWarmtepomp"] = (
+            df["ElektriciteitsgebruikWarmtepompDiff"].fillna(0) +
+            df["ElektriciteitsgebruikBoosterDiff"].fillna(0) +
+            df["ElektriciteitsgebruikBoilervatDiff"].fillna(0)
+        )
 
         logging.info("Calculating ElektriciteitsgebruikTotaalGebouwgebonden")
         df["ElektriciteitsgebruikTotaalGebouwgebonden"] = (
             df["ElektriciteitsgebruikTotaalWarmtepomp"].fillna(0)
-            + df["ElektriciteitsgebruikBoilervatDiff"].fillna(0)
             + df["ElektriciteitsgebruikWTWDiff"].fillna(0)
             + df["ElektriciteitsgebruikRadiatorDiff"].fillna(0)
         )
@@ -110,7 +111,6 @@ def add_calculated_columns_imputed_data(df, fillna = True):
         logging.info("Calculating ElektriciteitsgebruikTotaalGebouwgebonden")
         df["ElektriciteitsgebruikTotaalGebouwgebonden"] = (
             df["ElektriciteitsgebruikTotaalWarmtepomp"]
-            + df["ElektriciteitsgebruikBoilervatDiff"]
             + df["ElektriciteitsgebruikWTWDiff"]
             + df["ElektriciteitsgebruikRadiatorDiff"]
         )
