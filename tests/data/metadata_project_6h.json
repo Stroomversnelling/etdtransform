@@ -25,127 +25,127 @@
         },
         "ElektriciteitNetgebruikHoogDiff": {
             "statistics": {
-                "min": "49.080774484020004",
-                "max": "59.61339498651999",
+                "min": "47.38563171268",
+                "max": "60.78646855091999",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaagDiff": {
             "statistics": {
-                "min": "47.3913201259",
-                "max": "59.582439622059994",
+                "min": "48.99329694616",
+                "max": "59.27299428238",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoogDiff": {
             "statistics": {
-                "min": "47.41709569612",
-                "max": "59.502259107819995",
+                "min": "48.037059755",
+                "max": "60.04244569469999",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaagDiff": {
             "statistics": {
-                "min": "48.48219229752",
-                "max": "59.078400649820004",
+                "min": "47.51837415992",
+                "max": "59.14419988822",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikWTWDiff": {
             "statistics": {
-                "min": "9.79686758778",
-                "max": "12.54937339158",
+                "min": "9.716312719440001",
+                "max": "12.77353347252",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikWarmtepompDiff": {
             "statistics": {
-                "min": "31.1523687944",
-                "max": "38.43715437574",
+                "min": "30.858800414540003",
+                "max": "38.17970624222001",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoosterDiff": {
             "statistics": {
-                "min": "16.022742389076",
-                "max": "21.320295633007998",
+                "min": "16.16369022576",
+                "max": "21.040610267116",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoilervatDiff": {
             "statistics": {
-                "min": "10.12206874828",
-                "max": "12.830760491820001",
+                "min": "10.20919396874",
+                "max": "12.6641105675",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikRadiatorDiff": {
             "statistics": {
-                "min": "10.19506425754",
-                "max": "12.8500639696",
+                "min": "10.27145660828",
+                "max": "12.67827077794",
                 "null_count": 0
             }
         },
         "ZonopwekBruto": {
             "statistics": {
-                "min": "30.787238230939998",
-                "max": "37.88641526576",
+                "min": "30.42788146868",
+                "max": "37.7391003711",
                 "null_count": 0
             }
         },
         "TerugleveringTotaalNetto": {
             "statistics": {
-                "min": "100.14950318336",
-                "max": "115.44412328707999",
+                "min": "100.10207466722",
+                "max": "117.37878246544001",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalNetto": {
             "statistics": {
-                "min": "99.5463783147",
-                "max": "115.00223583784",
+                "min": "100.68647824674",
+                "max": "115.14124113289999",
                 "null_count": 0
             }
         },
         "Netuitwisseling": {
             "statistics": {
-                "min": "-11.14409601552",
-                "max": "10.9992863013",
+                "min": "-12.245727704580002",
+                "max": "13.299582888220002",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalWarmtepomp": {
             "statistics": {
-                "min": "48.231809663136",
-                "max": "57.903752542884",
+                "min": "60.359090515016",
+                "max": "68.605563203326",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalGebouwgebonden": {
             "statistics": {
-                "min": "82.38165661702",
-                "max": "92.530940943932",
+                "min": "83.08826887004",
+                "max": "92.14620600470599",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-65.97860732952799",
-                "max": "-39.940610057128005",
+                "min": "-66.832685938368",
+                "max": "-39.025718064576",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-81.69085384499999",
-                "max": "-64.48394010294",
+                "min": "-83.70412499188001",
+                "max": "-64.27751870732",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "23.081292212580003",
-                "max": "46.571976660619995",
+                "min": "21.81908657698",
+                "max": "48.17919023972",
                 "null_count": 0
             }
         },

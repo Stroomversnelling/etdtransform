@@ -10,7 +10,7 @@ import etdtransform
 
 etdtransform.options.aggregate_folder_path = Path(config['etdtransform_configuration']['aggregate_folder_path'])
 
-def get_metadata_parquet_file(parquet_file):
+def generate_metadata_parquet_file(parquet_file):
     """Get metadata from a parquet file object"""
     metadata_dict = {
         "num_rows": parquet_file.metadata.num_rows,
@@ -53,7 +53,7 @@ def create_metadata_testfile_from_valid_run(path_to_file, save_name='metadata.js
         filename (str): filename of correctly generated file.
     """
     parquet_file = pq.ParquetFile(path_to_file)
-    metadata_dict = get_metadata_parquet_file(parquet_file)
+    metadata_dict = generate_metadata_parquet_file(parquet_file)
 
     # Save metadata as JSON
     with open(f"tests/data/{save_name}.json", "w") as f:
