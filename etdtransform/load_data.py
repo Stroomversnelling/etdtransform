@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import ibis
 import ibis.selectors as s
@@ -88,10 +88,11 @@ def get_household_tables(include_weather: bool = True, include_preimputed_data: 
 
     return household_tbls
 
+
 def join_index_table(
     tbl: ibis.Expr,
     index_table: Optional[ibis.Expr] = None,
-    index_join_columns: List[str] = ["HuisIdBSV", "ProjectIdBSV"],
+    index_join_columns: Tuple[str] = ("HuisIdBSV", "ProjectIdBSV"),
 ) -> ibis.Expr:
     """
     Joins a given table with an index table on specified columns.
