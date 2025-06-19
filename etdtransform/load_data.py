@@ -22,7 +22,7 @@ from etdtransform.knmi import (
 )
 
 
-def get_household_tables(include_weather: bool = True, include_preimputed_data: bool = False, include_calculated_data: bool = False) -> dict[str, ibis.Expr]:
+def get_household_tables(include_weather: bool = True, include_preimputed_data: bool = True, include_calculated_data: bool = True) -> dict[str, ibis.Expr]:
     """
     Reads household data tables for different intervals and joins them with an index table.
     Optionally integrates weather data.
