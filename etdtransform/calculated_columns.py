@@ -6,6 +6,7 @@ import ibis
 import pandas as pd
 
 
+
 def add_calculated_columns_imputed_data(df, fillna = True):
     """
     Add calculated columns to the input DataFrame based on existing data.
@@ -135,6 +136,86 @@ def add_calculated_columns_imputed_data(df, fillna = True):
             "ElektriciteitsgebruikTotaalNetto"
         ] + df["Zelfgebruik"]
 
+
+    return df
+
+
+def add_calculated_columns_adaptive(
+    df: pd.DataFrame,
+    catalog_df: pd.DataFrame,
+    target_columns=None,
+    fillna: bool = True,
+    completeness_threshold: float = 0.95,
+) -> pd.DataFrame:
+    """
+    Derive missing columns from available data using the pre-built equation catalog.
+
+    Unlike add_calculated_columns_imputed_data(), this function adapts to whatever
+    columns are actually present and non-null in the dataset. It works for any
+    provider configuration — columns may be raw, pre-computed, or missing entirely.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The mapped dataset. Columns determine what is 'effectively raw'.
+    catalog_df : pd.DataFrame
+        Pre-built derivation catalog loaded from etdmap/data/catalog.parquet.
+        Use etdmap.catalog_check.load_catalog() to load it.
+    target_columns : set[str] or None
+        Which columns to try to derive. When None (default), derives all columns
+        that appear as LHS in the catalog and are not already effectively raw in
+        this dataset. This covers both the standard calculated columns AND any
+        data-model columns that are missing but derivable from the catalog.
+    fillna : bool
+        Whether to fill NaN values in RHS columns with 0 before computing.
+    completeness_threshold : float
+        Non-null fraction threshold for a column to be considered 'effectively raw'.
+
+    Returns
+    -------
+    pd.DataFrame
+        Modified in place; also returned for chaining.
+
+    Raises
+    ------
+    ValueError
+        If any required target column cannot be derived from the available columns.
+    """
+    from .catalog.query import DatasetAdapter
+    import sympy as sp
+
+    adapter = DatasetAdapter(catalog_df, completeness_threshold)
+
+    if target_columns is None:
+        # Default: attempt to derive all Prestatiedata columns from the data model
+        # that are not already effectively raw in this dataset.
+        # This covers both standard calculated columns AND model columns that a
+        # specific provider may not supply but that can be derived via the catalog.
+        from etdmap.data_model import model_column_order
+        eff_raw = adapter.effective_raw(df)
+        all_model_cols = set(model_column_order)
+        # Only attempt columns that appear in the catalog as LHS (otherwise they
+        # simply cannot be derived and would always fail)
+        derivable_in_catalog = set(catalog_df["lhs"].unique())
+        target_columns = (all_model_cols - eff_raw) & derivable_in_catalog
+
+    if not target_columns:
+        logging.info("[add_calculated_columns_adaptive] No columns to derive — all targets already effectively raw.")
+        return df
+
+    logging.info(f"[add_calculated_columns_adaptive] Deriving {len(target_columns)} column(s): {sorted(target_columns)}")
+
+    plan = adapter.execution_plan(df, target_columns)
+
+    for col_name, rhs_expr in plan:
+        logging.info(f"[add_calculated_columns_adaptive] Computing {col_name} = {rhs_expr}")
+        # Evaluate the SymPy expression against DataFrame columns
+        rhs_vars = [str(s) for s in rhs_expr.free_symbols]
+        # Build a lambda using sympy lambdify for vectorized evaluation
+        syms = [sp.Symbol(v) for v in rhs_vars]
+        func = sp.lambdify(syms, rhs_expr, modules="numpy")
+        col_data = {v: df[v].fillna(0) if fillna else df[v] for v in rhs_vars}
+        df[col_name] = func(**col_data)
 
     return df
 

@@ -20,6 +20,8 @@ requires-python = ">= 3.9"
 dependencies = [
     "pandas>=2.2",
     "ibis-framework",
+    "sympy>=1.12",
+    "pyarrow",
     "etdmap @ git+https://github.com/Stroomversnelling/etdmap@main"
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
