@@ -16,31 +16,10 @@
                 "null_count": 0
             }
         },
-        "column": {
-            "statistics": {
-                "min": "ElektriciteitNetgebruikHoogDiff",
-                "max": "WarmteproductieWarmtepompDiff",
-                "null_count": 0
-            }
-        },
         "diff_col_total": {
             "statistics": {
-                "min": "3009.7184200389006",
-                "max": "79175.5419154605",
-                "null_count": 0
-            }
-        },
-        "cum_col_min_max_diff": {
-            "statistics": {
-                "min": "3009.7184200268794",
-                "max": "79175.54191545105",
-                "null_count": 0
-            }
-        },
-        "deviation": {
-            "statistics": {
-                "min": "-6790.079799393152",
-                "max": "3.3989635994657874e-08",
+                "min": "52361.9152669413",
+                "max": "5271851243.530151",
                 "null_count": 0
             }
         },
@@ -51,30 +30,51 @@
                 "null_count": 0
             }
         },
-        "element": {
-            "statistics": {
-                "min": "4",
-                "max": "136",
-                "null_count": 60
-            }
-        },
         "imputed": {
             "statistics": {
                 "min": "0",
-                "max": "105119",
+                "max": "105117",
+                "null_count": 0
+            }
+        },
+        "cum_col_min_max_diff": {
+            "statistics": {
+                "min": "52361.915266945194",
+                "max": "5271851243.530151",
+                "null_count": 0
+            }
+        },
+        "deviation": {
+            "statistics": {
+                "min": "-243289.65087448538",
+                "max": "0.49208551081392216",
                 "null_count": 0
             }
         },
         "imputed_na": {
             "statistics": {
-                "min": "-52778",
-                "max": "0",
+                "min": "-52770",
+                "max": "11",
                 "null_count": 0
+            }
+        },
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitNetgebruikHoogDiff",
+                "max": "GasgebruikDiff",
+                "null_count": 0
+            }
+        },
+        "element": {
+            "statistics": {
+                "min": "4",
+                "max": "128",
+                "null_count": 60
             }
         },
         "bitwise_methods": {
             "statistics": {
-                "min": "-9223372036854775800",
+                "min": "-9223372036854775680",
                 "max": "128",
                 "null_count": 0
             }

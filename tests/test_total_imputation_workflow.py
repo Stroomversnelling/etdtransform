@@ -1,3 +1,11 @@
+"""
+End-to-end imputation workflow tests.
+
+NOTE: These are integration tests that use the local test fixture dataset
+configured in config_test.yaml (see config_test_template.yaml for the
+reference template). The fixture is a small anonymised dataset -- NOT
+production data. Tests must pass on that fixture; any failure is a real bug.
+"""
 import logging
 import os
 from pathlib import Path
@@ -181,24 +189,51 @@ def _check_metadatafiles_are_equal(load_metadata, stored_path, generated_path):
     return results, expected_metadata, actual_metadata
 
 
-def _check_samples_are_equal(expected_path, generated_path):
+def _check_samples_are_equal(expected_path, generated_path, rtol=1e-10):
     """
     Checks if expected vs. generated samples of .parquet files are equal.
+
+    Uses relative tolerance for float columns to absorb floating-point
+    non-determinism from DuckDB parallel aggregation (project-level sums).
+    Structural differences (column set, row count, dtypes) are still exact.
     """
     df_expected = pd.read_parquet(expected_path)
 
     df_generated_full = pd.read_parquet(generated_path)
     sample_size = min(100, len(df_generated_full))
     df_generated_sample = df_generated_full.sample(n=sample_size, random_state=42)
-    return df_expected.equals(df_generated_sample)
+    try:
+        pd.testing.assert_frame_equal(
+            df_expected.reset_index(drop=True),
+            df_generated_sample.reset_index(drop=True),
+            check_exact=False,
+            rtol=rtol,
+        )
+        return True
+    except AssertionError:
+        return False
 
 
-def _diff_json(a, b, path=""):
+def _diff_json(a, b, path="", float_rel_tol=1e-10):
+    """Compare two JSON-deserialized objects recursively.
+
+    Numeric string values (parquet min/max statistics) are compared with
+    float_rel_tol relative tolerance to absorb floating-point non-determinism
+    from groupby aggregations. Structural differences (missing keys, type
+    mismatches, null_count changes) are always exact.
+    """
     results = []
 
     def _record(diff):
         logging.info(diff)
         results.append(diff)
+
+    def _is_numeric(v):
+        try:
+            float(v)
+            return True
+        except (TypeError, ValueError):
+            return False
 
     def _recurse(a, b, path):
         if type(a) != type(b):
@@ -219,7 +254,13 @@ def _diff_json(a, b, path=""):
                 _record(f"{path}: list length differs {len(a)} != {len(b)}")
         else:
             if a != b:
-                _record(f"{path}: {a} != {b}")
+                # Allow tiny float rounding in parquet statistics (min/max stored as strings)
+                if isinstance(a, str) and isinstance(b, str) and _is_numeric(a) and _is_numeric(b):
+                    import math
+                    if not math.isclose(float(a), float(b), rel_tol=float_rel_tol):
+                        _record(f"{path}: {a} != {b}")
+                else:
+                    _record(f"{path}: {a} != {b}")
 
     _recurse(a, b, path or "$")
     return results
@@ -239,7 +280,7 @@ def test_files_equal_expected(load_metadata):
             generated_path
             )
 
-        assert len(results) == 0 and expected_json == generated_json, f"expected vs. generaged metadata files do not match for metadata_{name}.json; see log file for differences"
+        assert len(results) == 0, f"expected vs. generaged metadata files do not match for metadata_{name}.json; see log file for differences"
 
         # check sample of file
         expected_path = Path(f"tests/data/sample_{name}.parquet")

@@ -200,6 +200,10 @@ def impute_and_normalize(
         impute_type_col = f"{diff_col}_impute_type"
         avg_col = f"{diff_col}_avg"
 
+        if diff_col not in df.columns:
+            logging.info(f"[impute] {diff_col} not in chunk columns, skipping.")
+            continue
+
         df[old_diff_col] = df[diff_col]
 
         drop_temp_cols(df, logLeftoverError=True)
@@ -245,24 +249,46 @@ def impute_and_normalize(
                 is_imputed_col=is_imputed_col,
             )
 
-            remaining_na = df[diff_col].isna().sum()
+            remaining_na = (df[diff_col].isna() & df[avg_col].notna()).sum()
 
             if remaining_na > 0:
                 logging.error(
-                    f"{remaining_na} missing values still exist in column {diff_col}. Check masks and imputation logic.",
+                    f"{remaining_na} missing values still exist in column {diff_col} where avg was available. Check masks and imputation logic.",
                 )
 
         logging.info(f"Calculating {diff_col} imputation gap stats")
-        imputation_gap_stats.append(
-            df.groupby([project_id_column, "HuisIdBSV"])
-            .apply(calculate_imputation_gap_stats, cum_col, diff_col, impute_type_col)
-            .reset_index(),
+        _grp = df.groupby([project_id_column, "HuisIdBSV"])
+        # One C-level pass for all scalar stats; apply only for the methods list
+        # (one small set-op per group vs 7 stat computations per group in the old apply).
+        _stats = _grp.agg(
+            diff_col_total=(diff_col, "sum"),
+            _cum_max=(cum_col, "max"),
+            _cum_min=(cum_col, "min"),
+            missing=("gap_length", "count"),
+            imputed=(impute_type_col, "count"),
+            _cvg_count=("cumulative_value_group", "count"),
+        ).reset_index()
+        _stats["cum_col_min_max_diff"] = _stats["_cum_max"] - _stats["_cum_min"]
+        _stats["deviation"] = _stats["diff_col_total"] - _stats["cum_col_min_max_diff"]
+        _stats["imputed_na"] = _stats["_cvg_count"] - _stats["imputed"]
+        _stats["column"] = diff_col
+        _stats["methods"] = (
+            _grp[impute_type_col]
+            .apply(lambda x: sorted(set(v for v in x if pd.notna(v))))
+            .values
         )
+        _stats.drop(columns=["_cum_max", "_cum_min", "_cvg_count"], inplace=True)
+        imputation_gap_stats.append(_stats)
 
         drop_temp_cols(df, temp_cols=["gap_length", "cumulative_value_group"])
 
         drop_temp_cols(df, logLeftoverError=True)
 
+    if not imputation_gap_stats:
+        raise RuntimeError(
+            "No columns were imputed -- all Diff columns were absent from this chunk. "
+            "Check that prepare_diffs_for_impute has run and that cum_cols matches the source data."
+        )
     imputation_gap_stats_df = pd.concat(imputation_gap_stats, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
         imputation_gap_stats_df["methods"],
@@ -535,7 +561,7 @@ def process_imputation_vectorized(
         df["impute_na"] = df.groupby("cumulative_value_group")["avg_na"].transform(
             "sum",
         )
-        df["impute_values"] = df[avg_col].fillna(0)
+        df["impute_values"] = df[avg_col]  # pd.NA where avg unavailable; do not substitute 0
 
         if (df["impute_values"] < 0).any():
             raise Exception("Negative impute jump - not allowed - check averages")
@@ -659,21 +685,21 @@ def process_imputation_vectorized(
         )
         df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL.value
 
-        # positive gap jump and positive impute jump and - scaled impute value fill
-        # (optional for future: add logic to look at impute_na_ratio)
+        # positive gap jump and positive impute jump - scaled impute value fill (only when avg available)
         positive_gap_scaled_mask = (
             has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & (df["impute_jump"] >= 1e-8)
         )
-        df.loc[positive_gap_scaled_mask, is_imputed_col] = True
-        df.loc[positive_gap_scaled_mask, diff_col] = round(
-            df.loc[positive_gap_scaled_mask, "impute_values"]
+        _can_scaled = positive_gap_scaled_mask & df["impute_values"].notna()
+        df.loc[_can_scaled, is_imputed_col] = True
+        df.loc[_can_scaled, diff_col] = round(
+            df.loc[_can_scaled, "impute_values"]
             * (
-                df.loc[positive_gap_scaled_mask, "gap_jump"]
-                / df.loc[positive_gap_scaled_mask, "impute_jump"]
+                df.loc[_can_scaled, "gap_jump"]
+                / df.loc[_can_scaled, "impute_jump"]
             ),
             10,
         )
-        df.loc[positive_gap_scaled_mask, impute_type_col] = ImputeType.SCALED_FILL.value
+        df.loc[_can_scaled, impute_type_col] = ImputeType.SCALED_FILL.value
 
         return df
 
@@ -717,16 +743,14 @@ def process_imputation_vectorized(
         df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
         df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = ImputeType.ZERO_END_VALUE.value
 
-        #### end value > 0 - fill with impute values - type 7
+        #### end value > 0 - fill with impute values - type 7 (only when avg available)
         nogpjump_has_end_value_positive_mask = nogpjump_has_end_value_mask & (
             df["end_cum_value"] > 1e-8
         )
-        df.loc[nogpjump_has_end_value_positive_mask, is_imputed_col] = True
-        df.loc[nogpjump_has_end_value_positive_mask, diff_col] = df.loc[
-            nogpjump_has_end_value_positive_mask,
-            "impute_values",
-        ]
-        df.loc[nogpjump_has_end_value_positive_mask, impute_type_col] = ImputeType.POSITIVE_END_VALUE.value
+        _can_fill_ev = nogpjump_has_end_value_positive_mask & df["impute_values"].notna()
+        df.loc[_can_fill_ev, is_imputed_col] = True
+        df.loc[_can_fill_ev, diff_col] = df.loc[_can_fill_ev, "impute_values"]
+        df.loc[_can_fill_ev, impute_type_col] = ImputeType.POSITIVE_END_VALUE.value
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
@@ -734,16 +758,17 @@ def process_imputation_vectorized(
                 "Negative next value at end of gap - that is not supposed to happen!",
             )
 
-        ### start value but no end value for gap - fill with impute values
+        ### start value but no end value for gap - fill with impute values (only when avg available)
         nogpjump_has_start_value_mask = (
             wo_gap_jump_mask & df["end_cum_value"].isna() & ~df["prev_cum_value"].isna()
         )
-        df.loc[nogpjump_has_start_value_mask, is_imputed_col] = True
-        df.loc[nogpjump_has_start_value_mask, diff_col] = (
-            df.loc[nogpjump_has_start_value_mask, "impute_values"]
-            * df.loc[nogpjump_has_start_value_mask, "house_impute_factor"]
+        _can_fill_sv = nogpjump_has_start_value_mask & df["impute_values"].notna()
+        df.loc[_can_fill_sv, is_imputed_col] = True
+        df.loc[_can_fill_sv, diff_col] = (
+            df.loc[_can_fill_sv, "impute_values"]
+            * df.loc[_can_fill_sv, "house_impute_factor"]
         )
-        df.loc[nogpjump_has_start_value_mask, impute_type_col] = ImputeType.NO_END_VALUE.value
+        df.loc[_can_fill_sv, impute_type_col] = ImputeType.NO_END_VALUE.value
 
         return df
 

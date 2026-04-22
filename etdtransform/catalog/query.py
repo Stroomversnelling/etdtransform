@@ -2,16 +2,16 @@
 DatasetAdapter — per-dataset query against the pre-built catalog.
 
 Given a DataFrame (the actual mapped dataset from a provider), the adapter:
-  1. Assesses which columns have sufficient real data ('effectively raw').
+  1. Assesses which columns are available (present and sufficiently non-null).
   2. Finds feasible catalog entries for each required target variable.
   3. Selects the best derivation per target (sorted by preference).
   4. Returns an execution plan: [(target_col, rhs_sympy_expr), ...] in
      topological order so each column is computed after its dependencies.
 
-'Effectively raw' means: the column exists in the DataFrame AND its non-null
-fraction is >= completeness_threshold (default 0.95). This is assessed per
-dataset — a column that is 'effectively raw' for Provider B (who supplies it
-directly) may be 'derived' for Provider A (who only supplies its components).
+'Available' means: the column exists in the DataFrame AND its non-null fraction
+is >= completeness_threshold (default 0.95). This is assessed per dataset — a
+column available for Provider B (who supplies it directly) may need to be derived
+for Provider A (who only supplies its components).
 """
 
 import sympy as sp
@@ -52,11 +52,14 @@ class DatasetAdapter:
         """
         return {col: float(df[col].notna().mean()) for col in df.columns}
 
-    def effective_raw(self, df: pd.DataFrame) -> set:
+    def available_columns(self, df: pd.DataFrame) -> set:
         """
-        Return the set of column names considered 'effectively raw' for this dataset:
+        Return the set of column names available in this dataset:
         - column exists in df AND
         - non-null fraction >= completeness_threshold
+
+        A column is available if the provider supplied it with sufficient data
+        quality. It does not need to be derived. This is assessed per dataset.
         """
         return {
             col for col, frac in self.assess_columns(df).items()
@@ -122,9 +125,9 @@ class DatasetAdapter:
           derivable : dict[str, list[dict]]  — sorted catalog entries per target
           not_derivable : list[str]
         """
-        eff_raw = self.effective_raw(df)
+        available_cols = self.available_columns(df)
         completeness = self.assess_columns(df)
-        available = set(eff_raw)
+        available = set(available_cols)
 
         remaining = {t for t in required_targets if t not in available}
         derivable = {}
@@ -136,9 +139,9 @@ class DatasetAdapter:
             for target in remaining:
                 entries = self._feasible_entries_for(target, available, physical_model)
                 if entries:
-                    # Sort: fewest non-raw-inputs first, then fewest total vars
+                    # Sort: fewest non-available-inputs first, then fewest total vars
                     entries.sort(key=lambda r: (
-                        sum(1 for v in r["rhs_vars"] if v not in eff_raw),
+                        sum(1 for v in r["rhs_vars"] if v not in available_cols),
                         r["rhs_var_count"],
                     ))
                     derivable[target] = [r.to_dict() for r in entries]
@@ -149,7 +152,7 @@ class DatasetAdapter:
             remaining = still_remaining
 
         return {
-            "effectively_raw": eff_raw,
+            "available_columns": available_cols,
             "column_completeness": completeness,
             "derivable": derivable,
             "not_derivable": sorted(remaining),
@@ -158,6 +161,67 @@ class DatasetAdapter:
     # ------------------------------------------------------------------
     # Execution plan
     # ------------------------------------------------------------------
+
+    def execution_plan_for_available(
+        self,
+        available_cols: set,
+        required_targets: set,
+        physical_model=None,
+    ) -> tuple:
+        """
+        Like execution_plan() but takes a pre-computed available_cols set instead of a DataFrame.
+
+        Returns (plan, not_derivable) rather than raising on not_derivable, so callers
+        can log and continue (same behaviour as the adaptive pandas path).
+
+        Parameters
+        ----------
+        available_cols : set[str]
+            Columns considered available (present and sufficiently non-null).
+        required_targets : set[str]
+            Column names to derive.
+        physical_model : str or None
+
+        Returns
+        -------
+        plan : list[tuple[str, sp.Expr]]
+            Topologically-ordered list of (target_col, rhs_sympy_expr).
+        not_derivable : list[str]
+            Targets that could not be derived from available_cols.
+        """
+        available = set(available_cols)
+        remaining = {t for t in required_targets if t not in available}
+        derivable_dict: dict = {}
+
+        changed = True
+        while changed and remaining:
+            changed = False
+            still_remaining = set()
+            for target in remaining:
+                entries = self._feasible_entries_for(target, available, physical_model)
+                if entries:
+                    entries.sort(key=lambda r: (
+                        sum(1 for v in r["rhs_vars"] if v not in available_cols),
+                        r["rhs_var_count"],
+                    ))
+                    derivable_dict[target] = [r.to_dict() for r in entries]
+                    available.add(target)
+                    changed = True
+                else:
+                    still_remaining.add(target)
+            remaining = still_remaining
+
+        not_derivable = sorted(remaining)
+
+        selected = {}
+        for target, entries in derivable_dict.items():
+            best = entries[0]
+            rhs_expr = parse_expr(best["rhs_text"])
+            selected[target] = (rhs_expr, set(best["rhs_vars"]))
+
+        order = _toposort(selected, available_cols)
+        plan = [(name, selected[name][0]) for name in order]
+        return plan, not_derivable
 
     def execution_plan(self, df: pd.DataFrame, required_targets: set, physical_model=None) -> list:
         """
@@ -189,10 +253,10 @@ class DatasetAdapter:
         if report["not_derivable"]:
             raise ValueError(
                 f"Cannot derive required column(s): {report['not_derivable']}. "
-                f"Effectively raw columns: {sorted(report['effectively_raw'])}"
+                f"Available columns: {sorted(report['available_columns'])}"
             )
 
-        eff_raw = report["effectively_raw"]
+        available_cols = report["available_columns"]
 
         # Select the best (first) catalog entry for each derivable target
         # and parse its rhs_text into a SymPy expression
@@ -202,9 +266,7 @@ class DatasetAdapter:
             rhs_expr = parse_expr(best["rhs_text"])
             selected[target] = (rhs_expr, set(best["rhs_vars"]))
 
-        # Topological sort: order derivations so each target is computed
-        # after all its non-raw dependencies
-        order = _toposort(selected, eff_raw)
+        order = _toposort(selected, available_cols)
 
         return [(name, selected[name][0]) for name in order]
 
@@ -213,12 +275,12 @@ class DatasetAdapter:
 # Topological sort helpers
 # ---------------------------------------------------------------------------
 
-def _toposort(selected: dict, eff_raw: set) -> list:
+def _toposort(selected: dict, available_cols: set) -> list:
     """
     Topologically sort the selected derivations.
 
-    selected : dict[target_name] → (rhs_expr, rhs_vars_set)
-    eff_raw  : set of column names with real data (no derivation needed)
+    selected       : dict[target_name] → (rhs_expr, rhs_vars_set)
+    available_cols : set of column names already available (no derivation needed)
 
     Returns ordered list of target names. Raises ValueError on cycle.
     """

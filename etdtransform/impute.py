@@ -131,44 +131,160 @@ def calculate_average_diff(
     return avg_diff_dict
 
 
+def calculate_average_diff_ibis(
+    tbl,
+    project_id_column: str,
+    diff_columns: list[str],
+) -> dict:
+    """
+    Ibis/DuckDB variant of calculate_average_diff.
+
+    Accepts an ibis.Table and performs all aggregations as SQL so the full
+    dataset never materialises in Python memory.  Only the small result tables
+    (one row per project × date) are returned as pandas DataFrames.
+
+    Returns the same dict structure as calculate_average_diff so that callers
+    can substitute either function without downstream changes.
+
+    Parameters
+    ----------
+    tbl : ibis.Table
+        Household data table (e.g. from get_household_tables()["default"]).
+    project_id_column : str
+        Name of the project ID column.
+    diff_columns : list[str]
+        Diff column names to process.
+    """
+    import ibis
+    import ibis.selectors as s
+
+    def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.DataFrame:
+        """Cast numpy int dtypes to Int64 and nominated float cols to Float64.
+
+        int32/int64 cannot hold pd.NA so they are always promoted to Int64.
+        float64 supports NaN but is promoted to Float64 only for explicitly
+        nominated measurement columns, keeping non-measurement floats (e.g.
+        upper_bound, which safe_quantile returns as plain float) unchanged so
+        that dtypes match the pandas path exactly.
+        """
+        for c in df.select_dtypes(include=["int32", "int64"]).columns:
+            df[c] = df[c].astype("Int64")
+        for c in float_cols or []:
+            if c in df.columns:
+                df[c] = df[c].astype("Float64")
+        return df
+
+    logging.info("Calculating Diff column averages (Ibis).")
+
+    hh_max_agg = {f"{col}_huis_max": tbl[col].cast("Float64").max() for col in diff_columns}
+    household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
+
+    avg_diff_dict = {}
+
+    for col in diff_columns:
+        logging.info(f"Handling column (Ibis): {col}")
+        max_col = f"{col}_huis_max"
+
+        # 95th percentile of per-household max (near-zero excluded), doubled → upper bound.
+        # All projects appear in ub_tbl; projects with no qualifying households get NULL so
+        # that the return dict matches the pandas version's safe_quantile(→ pd.NA) behaviour.
+        filtered_max = household_max.filter(household_max[max_col] > 1e-8)
+        ub_inner = filtered_max.group_by(project_id_column).aggregate(
+            **{f"{col}_upper_bound": filtered_max[max_col].quantile(0.95) * 2}
+        )
+        all_projects = household_max.select(project_id_column).distinct()
+        ub_tbl = all_projects.left_join(ub_inner, project_id_column).select(
+            ~s.endswith("_right")
+        )
+
+        # Join upper bounds back to get include/exclude status per household
+        joined = (
+            household_max
+            .left_join(ub_tbl, project_id_column)
+            .select(~s.endswith("_right"))
+        )
+        included_ids = (
+            joined
+            .filter(joined[max_col] < joined[f"{col}_upper_bound"])
+            .select("HuisIdBSV")
+            .execute()["HuisIdBSV"]
+            .tolist()
+        )
+
+        if not included_ids:
+            # No households qualify (all-zero or all-null diffs, or all above upper bound).
+            # Return an empty avg_diff with the correct schema rather than calling isin([])
+            # which is undefined behaviour in some SQL backends.
+            logging.warning(
+                f"No households qualified for column `{col}`; avg_diff will be empty."
+            )
+            avg_diff = pd.DataFrame(
+                {
+                    project_id_column: pd.array([], dtype="Int64"),
+                    "ReadingDate": pd.array([], dtype="datetime64[us]"),
+                    f"{col}_avg": pd.array([], dtype="Float64"),
+                }
+            )
+        else:
+            # Check for negative values in filtered data (mirrors the pandas version's guard)
+            has_negative = (
+                tbl
+                .filter(tbl["HuisIdBSV"].isin(included_ids))
+                .filter(tbl[col] < 0)
+                .count()
+                .execute()
+            )
+            if has_negative > 0:
+                raise ValueError("Negative Diff values found")
+
+            avg_diff = _to_nullable(
+                tbl
+                .filter(tbl["HuisIdBSV"].isin(included_ids))
+                .group_by([project_id_column, "ReadingDate"])
+                .aggregate(**{f"{col}_avg": tbl[col].cast("Float64").mean()})
+                .execute(),
+                float_cols=[f"{col}_avg"],
+            )
+
+        impute_na = avg_diff[f"{col}_avg"].isna().sum()
+        if impute_na > 0:
+            logging.error(
+                f"Average column `{col}_avg` has {impute_na} missing impute values.",
+            )
+
+        # huis_max is a measurement column — promote to Float64 to match the explicit
+        # .astype("Float64") in the pandas path (lines 72-74 of calculate_average_diff).
+        avg_diff_dict[col] = {
+            "avg_diff": avg_diff,
+            "upper_bounds": _to_nullable(ub_tbl.execute()),
+            "household_max_with_bounds": _to_nullable(
+                joined.execute(), float_cols=[max_col]
+            ),
+        }
+
+    return avg_diff_dict
+
+
 def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
     """
     Concatenate household maximum values and bounds for all columns.
 
-    This function combines the household maximum values and upper bounds
-    for all columns in the avg_diff_dict into a single DataFrame.
-
-    Parameters
-    ----------
-    avg_diff_dict : dict
-        A dictionary containing average difference data for each column.
-    project_id_column : str
-        The name of the column containing project IDs.
-
-    Returns
-    -------
-    pd.DataFrame
-        A DataFrame containing concatenated household maximum values and bounds
-        for all columns.
-
-    Notes
-    -----
-    This function assumes that the 'household_max_with_bounds' key exists in each
-    dictionary within avg_diff_dict and contains the columns 'ProjectIdBSV' (or other specified project id column),
-    'HuisIdBSV', '{col}_huis_max', and '{col}_upper_bound'.
-
+    Each column may cover a different subset of (project, household) pairs
+    (e.g. O-Nexus vs non-O-Nexus). An outer merge on the key columns is used
+    so that households missing a column receive pd.NA rather than being
+    silently assigned another column's values via positional alignment.
     """
-    first_key = next(iter(avg_diff_dict))
-    key_columns = avg_diff_dict[first_key]["household_max_with_bounds"][
-        [project_id_column, "HuisIdBSV"]
-    ]
-    columns = [key_columns]
+    result_df = None
     for col, data in avg_diff_dict.items():
-        max_bound = data["household_max_with_bounds"][
-            [col + "_huis_max", col + "_upper_bound"]
+        df_col = data["household_max_with_bounds"][
+            [project_id_column, "HuisIdBSV", f"{col}_huis_max", f"{col}_upper_bound"]
         ]
-        columns.append(max_bound)
-    result_df = pd.concat(columns, axis=1)
+        if result_df is None:
+            result_df = df_col
+        else:
+            result_df = result_df.merge(
+                df_col, on=[project_id_column, "HuisIdBSV"], how="outer"
+            )
     return result_df
 
 
@@ -176,38 +292,20 @@ def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
     """
     Concatenate average difference columns for all variables.
 
-    This function combines the average difference columns for all variables
-    in the avg_diff_dict into a single DataFrame.
-
-    Parameters
-    ----------
-    avg_diff_dict : dict
-        A dictionary containing average difference data for each column.
-    project_id_column : str
-        The name of the column containing project IDs.
-
-    Returns
-    -------
-    pd.DataFrame
-        A DataFrame containing concatenated average difference columns
-        for all variables.
-
-    Notes
-    -----
-    This function assumes that the 'avg_diff' key exists in each dictionary
-    within avg_diff_dict and contains the columns 'ProjectIdBSV' or specified project_id_column, 'ReadingDate',
-    and '{col}_avg'.
-
+    Each column may cover a different subset of (project, date) pairs
+    (e.g. O-Nexus vs non-O-Nexus). An outer merge on the key columns is used
+    so that projects missing a column receive pd.NA rather than being
+    silently assigned another column's values via positional alignment.
     """
-    first_key = next(iter(avg_diff_dict))
-    key_columns = avg_diff_dict[first_key]["avg_diff"][
-        [project_id_column, "ReadingDate"]
-    ]
-    columns = [key_columns]
+    result_df = None
     for col, data in avg_diff_dict.items():
-        avg_col = data["avg_diff"][col + "_avg"]
-        columns.append(avg_col)
-    result_df = pd.concat(columns, axis=1)
+        df_col = data["avg_diff"]
+        if result_df is None:
+            result_df = df_col
+        else:
+            result_df = result_df.merge(
+                df_col, on=[project_id_column, "ReadingDate"], how="outer"
+            )
     return result_df
 
 
@@ -537,6 +635,60 @@ def prepare_diffs_for_impute(
     return diff_columns, diffs, max_bound
 
 
+def prepare_diffs_for_impute_ibis(
+    tbl,
+    project_id_column: str,
+    cumulative_columns: list,
+):
+    """
+    Ibis variant of prepare_diffs_for_impute.
+
+    Accepts an ibis.Table (e.g. from ibis.read_parquet) instead of a pandas
+    DataFrame.  All heavy aggregations run as SQL inside DuckDB; only the small
+    result tables (one row per project or per project×date) are materialised and
+    saved as parquet artefacts.  The input table is never executed in full.
+
+    Parameters
+    ----------
+    tbl : ibis.Table
+        Lazy household table containing the Diff columns for each cumulative column.
+    project_id_column : str
+        Name of the project ID column.
+    cumulative_columns : list
+        List of cumulative column names (without "Diff" suffix).
+
+    Returns
+    -------
+    tuple
+        (diff_columns, diffs, max_bound) — same structure as prepare_diffs_for_impute.
+    """
+    diff_columns = get_diff_columns(cumulative_columns)
+
+    logging.info("Starting to prepare diffs (Ibis).")
+    avg_diff_dict = calculate_average_diff_ibis(tbl, project_id_column, diff_columns)
+
+    logging.info("Combining average diff columns.")
+    diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
+
+    logging.info("Combining household diff maximum and bounds used for diff columns.")
+    max_bound = concatenate_household_max_with_bounds(avg_diff_dict, project_id_column)
+
+    logging.info("Saving average diff columns in avg_diffs.parquet")
+    diffs.to_parquet(
+        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
+        engine="pyarrow",
+    )
+    logging.info(
+        "Saving household diff max and bounds used in household_diff_max_bounds.parquet",
+    )
+    max_bound.to_parquet(
+        os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
+        engine="pyarrow",
+    )
+
+    return diff_columns, diffs, max_bound
+
+
 def read_diffs():
     """
     Read average differences from a parquet file.
@@ -558,7 +710,10 @@ def read_diffs():
     for use in imputation processes.
 
     """
-    return pd.read_parquet(os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"))
+    return pd.read_parquet(
+        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
+        dtype_backend="numpy_nullable",
+    )
 
 
 def process_and_impute(
@@ -627,6 +782,7 @@ def process_and_impute(
         diffs = read_diffs()
         max_bound = pd.read_parquet(
             os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
+            dtype_backend="numpy_nullable",
         )
     else:
         diff_columns, diffs, max_bound = prepare_diffs_for_impute(

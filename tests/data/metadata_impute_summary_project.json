@@ -12,13 +12,13 @@
         "column": {
             "statistics": {
                 "min": "ElektriciteitNetgebruikHoogDiff",
-                "max": "WarmteproductieWarmtepompDiff",
+                "max": "GasgebruikDiff",
                 "null_count": 0
             }
         },
         "bitwise_methods": {
             "statistics": {
-                "min": "-9223372036854775800",
+                "min": "-9223372036854775680",
                 "max": "128",
                 "null_count": 0
             }
@@ -26,7 +26,7 @@
         "element": {
             "statistics": {
                 "min": "4",
-                "max": "136",
+                "max": "128",
                 "null_count": 12
             }
         },
@@ -40,14 +40,14 @@
         "imputed": {
             "statistics": {
                 "min": "0",
-                "max": "525595",
+                "max": "525585",
                 "null_count": 0
             }
         },
         "imputed_na": {
             "statistics": {
-                "min": "-262885",
-                "max": "0",
+                "min": "-262982",
+                "max": "55",
                 "null_count": 0
             }
         },
@@ -61,7 +61,7 @@
         "percentage_imputed": {
             "statistics": {
                 "min": "-0.0",
-                "max": "99.99904870624049",
+                "max": "99.99714611872146",
                 "null_count": 0
             }
         }

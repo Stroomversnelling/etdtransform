@@ -1,3 +1,11 @@
+"""
+Shared test configuration for etdtransform.
+
+Test fixture dataset: paths are loaded from config_test.yaml (see
+config_test_template.yaml for the committed reference template). This is a
+small anonymised dataset -- NOT production data. All tests in this suite must
+pass against that fixture; there are no "pre-existing" failures (see ADR-007).
+"""
 import json
 import logging
 import os

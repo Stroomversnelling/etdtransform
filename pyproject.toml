@@ -19,9 +19,10 @@ maintainers = [
 requires-python = ">= 3.9"
 dependencies = [
     "pandas>=2.2",
-    "ibis-framework",
+    "ibis-framework[duckdb]",
     "sympy>=1.12",
     "pyarrow",
+    "polars",
     "etdmap @ git+https://github.com/Stroomversnelling/etdmap@main"
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]

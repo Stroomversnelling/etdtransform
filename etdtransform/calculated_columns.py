@@ -6,6 +6,44 @@ import ibis
 import pandas as pd
 
 
+def sympy_to_ibis(expr, table):
+    """
+    Convert a SymPy expression to an ibis column expression.
+
+    Uses sp.lambdify to generate a Python callable from the SymPy expression
+    tree, then calls it with ibis column expressions as arguments. Since ibis
+    column expressions overload Python's arithmetic operators (+, -, *, /),
+    the result is an ibis column expression suitable for table.mutate().
+
+    Null handling: each input column is wrapped in fill_null(0) before the
+    calculation, matching the fillna=True default in the pandas adaptive path.
+
+    Parameters
+    ----------
+    expr : sympy.Expr
+        SymPy expression whose free symbols correspond to column names.
+    table : ibis.Table
+        The ibis table containing the input columns.
+
+    Returns
+    -------
+    ibis column expression
+
+    Raises
+    ------
+    AttributeError / TypeError
+        If the expression contains SymPy functions not supported by ibis
+        (e.g. sin, exp) -- a clear failure at planning time, not silent.
+    """
+    import sympy as sp
+    if not expr.free_symbols:
+        return ibis.literal(float(expr))
+    symbols = sorted(expr.free_symbols, key=str)
+    f = sp.lambdify([str(s) for s in symbols], expr)
+    ibis_cols = [table[str(s)].fill_null(0) for s in symbols]
+    return f(*ibis_cols)
+
+
 
 def add_calculated_columns_imputed_data(df, fillna = True):
     """
@@ -142,7 +180,7 @@ def add_calculated_columns_imputed_data(df, fillna = True):
 
 def add_calculated_columns_adaptive(
     df: pd.DataFrame,
-    catalog_df: pd.DataFrame,
+    catalog_df: pd.DataFrame = None,
     target_columns=None,
     fillna: bool = True,
     completeness_threshold: float = 0.95,
@@ -150,74 +188,209 @@ def add_calculated_columns_adaptive(
     """
     Derive missing columns from available data using the pre-built equation catalog.
 
-    Unlike add_calculated_columns_imputed_data(), this function adapts to whatever
-    columns are actually present and non-null in the dataset. It works for any
-    provider configuration — columns may be raw, pre-computed, or missing entirely.
+    Availability is assessed per household (HuisIdBSV): a column is considered
+    available for a household only if it is non-null for >= completeness_threshold
+    fraction of that household's rows.  This correctly handles mixed datasets where
+    different providers supply different column sets.
+
+    Households with the same column-availability pattern share a cached derivation
+    plan, so the catalog is only traversed once per unique provider schema.
 
     Parameters
     ----------
     df : pd.DataFrame
-        The mapped dataset. Columns determine what is 'effectively raw'.
-    catalog_df : pd.DataFrame
-        Pre-built derivation catalog loaded from etdmap/data/catalog.parquet.
-        Use etdmap.catalog_check.load_catalog() to load it.
+        The mapped dataset with a HuisIdBSV column.
+    catalog_df : pd.DataFrame or None
+        Pre-built derivation catalog.  Loaded automatically when None.
     target_columns : set[str] or None
-        Which columns to try to derive. When None (default), derives all columns
-        that appear as LHS in the catalog and are not already effectively raw in
-        this dataset. This covers both the standard calculated columns AND any
-        data-model columns that are missing but derivable from the catalog.
+        Columns to derive.  When None, derives all catalog lhs targets that are
+        not already available for each household.
     fillna : bool
-        Whether to fill NaN values in RHS columns with 0 before computing.
+        Fill NaN values in RHS columns with 0 before computing.
     completeness_threshold : float
-        Non-null fraction threshold for a column to be considered 'effectively raw'.
-
-    Returns
-    -------
-    pd.DataFrame
-        Modified in place; also returned for chaining.
-
-    Raises
-    ------
-    ValueError
-        If any required target column cannot be derived from the available columns.
+        Minimum non-null fraction for a column to be considered available.
     """
     from .catalog.query import DatasetAdapter
     import sympy as sp
+    from etdmap.catalog import load_catalog
+
+    if catalog_df is None:
+        catalog_df = load_catalog()
+
+    # Compatibility shim: Zon-opwekTotaalDiff contains a hyphen that SymPy
+    # cannot parse as a variable name, so no catalog rule references it.
+    # Rename to ZonopwekBruto before catalog processing.
+    # Remove this block once the upstream data source provides ZonopwekBruto directly.
+    if "Zon-opwekTotaalDiff" in df.columns and "ZonopwekBruto" not in df.columns:
+        df.rename(columns={"Zon-opwekTotaalDiff": "ZonopwekBruto"}, inplace=True)
+        logging.info(
+            "[adaptive] Renamed Zon-opwekTotaalDiff -> ZonopwekBruto "
+            "(compatibility shim; remove when upstream provides ZonopwekBruto directly)"
+        )
+
+    from etdmap.data_model import all_performance_data_columns
+    all_perf_data_cols = set(all_performance_data_columns)
+    derivable_in_catalog = set(catalog_df["lhs"].unique())
+    explicit_targets = set(target_columns) if target_columns is not None else None
 
     adapter = DatasetAdapter(catalog_df, completeness_threshold)
 
-    if target_columns is None:
-        # Default: attempt to derive all Prestatiedata columns from the data model
-        # that are not already effectively raw in this dataset.
-        # This covers both standard calculated columns AND model columns that a
-        # specific provider may not supply but that can be derived via the catalog.
-        from etdmap.data_model import model_column_order
-        eff_raw = adapter.effective_raw(df)
-        all_model_cols = set(model_column_order)
-        # Only attempt columns that appear in the catalog as LHS (otherwise they
-        # simply cannot be derived and would always fail)
-        derivable_in_catalog = set(catalog_df["lhs"].unique())
-        target_columns = (all_model_cols - eff_raw) & derivable_in_catalog
+    has_project_col = "ProjectIdBSV" in df.columns
 
-    if not target_columns:
-        logging.info("[add_calculated_columns_adaptive] No columns to derive — all targets already effectively raw.")
-        return df
+    # Plan cache keyed on (frozenset(available), frozenset(targets)).
+    # Households with identical column-availability patterns share a plan.
+    # plan_stats tracks per-plan: derived cols, not_derivable cols, and which
+    # (project, huis) pairs used it — for structured end-of-run logging.
+    _plan_cache: dict = {}
+    _plan_stats: dict = {}  # cache_key -> {derived, not_derivable, households}
 
-    logging.info(f"[add_calculated_columns_adaptive] Deriving {len(target_columns)} column(s): {sorted(target_columns)}")
+    # Write new columns in-place via df.loc to avoid per-household copies and
+    # the pd.concat peak at the end.  The groupby yields (huis_id, row_index)
+    # pairs so we never materialise a per-household copy of the full frame.
+    for huis_id, idx in df.groupby("HuisIdBSV", sort=False).groups.items():
+        huis_slice = df.loc[idx]
+        project_id = huis_slice["ProjectIdBSV"].iloc[0] if has_project_col else None
+        available = frozenset(adapter.available_columns(huis_slice))
 
-    plan = adapter.execution_plan(df, target_columns)
+        if explicit_targets is None:
+            targets = (all_perf_data_cols - available) & derivable_in_catalog
+        else:
+            targets = explicit_targets - available
 
-    for col_name, rhs_expr in plan:
-        logging.info(f"[add_calculated_columns_adaptive] Computing {col_name} = {rhs_expr}")
-        # Evaluate the SymPy expression against DataFrame columns
-        rhs_vars = [str(s) for s in rhs_expr.free_symbols]
-        # Build a lambda using sympy lambdify for vectorized evaluation
-        syms = [sp.Symbol(v) for v in rhs_vars]
-        func = sp.lambdify(syms, rhs_expr, modules="numpy")
-        col_data = {v: df[v].fillna(0) if fillna else df[v] for v in rhs_vars}
-        df[col_name] = func(**col_data)
+        if not targets:
+            continue
 
-    return df
+        cache_key = (available, frozenset(targets))
+        if cache_key not in _plan_cache:
+            report = adapter.feasibility_report(huis_slice, targets)
+            not_derivable = frozenset(report["not_derivable"])
+            derivable = targets - not_derivable
+            plan = adapter.execution_plan(huis_slice, derivable) if derivable else []
+            derived_cols = frozenset(col for col, _ in plan)
+            _plan_cache[cache_key] = plan
+            _plan_stats[cache_key] = {
+                "available": available,
+                "derived": derived_cols,
+                "not_derivable": not_derivable,
+                "households": [],
+            }
+
+        _plan_stats[cache_key]["households"].append((project_id, huis_id))
+
+        for col_name, rhs_expr in _plan_cache[cache_key]:
+            rhs_vars = [str(s) for s in rhs_expr.free_symbols]
+            syms = [sp.Symbol(v) for v in rhs_vars]
+            func = sp.lambdify(syms, rhs_expr, modules="numpy")
+            col_data = {v: df.loc[idx, v].fillna(0) if fillna else df.loc[idx, v]
+                        for v in rhs_vars}
+            df.loc[idx, col_name] = func(**col_data)
+
+    # --- Structured end-of-run summary ---
+    _log_adaptive_summary(_plan_stats, has_project_col)
+
+    result = df
+
+    # Required columns check — data quality error per ADR-003.
+    from etdmap.data_model import required_performance_data_columns
+    missing_required = set(required_performance_data_columns) - set(result.columns)
+    if missing_required:
+        logging.error(
+            "[adaptive] Required columns (Vereist=ja) missing after derivation: "
+            f"{sorted(missing_required)}"
+        )
+
+    # Rule variable coverage — informational.
+    from etdmap.catalog import rule_all_variables
+    missing_rule_vars = rule_all_variables - set(result.columns)
+    if missing_rule_vars:
+        logging.info(
+            f"[adaptive] Rule variables not present in dataset: {sorted(missing_rule_vars)}"
+        )
+
+    return result
+
+
+def _log_adaptive_summary(plan_stats: dict, has_project_col: bool) -> None:
+    """
+    Emit a structured per-project (per-provider-schema) derivation summary.
+
+    Groups plans by the set of projects whose households use them.  Plans shared
+    across projects (rare — would indicate two providers with the same column set)
+    are listed together.  Any household that diverges from its project's majority
+    plan is flagged individually.
+    """
+    if not plan_stats:
+        logging.info("[adaptive] No columns to derive -- all targets already available.")
+        return
+
+    # Build project -> list of cache_keys mapping
+    from collections import defaultdict
+    project_plans: dict = defaultdict(list)  # project_id -> [cache_key, ...]
+    for key, stats in plan_stats.items():
+        projects_for_plan = set(p for p, _ in stats["households"])
+        for proj in projects_for_plan:
+            project_plans[proj].append(key)
+
+    # Identify majority plan per project (most households)
+    project_majority: dict = {}
+    for proj, keys in project_plans.items():
+        counts = {k: sum(1 for p, _ in plan_stats[k]["households"] if p == proj) for k in keys}
+        project_majority[proj] = max(counts, key=counts.get)
+
+    logged_keys: set = set()
+
+    for proj in sorted(str(p) for p in project_plans):
+        proj_id = next(p for p in project_plans if str(p) == proj)
+        majority_key = project_majority[proj_id]
+        stats = plan_stats[majority_key]
+        hh_in_proj = [(p, h) for p, h in stats["households"] if p == proj_id]
+        n_hh = len(hh_in_proj)
+
+        proj_label = f"project {proj_id}" if has_project_col else "dataset"
+
+        if stats["derived"]:
+            logging.info(
+                f"[adaptive] {proj_label} ({n_hh} HH) | "
+                f"derived {len(stats['derived'])}: {sorted(stats['derived'])}"
+            )
+        else:
+            logging.info(
+                f"[adaptive] {proj_label} ({n_hh} HH) | nothing derived"
+            )
+
+        if stats["not_derivable"]:
+            logging.error(
+                f"[adaptive] {proj_label} ({n_hh} HH) | "
+                f"could not derive {len(stats['not_derivable'])}: "
+                f"{sorted(stats['not_derivable'])}"
+            )
+
+        logged_keys.add(majority_key)
+
+        # Flag outlier households in this project whose outcome differs from the majority.
+        # Two plans with the same derived+not_derivable sets but different available sets
+        # produce identical output — no need to warn about those.
+        majority_outcome = (
+            plan_stats[majority_key]["derived"],
+            plan_stats[majority_key]["not_derivable"],
+        )
+        for minority_key in project_plans[proj_id]:
+            if minority_key == majority_key:
+                continue
+            ms = plan_stats[minority_key]
+            minority_outcome = (ms["derived"], ms["not_derivable"])
+            if minority_outcome == majority_outcome:
+                continue  # same result, different available set — not a meaningful outlier
+            outliers = [(p, h) for p, h in ms["households"] if p == proj_id]
+            if not outliers:
+                continue
+            huis_ids = sorted(int(h) for _, h in outliers)
+            logging.warning(
+                f"[adaptive] {proj_label} | {len(outliers)} outlier HH {huis_ids} "
+                f"have a different provider schema | "
+                f"derived: {sorted(ms['derived'])} | "
+                f"could not derive: {sorted(ms['not_derivable'])}"
+            )
 
 
 # This calculation is done on a df with resampled data - it results in net_impact

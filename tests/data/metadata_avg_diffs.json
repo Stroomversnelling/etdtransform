@@ -19,35 +19,35 @@
         "ElektriciteitNetgebruikHoogDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "1.43468513022",
+                "max": "96275.08986431363",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaagDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "1.44572729788",
+                "max": "95233.83923501967",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoogDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "1.42463444316",
+                "max": "96085.17525569201",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaagDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "1.4580416281",
+                "max": "94890.97822022438",
                 "null_count": 0
             }
         },
         "GasgebruikDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "0.7985615763",
+                "max": "95772.63327903747",
                 "null_count": 0
             }
         },
@@ -65,24 +65,24 @@
                 "null_count": 210240
             }
         },
+        "ElektriciteitsgebruikWarmtepompInternDiff_avg": {
+            "statistics": {
+                "min": "-0.0",
+                "max": "21.62106909554",
+                "null_count": 0
+            }
+        },
         "ElektriciteitsgebruikBoosterDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "0.60795906708",
+                "max": "0.9749837113",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoilervatDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "0.30599452888",
-                "null_count": 0
-            }
-        },
-        "WarmteproductieWarmtepompDiff_avg": {
-            "statistics": {
-                "min": "-0.0",
-                "max": "0.055271923619999996",
+                "max": "0.97260021588",
                 "null_count": 0
             }
         }

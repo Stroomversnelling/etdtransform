@@ -263,38 +263,70 @@ df_calculated = add_calculated_columns_to_hh_data(df_imputed)
 
 ```
 
+The ibis/DuckDB variant (`add_calculated_columns_to_hh_data_ibis`) groups households by
+shared available-column schema and writes per-group temp parquets, then merges them using
+Polars streaming (`diagonal_relaxed`). This is 6x faster than DuckDB `union_by_name` at
+scale and does not materialise the full dataset in RAM.
+See `docs/parquet-merge-strategy.md` for the full benchmark record and implementation notes.
+
 ## Resampling to different time intervals
 
+`resample_hh_data_duckdb` reads `household_calculated.parquet` and writes one
+`household_{interval}.parquet` per requested interval. Resampling config (which
+columns to include, which aggregation method to apply) is read from
+`etdmap.data_model.get_aggregation_config()` so it stays in sync with the data model.
+
+- **5min**: column selection only — no aggregation, rows are unchanged.
+- **15min / 60min / 6h / 24h**: TIME_BUCKET groupby per (household, project).
+  Diff columns use SUM, other columns use their configured method (avg, max, ...).
+  A NULL result is returned for any bucket where fewer than `bucket_minutes / 5`
+  non-null source readings exist (preserves missingness, ADR-005).
+  Cumulative counterparts of Diff columns (e.g. `ElektriciteitNetgebruikHoog` from
+  `ElektriciteitNetgebruikHoogDiff`) are automatically rebuilt via window cumsum.
+
 ```python
+import etdtransform
+from etdtransform.aggregate import resample_hh_data_duckdb
 
-from etdtransform.aggregate import read_hh_data
-from etdtransform.calculated_columns import add_calculated_columns_to_hh_data
-etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
+etdtransform.options.aggregate_folder_path = 'aggregate_folder_path'
 
-# all files are saved to household_[interval].parquet in the aggregate folder, e.g. household_5min.parquet
-resample_hh_data(intervals=["5min"]) # loads the household_calculated.parquet file and retains 5 minute intervals and drops unnecessary columns.
-resample_hh_data(intervals=["60min", "15min"]) # loads the household_calculated.parquet file and resamples to 60min and 15min intervals in two separate datasets and drops unnecessary columns.
+# Writes household_5min.parquet, household_15min.parquet, household_60min.parquet
+resample_hh_data_duckdb(
+    source_path='aggregate_folder_path/household_calculated.parquet',
+    output_dir='aggregate_folder_path',
+    intervals=("5min", "15min", "60min"),
+)
 
+# Also supports 6h and 24h
+resample_hh_data_duckdb(
+    source_path='aggregate_folder_path/household_calculated.parquet',
+    output_dir='aggregate_folder_path',
+    intervals=("6h", "24h"),
+)
 ```
 
 ## Aggregation of household data to project level data
 
+`aggregate_project_data_duckdb` reads each `household_{interval}.parquet` produced by
+the resample step and aggregates to project level using the method defined in the data
+model per column (avg or sum across households). Diff columns produce cumulative
+counterparts at project level via the same window cumsum convention.
 
 ```python
+import etdtransform
+from etdtransform.aggregate import aggregate_project_data_duckdb
 
-from etdtransform.aggregate import read_hh_data
-from etdtransform.calculated_columns import add_calculated_columns_to_hh_data
-etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
+etdtransform.options.aggregate_folder_path = 'aggregate_folder_path'
 
-# all files are saved to household_[interval].parquet in the aggregate folder, e.g. household_5min.parquet
-resample_hh_data(intervals=["5min"]) # loads the household_calculated.parquet file and retains 5 minute intervals and drops unnecessary columns.
-resample_hh_data(intervals=["60min", "15min"]) # loads the household_calculated.parquet file and resamples to 60min and 15min intervals in two separate datasets and drops unnecessary columns.
+# Writes project_5min.parquet, project_15min.parquet, project_60min.parquet
+aggregate_project_data_duckdb(intervals=("5min", "15min", "60min"))
 
-# all files are saved to project_[interval].parquet in the aggregate folder, e.g. project_5min.parquet
-aggregate_project_data(intervals=["5min"]) # aggregates all households and calculated project averages for all 5 minute intervals
-aggregate_project_data(intervals=["60min", "15min"]) # aggregates all households and calculated project averages for resampled 60min and 15min intervals
-
+# Also supports 6h and 24h
+aggregate_project_data_duckdb(intervals=("6h", "24h"))
 ```
+
+Both functions use a single DuckDB pass per interval (no full pandas load) and read
+column configuration from `etdmap.data_model.get_aggregation_config()` at runtime.
 
 # Loading complete datasets at once
 
