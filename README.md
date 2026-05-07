@@ -36,6 +36,39 @@ source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
 pip install -e .
 ```
 
+## Test fixtures
+
+The test suite runs the aggregation/imputation pipeline on the anonymised
+synthetic test dataset (configured via `config_test.yaml`, see
+`config_test_template.yaml` for the committed reference) and compares the
+freshly-generated output against committed fixture files in `tests/data/`:
+
+- `metadata_*.json` -- per-column statistics summary of each pipeline output.
+- `sample_*.parquet` -- a deterministic 100-row sample of each pipeline output
+  (`df.sample(n=100, random_state=42)`).
+
+Both are derived from anonymised synthetic data per ADR-007 (see
+`../DECISIONS.md`); they are not production data. The synthetic input is
+sourced from `etdmap`'s test fixtures, which themselves are fully
+deterministic (PCG64 seed=42).
+
+`*.parquet` and `*.csv` are gitignored by default; the fixture files are
+re-included via explicit `!tests/data/sample_*.parquet` and
+`!tests/data/metadata_*.json` exceptions in `.gitignore`.
+
+To regenerate the fixtures after an intentional pipeline change, ensure
+`testdata/aggregate/` is freshly populated by running the etdtransform
+workflow, then from the repo root:
+
+```bash
+python tests/test_helpers.py
+```
+
+This overwrites `tests/data/metadata_*.json` and `tests/data/sample_*.parquet`.
+Per ADR-007, fixture regeneration must be deliberate -- review the diff with
+`git diff tests/data/` before committing, and confirm the change is the
+expected consequence of a known pipeline update rather than a silent drift.
+
 # Configuration
 
 To use most functions in this package, one needs to configure options so that the location of the mapped files created with `etdmap` and the location of aggregated data created with this package is defined up front.

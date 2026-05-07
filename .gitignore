@@ -14,7 +14,13 @@
 *_files
 
 # gitignore exceptions to above extensions
-!.\config_test_template.yaml
+!config_test_template.yaml
+
+# Test fixtures: sample parquets and metadata JSONs are committed canonical
+# expected outputs for tests. The fixture data is anonymised synthetic data
+# (ADR-007), not production. Regenerate via `python tests/test_helpers.py`.
+!tests/data/sample_*.parquet
+!tests/data/metadata_*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

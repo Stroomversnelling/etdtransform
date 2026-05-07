@@ -625,7 +625,7 @@
                 "null_count": 0
             }
         },
-        "validate_reading_date_uniek": {
+        "validate_reading_date_unique": {
             "statistics": {
                 "min": "True",
                 "max": "True",
