@@ -71,12 +71,27 @@ def load_knmi_weather_data(folder_path):
                     if line.startswith("#"):
                         commented_lines += 1
             # Keep last commented line, and load the data with that line as the header
-            df = pd.read_csv(file_path, skiprows=commented_lines - 1, header=0)
+            df = pd.read_csv(file_path, skiprows=commented_lines - 1, header=0,
+                             low_memory=False)
             df.columns = df.columns.str.strip()
             df.rename(columns={"# STN": "STN"}, inplace=True)
-            df["Temperatuur"] = df["T"] / 10  # noqa E501 Convert temperature to degrees Celsius
-            df["Windsnelheid"] = df["FH"] / 10  # Convert wind speed to m/s
-            df["Vochtigheid"] = df["U"]  # Humidity is already in percentage
+            # All KNMI data columns are numeric integers; blank strings appear for
+            # missing readings and cause object dtype.  Coerce every non-key column.
+            key_cols = {"STN", "YYYYMMDD", "HH"}
+            for col in df.columns:
+                if col not in key_cols:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            # KNMI raw units: temperature columns in 0.1 degC, wind speed columns
+            # in 0.1 m/s.  Convert in-place so that when get_weather_data_table
+            # maps these raw column names to ETD variable names via etdmodel, the
+            # values are already in SI units (degC, m/s).
+            for col in {"T", "T10N", "TD"} & set(df.columns):
+                df[col] = df[col] / 10
+            for col in {"FH", "FF", "FX"} & set(df.columns):
+                df[col] = df[col] / 10
+            df["Temperatuur"] = df["T"]    # degC (converted above)
+            df["Windsnelheid"] = df["FH"]  # m/s (converted above)
+            df["Vochtigheid"] = df["U"]    # % (already in correct units)
             humidity_coefficient = 0.33  # Replace with local value if available
             wind_speed_adjustment = 4.00  # Replace with local value if available
             vapor_pressure_constant = 17.27  # Replace with local value if available
