@@ -9,24 +9,16 @@ Config isolation: uses _TEST_CONFIG to cover both active method patterns
 so tests remain stable across Grist syncs.
 """
 
-import os
 import pytest
 import pandas as pd
-from pathlib import Path
 from unittest.mock import patch
 
-import ibis
 import etdtransform
-import etdmap.data_model
 from etdtransform.aggregate import (
     resample_hh_data,
     resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
-    aggregate_hh_data_5min_ibis,
-    add_calculated_columns_to_hh_data_ibis,
-    impute_hh_data_5min_chunked,
 )
-from etdtransform.impute import prepare_diffs_for_impute_ibis
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -74,42 +66,20 @@ def _assert_frames_equal(df_a, df_b, label_a, label_b):
 
 
 # ---------------------------------------------------------------------------
-# Session fixture: run ibis pipeline to produce household_calculated.parquet
+# Session fixtures: reuse the shared `ibis_pipeline` fixture from conftest.py
+# (its household_calculated.parquet is identical to what this file used to
+# produce in its own _calculated_dir fixture -- ~128s of duplicated work
+# eliminated).
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def _calculated_dir(tmp_path_factory):
-    """Run the ibis pipeline through calculated columns; return the output dir."""
-    cum_cols = etdmap.data_model.cumulative_columns[:10]
-    out = tmp_path_factory.mktemp("resample_calc")
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out
-    try:
-        aggregate_hh_data_5min_ibis()
-        tbl = ibis.read_parquet(str(out / "household_default.parquet"))
-        prepare_diffs_for_impute_ibis(
-            tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols
-        )
-        impute_hh_data_5min_chunked(
-            source_path=out / "household_default.parquet",
-            cum_cols=cum_cols,
-        )
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=str(out / "household_imputed.parquet"),
-            output_path=str(out / "household_calculated.parquet"),
-        )
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-    return out
-
-
-@pytest.fixture(scope="session")
-def resample_duckdb_dirs(tmp_path_factory, _calculated_dir):
+def resample_duckdb_dirs(tmp_path_factory, ibis_pipeline):
     """
-    Run DuckDB and pandas resample on the same household_calculated.parquet,
-    each into its own temp directory. Returns (duckdb_dir, pandas_dir).
+    Run DuckDB and pandas resample on the shared ibis_pipeline's
+    household_calculated.parquet, each into its own temp directory.
+    Returns (duckdb_dir, pandas_dir).
     """
-    calculated_path = str(_calculated_dir / "household_calculated.parquet")
+    calculated_path = str(ibis_pipeline / "household_calculated.parquet")
 
     # -- DuckDB path (patched to use _TEST_CONFIG) --
     duckdb_dir = tmp_path_factory.mktemp("resample_duckdb")
@@ -166,9 +136,9 @@ def aggregate_project_duckdb_dir(tmp_path_factory, resample_duckdb_dirs):
 # ---------------------------------------------------------------------------
 
 class TestResampleDuckdb:
-    def test_resample_5min_passthrough_row_count(self, resample_duckdb_dirs, _calculated_dir):
+    def test_resample_5min_passthrough_row_count(self, resample_duckdb_dirs, ibis_pipeline):
         duckdb_dir, _ = resample_duckdb_dirs
-        df_src = _load(str(_calculated_dir / "household_calculated.parquet"))
+        df_src = _load(str(ibis_pipeline / "household_calculated.parquet"))
         df_5min = _load(str(duckdb_dir / "household_5min.parquet"))
         # Row count must match the source (column selection only, no aggregation)
         assert len(df_5min) == len(df_src)

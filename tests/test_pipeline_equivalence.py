@@ -44,25 +44,12 @@ etdtransform/docs/parquet-merge-strategy.md for details. If a dtype mismatch
 appears in test_ibis_all_cols_match_pandas, fix the write path, not the test.
 """
 
-import ibis
 import pandas as pd
-import pytest
-from pathlib import Path
 
-import etdtransform
-from etdtransform.aggregate import (
-    aggregate_hh_data_5min,
-    aggregate_hh_data_5min_ibis,
-    aggregate_hh_data_duckdb,
-    add_calculated_columns_to_hh_data,
-    add_calculated_columns_to_hh_data_ibis,
-    impute_hh_data_5min,
-    impute_hh_data_5min_chunked,
-    read_hh_data,
-)
-from etdtransform.impute import prepare_diffs_for_impute, prepare_diffs_for_impute_ibis
-import etdmap.data_model
-import etdmap.index_helpers
+# Pipeline fixtures (pandas_pipeline, ibis_pipeline, duckdb_pipeline) and their
+# Meenemen / cum_cols dependencies live in tests/conftest.py so other test
+# files (e.g. test_resample_duckdb) can share the same outputs without
+# re-running the pipelines.
 
 
 # ---------------------------------------------------------------------------
@@ -116,111 +103,6 @@ def _assert_frames_equal(df_a, df_b, label_a, label_b, cols=None):
         rtol=REL_TOL,
         obj=f"{label_a} vs {label_b}",
     )
-
-
-# ---------------------------------------------------------------------------
-# Pipeline runners
-# ---------------------------------------------------------------------------
-
-def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_5min()
-        df = read_hh_data(interval="default")
-        prepare_diffs_for_impute(
-            df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
-        )
-        # sorted=False: prepare_diffs_for_impute sorts a local copy internally and does
-        # not return it, so df is still unsorted here. Always sort before imputing.
-        df_imputed = impute_hh_data_5min(
-            df, cum_cols=cum_cols, sorted=False, diffs_calculated=True
-        )
-        # adaptive=True: matches the ibis path which uses the adaptive catalog-driven approach
-        add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-
-def _run_ibis_pipeline(out_dir: Path, cum_cols: list) -> None:
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_5min_ibis()
-        tbl = ibis.read_parquet(str(out_dir / "household_default.parquet"))
-        prepare_diffs_for_impute_ibis(
-            tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols
-        )
-        impute_hh_data_5min_chunked(
-            source_path=out_dir / "household_default.parquet",
-            cum_cols=cum_cols,
-        )
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=str(out_dir / "household_imputed.parquet"),
-            output_path=str(out_dir / "household_calculated.parquet"),
-        )
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-
-def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
-    """DuckDB aggregation + pandas diffs + pandas impute + pandas adaptive calc columns."""
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_duckdb()
-        df = read_hh_data(interval="default")
-        prepare_diffs_for_impute(
-            df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
-        )
-        df_imputed = impute_hh_data_5min(
-            df, cum_cols=cum_cols, sorted=False, diffs_calculated=True
-        )
-        add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-
-# ---------------------------------------------------------------------------
-# Session fixtures -- run once, all tests share the outputs
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def _meenemen_updated():
-    """Populate Meenemen from bsv_metadata_file before any pipeline runs.
-
-    aggregate_hh_data_5min (and ibis/duckdb variants) filter on Meenemen == 1.
-    Without this call the index has no Meenemen == True rows and every pipeline
-    exits early with no output.  Mirrors the index_df fixture in
-    test_total_imputation_workflow.py.
-    """
-    etdmap.index_helpers.update_meenemen()
-
-
-@pytest.fixture(scope="session")
-def _cum_cols():
-    return etdmap.data_model.cumulative_columns[:10]
-
-
-@pytest.fixture(scope="session")
-def pandas_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
-    out = tmp_path_factory.mktemp("pandas_pipeline")
-    _run_pandas_pipeline(out, _cum_cols)
-    return out
-
-
-@pytest.fixture(scope="session")
-def ibis_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
-    out = tmp_path_factory.mktemp("ibis_pipeline")
-    _run_ibis_pipeline(out, _cum_cols)
-    return out
-
-
-@pytest.fixture(scope="session")
-def duckdb_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
-    out = tmp_path_factory.mktemp("duckdb_pipeline")
-    _run_duckdb_pipeline(out, _cum_cols)
-    return out
 
 
 # ---------------------------------------------------------------------------
