@@ -69,6 +69,32 @@ Per ADR-007, fixture regeneration must be deliberate -- review the diff with
 `git diff tests/data/` before committing, and confirm the change is the
 expected consequence of a known pipeline update rather than a silent drift.
 
+### Comparison strategy: subset-scoped, three independent checks
+
+Fixture comparisons in `tests/test_total_imputation_workflow.py` run as
+three independent pytest tests, each scoped to the test subset
+`etdmap.data_model.test_aggregation_columns`:
+
+- `test_files_schema_equal_expected` -- fails if the column SET inside the
+  subset differs between fixture and generated (reports added vs removed
+  separately).
+- `test_files_values_equal_expected` -- fails if any value in the subset
+  drifts between the stored 100-row sample and a re-sampled slice of the
+  generated full parquet (relative tolerance `1e-10`).
+- `test_files_metadata_stats_equal_expected` -- fails if per-column
+  statistics (min, max, null_count) drift in the subset.
+
+Filtering is applied to BOTH fixture and generated BEFORE any check, so
+data-model expansion outside the subset never breaks tests. Adding a
+variable to the comparison surface is a deliberate code change: extend
+`etdmap.data_model.test_aggregation_columns` and add plausible synthetic
+ranges for the new variable in `etdmap/tests/conftest.py::raw_data_fixture`.
+
+The three tests run independently. A failure in one does not short-circuit
+the others, so a regeneration-only situation (schema drift, no value drift)
+produces a clear "regenerate fixtures" signal distinct from a real
+regression.
+
 # Configuration
 
 To use most functions in this package, one needs to configure options so that the location of the mapped files created with `etdmap` and the location of aggregated data created with this package is defined up front.

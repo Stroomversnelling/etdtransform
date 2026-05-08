@@ -6,7 +6,7 @@ from typing import Optional
 import ibis
 import numpy as np
 import pandas as pd
-from etdmap.data_model import cumulative_columns
+from etdmap.data_model import cumulative_columns, get_aggregation_config
 from etdmap.index_helpers import read_index
 
 import etdtransform
@@ -1160,13 +1160,14 @@ def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
             logging.info(
                 "-- 5min interval - applying shortcut without transformation --",
             )
+            active_vars = active_aggregation_variables(df)
             columns_to_copy = [
                 "ReadingDate",
                 *group_column,
-                *list(aggregation_variables.keys()),
+                *list(active_vars.keys()),
             ]
 
-            for _var, config in aggregation_variables.items():
+            for _var, config in active_vars.items():
                 validator_column = config.get("validator_column")
                 if validator_column:
                     columns_to_copy.append(validator_column)
@@ -1176,7 +1177,7 @@ def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
             logging.info(
                 f"{interval}min interval - removing variables that do not pass filters"
             )
-            for var, config in aggregation_variables.items():
+            for var, config in active_vars.items():
                 validator_column = config.get("validator_column")
                 if validator_column:
                     df.loc[df[validator_column] is False, var] = pd.NA
@@ -1216,15 +1217,23 @@ def _sql_path(path) -> str:
 
 
 def _resample_sql_expr(col: str, method: str, min_count: int) -> str:
-    """Return the DuckDB SQL expression for resampling a single column."""
+    """Return the DuckDB SQL expression for resampling a single column.
+
+    Column names are double-quoted so hyphens (e.g. 'Zon-opwekTotaal') are
+    not parsed as arithmetic by DuckDB. All aggregate operands are cast to
+    DOUBLE so boolean columns (e.g. VentilatieFiltermelding) produce numeric
+    output (True -> 1.0, False -> 0.0) rather than raising a type error.
+    """
+    qcol = f'"{col}"'
+    num = f'CAST("{col}" AS DOUBLE)'
     if method == "sum":
-        return f"CASE WHEN COUNT({col}) >= {min_count} THEN SUM({col}) ELSE NULL END AS {col}"
+        return f"CASE WHEN COUNT({qcol}) >= {min_count} THEN SUM({num}) ELSE NULL END AS {qcol}"
     if method == "max":
-        return f"CASE WHEN COUNT({col}) >= {min_count} THEN MAX({col}) ELSE NULL END AS {col}"
+        return f"CASE WHEN COUNT({qcol}) >= {min_count} THEN MAX({num}) ELSE NULL END AS {qcol}"
     if method == "avg":
         return (
-            f"CASE WHEN COUNT({col}) >= {min_count}"
-            f" THEN SUM({col})::DOUBLE / COUNT({col}) ELSE NULL END AS {col}"
+            f"CASE WHEN COUNT({qcol}) >= {min_count}"
+            f" THEN SUM({num}) / COUNT({qcol}) ELSE NULL END AS {qcol}"
         )
     raise ValueError(f"Unknown resample_method '{method}' for column '{col}'")
 
@@ -1263,6 +1272,12 @@ def resample_hh_data_duckdb(
     cumsum over HuisIdBSV + ProjectIdBSV to reconstruct cumulative counterparts
     for every Diff column in the config.
 
+    Type validation: every aggregation column must be float, int, or boolean
+    (boolean is cast to 0.0/1.0 in SUM/AVG SQL). Any other type triggers a
+    ValueError listing all offending columns -- per ADR-003, data-correctness
+    errors fail loudly. Errors are also logged individually so the operator
+    sees the full picture in one run.
+
     Parameters
     ----------
     source_path : str
@@ -1273,18 +1288,57 @@ def resample_hh_data_duckdb(
         Intervals to produce. Supported formats: Nmin (e.g. "5min", "15min", "60min")
         or Nh (e.g. "6h", "24h"). The "5min" interval is a column-selection passthrough
         with no aggregation; all others use TIME_BUCKET grouping.
+
+    Raises
+    ------
+    ValueError
+        If any column in the active aggregation config has an unsupported type
+        (anything other than float, int, or boolean).
     """
     import duckdb
+    import pyarrow as pa
     import pyarrow.parquet as pq
     from etdmap.data_model import get_aggregation_config
 
     config = get_aggregation_config()
 
     # Determine which config columns actually exist in the source file.
-    source_schema_names = set(pq.read_schema(source_path).names)
+    _source_schema = pq.read_schema(source_path)
+    source_schema_names = set(_source_schema.names)
+    _schema_types = {field.name: field.type for field in _source_schema}
     active_config = {
         col: cfg for col, cfg in config.items() if col in source_schema_names
     }
+
+    # Validate that every aggregation column has a supported type. The SUM/AVG
+    # SQL casts each column to DOUBLE; that cast is meaningful only for
+    # floating, integer, and boolean (boolean -> 0.0/1.0). Any other type
+    # (string, timestamp, decimal, list, struct, ...) either errors at SQL
+    # execution or produces nonsense, so we refuse to proceed and let the
+    # operator either fix the source data or set AggregatieMeenemen=False in
+    # etdmodel.csv. ADR-003: hard fail on data-correctness errors.
+    type_errors: list[tuple[str, str]] = []
+    for col in active_config:
+        col_type = _schema_types.get(col)
+        if col_type is None:
+            continue
+        if pa.types.is_floating(col_type) or pa.types.is_integer(col_type):
+            continue
+        if pa.types.is_boolean(col_type):
+            continue  # intentional: boolean -> 0.0/1.0 in SUM/AVG SQL
+        logging.error(
+            f"resample_hh_data_duckdb: column '{col}' has unsupported type "
+            f"'{col_type}' for aggregation."
+        )
+        type_errors.append((col, str(col_type)))
+    if type_errors:
+        raise ValueError(
+            f"resample_hh_data_duckdb: {len(type_errors)} column(s) have "
+            f"unsupported types for aggregation. Supported types are float, "
+            f"int, and boolean. Either fix the source data types, or set "
+            f"AggregatieMeenemen=False in etdmodel.csv. Offending columns: "
+            + ", ".join(f"{c} ({t})" for c, t in type_errors)
+        )
 
     # Diff columns whose cumulative counterpart should be rebuilt.
     diff_cols = [col for col in active_config if col.endswith("Diff")]
@@ -1302,7 +1356,9 @@ def resample_hh_data_duckdb(
             for c in cumul_cols:
                 if c in source_schema_names and c not in select_cols:
                     select_cols.append(c)
-            quoted = ", ".join(select_cols)
+            # Double-quote identifiers so hyphenated names (e.g. "Zon-opwekTotaal") are
+            # not parsed as arithmetic expressions by DuckDB.
+            quoted = ", ".join(f'"{c}"' for c in select_cols)
             sql = (
                 f"COPY (SELECT {quoted} FROM read_parquet({_sql_path(source_path)}))"
                 f" TO {_sql_path(out_path)} (FORMAT PARQUET, COMPRESSION SNAPPY)"
@@ -1321,11 +1377,11 @@ def resample_hh_data_duckdb(
             resample_clause = ",\n            ".join(resample_exprs)
 
             cumsum_exprs = [
-                f"SUM({diff_col}) OVER ("
+                f'SUM("{diff_col}") OVER ('
                 f"PARTITION BY HuisIdBSV, ProjectIdBSV "
                 f"ORDER BY ReadingDate "
                 f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-                f") AS {base_col}"
+                f') AS "{base_col}"'
                 for diff_col, base_col in zip(diff_cols, cumul_cols)
             ]
             cumsum_clause = (",\n        " + ",\n        ".join(cumsum_exprs)) if cumsum_exprs else ""
@@ -1366,13 +1422,25 @@ def aggregate_project_data_duckdb(
     (PARTITION BY ProjectIdBSV ORDER BY ReadingDate) after the GROUP BY step,
     matching the convention in resample_hh_data_duckdb.
 
+    Type validation: every aggregation column must be float, int, or boolean
+    (same rule as resample_hh_data_duckdb). Any other type triggers a
+    ValueError listing all offending columns for the current interval -- per
+    ADR-003, data-correctness errors fail loudly.
+
     Parameters
     ----------
     intervals : tuple
         Intervals to aggregate; each element must match a household_{interval}.parquet
         file produced by a prior resample step.
+
+    Raises
+    ------
+    ValueError
+        If any column in the active aggregation config (per interval) has an
+        unsupported type (anything other than float, int, or boolean).
     """
     import duckdb
+    import pyarrow as pa
     import pyarrow.parquet as pq
     from etdmap.data_model import get_aggregation_config
 
@@ -1388,29 +1456,60 @@ def aggregate_project_data_duckdb(
         out_path = os.path.join(output_dir, f"project_{interval}.parquet")
         logging.info(f"aggregate_project_data_duckdb: writing {interval} -> {out_path}")
 
-        source_schema_names = set(pq.read_schema(source_path).names)
+        _source_schema = pq.read_schema(source_path)
+        source_schema_names = set(_source_schema.names)
+        _schema_types = {field.name: field.type for field in _source_schema}
         active_config = {col: cfg for col, cfg in config.items() if col in source_schema_names}
+
+        # Validate types -- same rule as resample_hh_data_duckdb. Float, int,
+        # and boolean are aggregable; anything else is a data-correctness
+        # error and is refused per ADR-003.
+        type_errors: list[tuple[str, str]] = []
+        for col in active_config:
+            col_type = _schema_types.get(col)
+            if col_type is None:
+                continue
+            if pa.types.is_floating(col_type) or pa.types.is_integer(col_type):
+                continue
+            if pa.types.is_boolean(col_type):
+                continue  # intentional: boolean -> 0.0/1.0 in SUM/AVG SQL
+            logging.error(
+                f"aggregate_project_data_duckdb [{interval}]: column '{col}' has "
+                f"unsupported type '{col_type}' for aggregation."
+            )
+            type_errors.append((col, str(col_type)))
+        if type_errors:
+            raise ValueError(
+                f"aggregate_project_data_duckdb [{interval}]: {len(type_errors)} "
+                f"column(s) have unsupported types for aggregation. Supported "
+                f"types are float, int, and boolean. Either fix the source data "
+                f"types, or set AggregatieMeenemen=False in etdmodel.csv. "
+                f"Offending columns: "
+                + ", ".join(f"{c} ({t})" for c, t in type_errors)
+            )
+
         diff_cols = [col for col in active_config if col.endswith("Diff")]
         cumul_cols = [col[:-4] for col in diff_cols]
 
         agg_exprs = []
         for col, cfg in active_config.items():
             method = cfg["aggregate_method"]
+            # CAST to DOUBLE handles boolean columns (True/False -> 1.0/0.0).
             if method == "avg":
-                agg_exprs.append(f"AVG({col}) AS {col}")
+                agg_exprs.append(f'AVG(CAST("{col}" AS DOUBLE)) AS "{col}"')
             elif method == "sum":
-                agg_exprs.append(f"SUM({col}) AS {col}")
+                agg_exprs.append(f'SUM(CAST("{col}" AS DOUBLE)) AS "{col}"')
             else:
                 raise ValueError(f"Unknown aggregate_method '{method}' for column '{col}'")
 
         agg_clause = ",\n            ".join(agg_exprs)
 
         cumsum_exprs = [
-            f"SUM({diff_col}) OVER ("
+            f'SUM("{diff_col}") OVER ('
             f"PARTITION BY ProjectIdBSV "
             f"ORDER BY ReadingDate "
             f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-            f") AS {base_col}"
+            f') AS "{base_col}"'
             for diff_col, base_col in zip(diff_cols, cumul_cols)
         ]
         cumsum_clause = (",\n        " + ",\n        ".join(cumsum_exprs)) if cumsum_exprs else ""
@@ -1506,7 +1605,7 @@ def aggregate_by_columns(df, group_column, size):
     """
     first = True
     combined_results = None
-    for var, config in aggregation_variables.items():
+    for var, config in active_aggregation_variables(df).items():
         logging.info(f"In loop for to aggregate by column {var}")
 
         method = config["aggregate_method"]
@@ -1849,7 +1948,7 @@ def resample_by_columns(
         .drop(columns=0)
     )
 
-    for var, config in aggregation_variables.items():
+    for var, config in active_aggregation_variables(df).items():
         logging.info(f"in loop for {var}")
         result = resample_variable(df, var, config, interval, group_column, min_count)
         combined_results = combined_results.merge(
@@ -2039,94 +2138,59 @@ def resample_avg(df, column, interval, group_column, min_count):
     return resampled
 
 
-# List of variables with their corresponding aggregation methods - lines marked with ## need a check of the methods - consider for some using 'last_value' for instantaneous variables
+# Active aggregation map: variable -> {resample_method, aggregate_method}.
+# Sourced from the etdmap data model (etdmodel.csv -> AggregatieMeenemen=True
+# rows with their ResamplingMethode / AggregatieMethode columns). Update the
+# Grist data model and re-sync etdmodel.csv to change what gets aggregated;
+# do not maintain a separate hardcoded list here.
+#
+# Compatibility shim: keep both naming conventions for the Zon production
+# variable in the dict so callers can look up by either name. The data model
+# typically registers both `Zon-opwekTotaalDiff` (Grist-original, hyphenated)
+# and `ZonopwekBruto` (runtime form used by SymPy / catalog code -- see
+# has_zon_rename in this file and the same shim in calculated_columns.py).
+# This idempotent additive shim ensures the alias still exists if either
+# entry is later removed from etdmodel.csv. Extend with additional aliases
+# in the same shape if other hyphenated names need similar treatment.
+aggregation_variables = get_aggregation_config()
+if (
+    "Zon-opwekTotaalDiff" in aggregation_variables
+    and "ZonopwekBruto" not in aggregation_variables
+):
+    aggregation_variables["ZonopwekBruto"] = aggregation_variables[
+        "Zon-opwekTotaalDiff"
+    ]
+elif (
+    "ZonopwekBruto" in aggregation_variables
+    and "Zon-opwekTotaalDiff" not in aggregation_variables
+):
+    aggregation_variables["Zon-opwekTotaalDiff"] = aggregation_variables[
+        "ZonopwekBruto"
+    ]
 
-aggregation_variables = {
-    "ElektriciteitNetgebruikHoogDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitNetgebruikHoog': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitNetgebruikLaagDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitNetgebruikLaag': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitTerugleveringHoogDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitTerugleveringHoog': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitTerugleveringLaagDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitTerugleveringLaag': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    ## 'ElektriciteitVermogen': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_elektriciteit_vermogen'},
-    ## 'Gasgebruik': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitsgebruikWTWDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitsgebruikWTW': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitsgebruikWarmtepompDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitsgebruikWarmtepomp': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitsgebruikBoosterDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitsgebruikBooster': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitsgebruikBoilervatDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitsgebruikBoilervat': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    "ElektriciteitsgebruikRadiatorDiff": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    #'ElektriciteitsgebruikRadiator': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    ## 'TemperatuurWarmTapwater': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_temperatuur_warm_tapwater'},
-    ## 'TemperatuurWoonkamer': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_temperatuur_woonkamer'},
-    ## 'TemperatuurSetpointWoonkamer': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_temperatuur_setpoint_woonkamer'},
-    ## 'WarmteproductieWarmtepomp': {'resample_method': 'max', 'aggregate_method': 'avg'},
-    ## 'WatergebruikWarmTapwater': {'resample_method': 'max', 'aggregate_method': 'avg'},
-    ## 'Zon-opwekMomentaan': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_zon_opwek_momentaan'},
-    "ZonopwekBruto": {
-        "resample_method": "sum", 
-        "aggregate_method": "avg"
-        },
-    #'Zon-opwekTotaal': {'resample_method': 'max', 'aggregate_method': 'diff_cumsum'},
-    ## 'CO2': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_co2'},
-    ## 'Luchtvochtigheid': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_luchtvochtigheid'},
-    ## 'Ventilatiedebiet': {'resample_method': 'avg', 'aggregate_method': 'avg', 'validator_column': 'validate_ventilatiedebiet'},
-    "TerugleveringTotaalNetto": {
-        "resample_method": "sum", 
-        "aggregate_method": "avg"
-        },
-    "ElektriciteitsgebruikTotaalNetto": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    "Netuitwisseling": {"resample_method": "sum", "aggregate_method": "avg"},
-    "ElektriciteitsgebruikTotaalWarmtepomp": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    "ElektriciteitsgebruikTotaalGebouwgebonden": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    "ElektriciteitsgebruikTotaalHuishoudelijk": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-    "Zelfgebruik": {"resample_method": "sum", "aggregate_method": "avg"},
-    "ElektriciteitsgebruikTotaalBruto": {
-        "resample_method": "sum",
-        "aggregate_method": "avg",
-    },
-}
+
+def active_aggregation_variables(df: pd.DataFrame) -> dict:
+    """
+    Return the subset of `aggregation_variables` whose key is a column in df.
+
+    Use this at the entry of any function that iterates `aggregation_variables`
+    and accesses df[var]. Variables registered as `AggregatieMeenemen=True` in
+    the data model that are not (yet) generated by the upstream pipeline -- or
+    aliases like `Zon-opwekTotaalDiff` that exist in the model alongside their
+    runtime form `ZonopwekBruto` -- are skipped here so the run does not
+    crash on a missing column. Skipped variables are logged once per call.
+    """
+    active = {}
+    skipped = []
+    df_cols = set(df.columns)
+    for var, config in aggregation_variables.items():
+        if var in df_cols:
+            active[var] = config
+        else:
+            skipped.append(var)
+    if skipped:
+        logging.warning(
+            f"active_aggregation_variables: skipping {len(skipped)} variable(s) "
+            f"not present in DataFrame: {sorted(skipped)}"
+        )
+    return active

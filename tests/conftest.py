@@ -80,3 +80,57 @@ def load_metadata():
             return json.load(f)
     # return inner function as ficture
     return _load_metadata
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _require_etdmap_mapped_fixtures():
+    """
+    Hard-fail at session start if testdata/mapped/ is not populated.
+
+    etdtransform pipeline tests read household_*.parquet and index.parquet
+    from `etdtransform.options.mapped_folder_path` as their input. Those
+    files are produced by etdmap's `mapped_fixtures` session fixture
+    (etdmap/tests/conftest.py), which runs when an etdmap test that
+    requests it is collected -- e.g. test_index_helpers.py tests.
+
+    Without that population, etdtransform tests fail in non-obvious ways:
+    `update_meenemen()` errors with "Household mismatch", or pipeline
+    functions silently process empty input. We fail loudly here with a
+    clear instruction instead.
+
+    Fixture invalidation across commits is currently parked -- if a code
+    change requires regenerating the fixtures, manually re-run the etdmap
+    suite. (See ADR-007 for fixture regeneration discipline.)
+    """
+    import pyarrow.parquet as pq
+    mapped_path = Path(config['etdtransform_configuration']['mapped_folder_path'])
+    index_parquet = mapped_path / "index.parquet"
+    instructions = (
+        "etdtransform tests require testdata/mapped/ to be populated by etdmap's "
+        "test fixtures (the `mapped_fixtures` session fixture in "
+        "etdmap/tests/conftest.py). Run etdmap's test suite first:\n"
+        "    cd ../etdmap && .venv/Scripts/python -m pytest tests/ -v\n"
+        "Then re-run etdtransform tests."
+    )
+    if not index_parquet.exists():
+        pytest.exit(
+            f"FIXTURE PRECONDITION FAILED: {index_parquet} does not exist.\n\n"
+            + instructions,
+            returncode=2,
+        )
+    try:
+        nrows = pq.read_metadata(index_parquet).num_rows
+    except Exception as exc:
+        pytest.exit(
+            f"FIXTURE PRECONDITION FAILED: cannot read {index_parquet} ({exc}).\n\n"
+            + instructions,
+            returncode=2,
+        )
+    if nrows == 0:
+        pytest.exit(
+            f"FIXTURE PRECONDITION FAILED: {index_parquet} exists but has 0 rows. "
+            f"This typically means etdmap's session-start cleanup ran but no test "
+            f"requested mapped_fixtures.\n\n"
+            + instructions,
+            returncode=2,
+        )
