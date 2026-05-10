@@ -326,7 +326,7 @@ The ibis/DuckDB variant (`add_calculated_columns_to_hh_data_ibis`) groups househ
 shared available-column schema and writes per-group temp parquets, then merges them using
 Polars streaming (`diagonal_relaxed`). This is 6x faster than DuckDB `union_by_name` at
 scale and does not materialise the full dataset in RAM.
-See `docs/parquet-merge-strategy.md` for the full benchmark record and implementation notes.
+See `../etdworkflow/docs/performance/parquet-merge-strategy.md` for the full benchmark record and implementation notes.
 
 ## Resampling to different time intervals
 
