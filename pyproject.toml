@@ -23,7 +23,12 @@ dependencies = [
     "sympy>=1.12",
     "pyarrow",
     "polars",
-    "etdmap @ git+https://github.com/Stroomversnelling/etdmap@main"
+    # etdmap is a peer source-installed dependency in this project
+    # (ADR-004 dependency chain: etdmap -> etdtransform). Listed as a
+    # plain requirement so pip will not try to re-fetch from a git URL
+    # when a local install is already present in the venv. Install from
+    # source: pip install ../etdmap
+    "etdmap",
 ]
 keywords = ["stroomversnelling", "energietransitie", "warmtepomp"]
 
