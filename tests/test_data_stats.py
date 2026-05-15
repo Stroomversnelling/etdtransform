@@ -23,7 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from etdmap.mapping_helpers import (
+from etdmap.data_stats import (
     NUMERIC_STATS_SCHEMA,
     _STATS_DTYPES,
     compute_numeric_column_stats,

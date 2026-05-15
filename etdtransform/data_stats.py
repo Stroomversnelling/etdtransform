@@ -38,7 +38,7 @@ from typing import Literal
 
 import pandas as pd
 
-from etdmap.mapping_helpers import (
+from etdmap.data_stats import (
     DEFAULT_SEASON_MONTHS,
     _STATS_DTYPES,  # noqa: F401  -- imported for documentation; _cast_stats_dtypes applies it
     _cast_stats_dtypes,
