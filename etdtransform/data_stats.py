@@ -150,7 +150,7 @@ def get_data_stats(
     # also fuse cleanly in DuckDB (cheap reductions, one scan for many
     # cols), while quantile-heavy numerics get one ibis execute per
     # column (DuckDB does not fuse quantile() across columns -- see
-    # `compute-stats-strategies.md` §3).
+    # `compute-stats-strategies-2026-05-08.md` §3).
     numeric_cols = [
         c for c in value_cols
         if schema[c].is_numeric() and not schema[c].is_boolean()

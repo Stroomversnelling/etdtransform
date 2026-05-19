@@ -40,7 +40,7 @@ The authoritative column types are defined in etdmap.data_model.model_column_typ
 parquet physical type must be utf8 (not large_utf8) so that pandas reads it
 as string[python] rather than object. add_calculated_columns_to_hh_data_ibis()
 enforces this via a PyArrow streaming passthrough after sink_parquet() -- see
-etdworkflow/docs/performance/parquet-merge-strategy.md for details. If a dtype
+etdworkflow/docs/performance/parquet-merge-strategy-2026-04-22.md for details. If a dtype
 mismatch appears in test_ibis_all_cols_match_pandas, fix the write path, not
 the test.
 """
