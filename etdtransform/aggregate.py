@@ -1255,6 +1255,104 @@ def _parse_interval(interval: str):
     raise ValueError(f"Unsupported interval '{interval}'. Expected Nmin or Nh.")
 
 
+def _finite_or_null(col_expr):
+    """Map +/-inf and NaN in an ibis column to NULL.
+
+    A 'derive' ratio (e.g. ZelfgebruikPercentage = Zelfgebruik / ZonopwekBruto)
+    hits a zero denominator whenever there is no production: sympy_to_ibis
+    fill_null(0)'s the inputs, so a night interval becomes 0 / 0 = NaN and a
+    spurious non-zero numerator over zero production becomes +/-inf. Neither is a
+    real value -- collapse both to NULL so the result is pd.NA (ADR-005), not a
+    bogus number.
+    """
+    inf = ibis.literal(float("inf"))
+    bad = (
+        col_expr.isnull()
+        | col_expr.isnan()
+        | (col_expr == inf)
+        | (col_expr == -inf)
+    )
+    return bad.ifelse(ibis.null(), col_expr)
+
+
+def _derive_columns_in_parquet(path, derive_cols, catalog_df=None):
+    """Recompute 'derive' columns in-place from their catalog rules.
+
+    A 'derive' column is never summed or averaged as a stored value -- it is an
+    intensive quantity (a ratio) that must be recomputed from its components
+    AFTER they have been aggregated to the target resolution. This reads the
+    just-written parquet, drops any stale copy of each derive column, derives it
+    via the catalog (the same machinery as the calculated stage), masks
+    non-finite results to NULL, and atomically replaces the file.
+
+    Missing components are tolerated (skip-and-log): a derive column whose
+    inputs are absent at this resolution -- e.g. a non-PV project without
+    ZonopwekBruto -- is logged and left out rather than failing the pass.
+
+    Parameters
+    ----------
+    path : str
+        Parquet file to rewrite in place (a household_{interval} or
+        project_{interval} file).
+    derive_cols : list[str]
+        Columns flagged with method 'derive' that are present in this file.
+    catalog_df : pd.DataFrame, optional
+        Loaded catalog; loaded via load_catalog() when None.
+    """
+    from etdmap.catalog import load_catalog
+    from etdtransform.catalog.query import DatasetAdapter
+    from etdtransform.calculated_columns import sympy_to_ibis
+
+    if not derive_cols:
+        return
+    if catalog_df is None:
+        catalog_df = load_catalog()
+
+    con = ibis.duckdb.connect()
+    derived_now = []
+    tmp_path = None
+    try:
+        tbl = con.read_parquet(path)
+        present = set(tbl.columns)
+        targets = set(derive_cols)
+        # Force recompute: treat the derive targets as NOT available so the
+        # planner derives them from their components, and drop any stale copy
+        # carried in from a finer resolution.
+        available = present - targets
+        stale = [c for c in derive_cols if c in present]
+        if stale:
+            tbl = tbl.drop(*stale)
+
+        adapter = DatasetAdapter(catalog_df, completeness_threshold=0.0)
+        plan, not_derivable = adapter.execution_plan_for_available(available, targets)
+
+        if not_derivable:
+            logging.warning(
+                f"[derive] {os.path.basename(path)}: cannot derive "
+                f"{sorted(not_derivable)} -- required components missing at this "
+                f"resolution; leaving column(s) out (skip-and-log)."
+            )
+
+        for col, rhs_expr in plan:
+            tbl = tbl.mutate(**{col: sympy_to_ibis(rhs_expr, tbl)})
+            derived_now.append(col)
+
+        if derived_now:
+            tbl = tbl.mutate(
+                **{c: _finite_or_null(tbl[c]) for c in derived_now}
+            )
+            tmp_path = path + ".derivetmp.parquet"
+            tbl.to_parquet(tmp_path)
+    finally:
+        con.disconnect()
+
+    if tmp_path is not None:
+        os.replace(tmp_path, path)
+        logging.info(
+            f"[derive] {os.path.basename(path)}: derived {sorted(derived_now)}"
+        )
+
+
 def resample_hh_data_duckdb(
     source_path: str,
     output_dir: str,
@@ -1309,6 +1407,18 @@ def resample_hh_data_duckdb(
     active_config = {
         col: cfg for col, cfg in config.items() if col in source_schema_names
     }
+
+    # 'derive' columns are recomputed from their catalog rule AFTER the
+    # components are resampled -- they must NOT go through the SUM/AVG/MAX
+    # groupby. Load the catalog once if any are present.
+    derive_cols = [
+        col for col, cfg in active_config.items()
+        if cfg["resample_method"] == "derive"
+    ]
+    catalog_df = None
+    if derive_cols:
+        from etdmap.catalog import load_catalog
+        catalog_df = load_catalog()
 
     # Validate that every aggregation column has a supported type. The SUM/AVG
     # SQL casts each column to DOUBLE; that cast is meaningful only for
@@ -1373,6 +1483,7 @@ def resample_hh_data_duckdb(
             resample_exprs = [
                 _resample_sql_expr(col, cfg["resample_method"], min_count)
                 for col, cfg in active_config.items()
+                if cfg["resample_method"] != "derive"
             ]
             resample_clause = ",\n            ".join(resample_exprs)
 
@@ -1404,6 +1515,13 @@ def resample_hh_data_duckdb(
             """
             with duckdb.connect() as con:
                 con.execute(sql)
+
+            # Recompute derive columns (ratios) from their now-resampled
+            # components. The 5min branch carries them as-is (already correct
+            # per-interval from the calculated stage); only the grouping
+            # intervals need re-derivation.
+            if derive_cols:
+                _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
 
         logging.info(f"resample_hh_data_duckdb: done {interval}")
 
@@ -1446,6 +1564,12 @@ def aggregate_project_data_duckdb(
 
     config = get_aggregation_config()
     output_dir = etdtransform.options.aggregate_folder_path
+
+    # Load the catalog once if any variable is recomputed post-aggregation.
+    catalog_df = None
+    if any(cfg["aggregate_method"] == "derive" for cfg in config.values()):
+        from etdmap.catalog import load_catalog
+        catalog_df = load_catalog()
 
     # Diff columns whose cumulative counterpart should be rebuilt.
     diff_cols_all = [col for col in config if col.endswith("Diff")]
@@ -1491,10 +1615,16 @@ def aggregate_project_data_duckdb(
         diff_cols = [col for col in active_config if col.endswith("Diff")]
         cumul_cols = [col[:-4] for col in diff_cols]
 
+        derive_cols = [
+            col for col, cfg in active_config.items()
+            if cfg["aggregate_method"] == "derive"
+        ]
         agg_exprs = []
         for col, cfg in active_config.items():
             method = cfg["aggregate_method"]
             # CAST to DOUBLE handles boolean columns (True/False -> 1.0/0.0).
+            if method == "derive":
+                continue  # recomputed post-aggregation from its catalog rule
             if method == "avg":
                 agg_exprs.append(f'AVG(CAST("{col}" AS DOUBLE)) AS "{col}"')
             elif method == "sum":
@@ -1531,6 +1661,14 @@ def aggregate_project_data_duckdb(
         """
         with duckdb.connect() as con:
             con.execute(sql)
+
+        # Recompute derive columns (ratios) from their cross-household
+        # aggregated components. Unlike the household resample, this applies at
+        # EVERY interval (incl. 5min): a fleet ratio must be
+        # sum(numerator)/sum(denominator) over households, never the mean of the
+        # per-household ratios.
+        if derive_cols:
+            _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
 
         logging.info(f"aggregate_project_data_duckdb: done {interval}")
 

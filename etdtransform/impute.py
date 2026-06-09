@@ -270,7 +270,7 @@ def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
     Concatenate household maximum values and bounds for all columns.
 
     Each column may cover a different subset of (project, household) pairs
-    (e.g. O-Nexus vs non-O-Nexus). An outer merge on the key columns is used
+    (e.g. one supplier vs another). An outer merge on the key columns is used
     so that households missing a column receive pd.NA rather than being
     silently assigned another column's values via positional alignment.
     """
@@ -293,7 +293,7 @@ def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
     Concatenate average difference columns for all variables.
 
     Each column may cover a different subset of (project, date) pairs
-    (e.g. O-Nexus vs non-O-Nexus). An outer merge on the key columns is used
+    (e.g. one supplier vs another). An outer merge on the key columns is used
     so that projects missing a column receive pd.NA rather than being
     silently assigned another column's values via positional alignment.
     """

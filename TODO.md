@@ -10,7 +10,7 @@ device is "absent" or just "not yet reported", `add_calculated_columns_adaptive`
 decide whether to derive TotaalWarmtepomp from sub-device columns or skip them.
 
 The current workaround is to add absent-device columns as all-zeros in the mapper script
-before `run_standard_pipeline` (see `etdworkflow/map_o_nexus.py`). This is fragile: it
+before `run_standard_pipeline` (see the supplier mappers in etdworkflow). This is fragile: it
 must be repeated per mapper and is invisible to `add_calculated_columns_adaptive`.
 
 ### The proper fix
@@ -48,7 +48,7 @@ etdtransform) would then:
 
 ### Related
 
-- Short-term workaround: `map_o_nexus.py` adds absent columns as Float64 all-NA + zeros
+- Short-term workaround: a supplier mapper adds absent columns as Float64 all-NA + zeros
 - Affected sensors: `ElektriciteitsgebruikBooster`, `ElektriciteitsgebruikWTW`,
   `ElektriciteitsgebruikRadiator`, `ElektriciteitsgebruikBoilervat`
 - See also: imputation broadcast bug in "Imputation pipeline" section below
@@ -72,8 +72,8 @@ inflates annual sums and introduces spurious energy where none existed.
 
 The short-term workaround (per-mapper pre-processing) is to fill absent-sensor columns
 with `0.0` before the data enters the pipeline, so those households participate in the
-avg with zero weight rather than being excluded. See `map_factory_zero_v2.py` which calls
-`fill_down_infrequent_devices` for the known FZ optional-device columns.
+avg with zero weight rather than being excluded. See the supplier mappers which call
+`fill_down_infrequent_devices` for the known optional-device columns.
 
 ### The structural fix
 
@@ -129,7 +129,7 @@ skips any row where `_avg = pd.NA` rather than treating it as a signal to fill.
 ### Related
 
 - Discovered via regression comparison 2026-04-21 (see etdworkflow comparison_log.md)
-- Short-term workaround: `map_factory_zero_v2.py` calls `fill_down_infrequent_devices`
-  for FZ optional-device columns before `run_standard_pipeline`
+- Short-term workaround: a supplier mapper calls `fill_down_infrequent_devices`
+  for optional-device columns before `run_standard_pipeline`
 - Affected sensors in comparison run: `ElektriciteitsgebruikBoilervat`,
   `ElektriciteitsgebruikBooster`, `WatergebruikRuimteverwarming`, `WatergebruikWarmTapwater`
