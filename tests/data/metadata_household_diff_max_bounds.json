@@ -18,71 +18,71 @@
         },
         "ElektriciteitNetgebruikHoogDiff_huis_max": {
             "statistics": {
-                "min": "99996.6389582157",
-                "max": "99998.8986597061",
+                "min": "1.499964584",
+                "max": "1.4999984799",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikHoogDiff_upper_bound": {
             "statistics": {
-                "min": "199997.40963706968",
-                "max": "199997.7042885303",
+                "min": "2.99999114452",
+                "max": "2.99999556432",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaagDiff_huis_max": {
             "statistics": {
-                "min": "99996.6510562897",
-                "max": "99998.9794197082",
+                "min": "1.4999647655",
+                "max": "1.4999996913",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaagDiff_upper_bound": {
             "statistics": {
-                "min": "199997.04386787416",
-                "max": "199997.8787151336",
+                "min": "2.9999856578",
+                "max": "2.99999818072",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoogDiff_huis_max": {
             "statistics": {
-                "min": "99996.7914687395",
-                "max": "99998.9422559738",
+                "min": "1.4999668717",
+                "max": "1.4999991338",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoogDiff_upper_bound": {
             "statistics": {
-                "min": "199997.8451496124",
-                "max": "199997.85360326763",
+                "min": "2.9999976772",
+                "max": "2.99999780396",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaagDiff_huis_max": {
             "statistics": {
-                "min": "99995.0315208435",
-                "max": "99998.908718586",
+                "min": "1.4999404722",
+                "max": "1.4999986308",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaagDiff_upper_bound": {
             "statistics": {
-                "min": "199997.77021408075",
-                "max": "199997.79926261908",
+                "min": "2.9999965532",
+                "max": "2.99999698896",
                 "null_count": 0
             }
         },
         "GasgebruikDiff_huis_max": {
             "statistics": {
-                "min": "99995.5661025047",
-                "max": "99998.9581458569",
+                "min": "0.833271385",
+                "max": "0.8332996512",
                 "null_count": 0
             }
         },
         "GasgebruikDiff_upper_bound": {
             "statistics": {
-                "min": "199997.06463088983",
-                "max": "199997.89686045653",
+                "min": "1.66659220548",
+                "max": "1.66659914048",
                 "null_count": 0
             }
         },
@@ -116,43 +116,43 @@
         },
         "ElektriciteitsgebruikWarmtepompInternDiff_huis_max": {
             "statistics": {
-                "min": "23.0395719347",
-                "max": "23.0399801575",
+                "min": "1.9999628416",
+                "max": "1.9999982776",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikWarmtepompInternDiff_upper_bound": {
             "statistics": {
-                "min": "46.07992412644",
-                "max": "46.0799548038",
+                "min": "3.99999341376",
+                "max": "3.9999960768",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoosterDiff_huis_max": {
             "statistics": {
-                "min": "0.9999846281",
-                "max": "0.9999981401",
+                "min": "0.319995081",
+                "max": "0.3199994048",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoosterDiff_upper_bound": {
             "statistics": {
-                "min": "1.99999566924",
-                "max": "1.9999959468400001",
+                "min": "0.63999861412",
+                "max": "0.6399987030000001",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoilervatDiff_huis_max": {
             "statistics": {
-                "min": "0.9999529476",
-                "max": "0.9999996936",
+                "min": "0.3199849432",
+                "max": "0.319999902",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoilervatDiff_upper_bound": {
             "statistics": {
-                "min": "1.99999134296",
-                "max": "1.99999744776",
+                "min": "0.6399972297600001",
+                "max": "0.6399991833600001",
                 "null_count": 0
             }
         }

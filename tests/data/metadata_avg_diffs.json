@@ -19,35 +19,35 @@
         "ElektriciteitNetgebruikHoogDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "96275.08986431363",
+                "max": "1.44414078938",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaagDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "95233.83923501967",
+                "max": "1.42852187374",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoogDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "96085.17525569201",
+                "max": "1.4412920417400001",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaagDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "94890.97822022438",
+                "max": "1.4233789071",
                 "null_count": 0
             }
         },
         "GasgebruikDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "95772.63327903747",
+                "max": "0.79808133394",
                 "null_count": 0
             }
         },
@@ -68,21 +68,21 @@
         "ElektriciteitsgebruikWarmtepompInternDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "21.62106909554",
+                "max": "1.8768289145400001",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoosterDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "0.9749837113",
+                "max": "0.3119947876333333",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikBoilervatDiff_avg": {
             "statistics": {
                 "min": "-0.0",
-                "max": "0.97260021588",
+                "max": "0.31123206908",
                 "null_count": 0
             }
         }

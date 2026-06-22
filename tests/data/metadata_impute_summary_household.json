@@ -32,15 +32,15 @@
         },
         "diff_col_total": {
             "statistics": {
-                "min": "52361.9152669413",
-                "max": "5271851243.530151",
+                "min": "16768.5398815475",
+                "max": "105404.8818930108",
                 "null_count": 0
             }
         },
         "cum_col_min_max_diff": {
             "statistics": {
-                "min": "52361.915266945194",
-                "max": "5271851243.530151",
+                "min": "16768.5398815421",
+                "max": "105404.88189300922",
                 "null_count": 0
             }
         },
@@ -60,7 +60,7 @@
         },
         "imputed_na": {
             "statistics": {
-                "min": "-52770",
+                "min": "0",
                 "max": "11",
                 "null_count": 0
             }
@@ -68,8 +68,8 @@
         "element": {
             "statistics": {
                 "min": "4",
-                "max": "128",
-                "null_count": 60
+                "max": "136",
+                "null_count": 70
             }
         },
         "bitwise_methods": {

@@ -26,8 +26,8 @@
         "element": {
             "statistics": {
                 "min": "4",
-                "max": "128",
-                "null_count": 12
+                "max": "136",
+                "null_count": 14
             }
         },
         "missing": {
@@ -46,7 +46,7 @@
         },
         "imputed_na": {
             "statistics": {
-                "min": "-262982",
+                "min": "0",
                 "max": "55",
                 "null_count": 0
             }
