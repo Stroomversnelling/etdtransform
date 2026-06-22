@@ -559,6 +559,45 @@ def plan_chunked_build(rules: list[dict], cache_dir: Path | str) -> dict:
 # Top-level chunked + parallel build
 # ---------------------------------------------------------------------------
 
+_CATALOG_COLUMNS = ["lhs", "rhs_text", "rhs_vars", "rhs_var_count", "physical_models"]
+
+
+def _canonical_catalog(rows: list[dict]) -> pd.DataFrame:
+    """Build the catalog frame in a canonical, build-order-independent row order.
+
+    The set of equations the build produces is deterministic, but the order
+    rows are emitted in is not: the build walks set/dict collections of SymPy
+    symbols whose iteration order shifts with per-process hash randomization.
+    Sorting on a total-order key here makes the written artifact byte-stable
+    across runs and machines, so a row-by-row diff of catalog.parquet reflects
+    real changes to the equation set instead of incidental row shuffling.
+    """
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=_CATALOG_COLUMNS)
+    # rhs_vars / physical_models are variable/model *sets*; their stored element
+    # order is hash-dependent and carries no meaning, so sort each cell to a
+    # canonical order. Without this the row order is stable but the list cells
+    # still serialise differently across builds.
+    df["rhs_vars"] = df["rhs_vars"].map(lambda v: sorted(str(x) for x in v))
+    df["physical_models"] = df["physical_models"].map(
+        lambda v: sorted(str(x) for x in v)
+    )
+    keys = pd.DataFrame(
+        {
+            "lhs": df["lhs"].astype(str),
+            "rhs_text": df["rhs_text"].astype(str),
+            "rhs_var_count": df["rhs_var_count"],
+            "rhs_vars_key": df["rhs_vars"].map(lambda v: ",".join(v)),
+            "models_key": df["physical_models"].map(lambda v: ",".join(v)),
+        }
+    )
+    order = keys.sort_values(
+        ["lhs", "rhs_var_count", "rhs_text", "rhs_vars_key", "models_key"]
+    ).index
+    return df.loc[order].reset_index(drop=True)
+
+
 def build_chunked(
     rules: list[dict],
     cache_dir: Path | str,
@@ -719,7 +758,7 @@ def build_chunked(
         f"[build_chunked] DONE total_wall_s={time.perf_counter() - t_start:.2f} "
         f"rows={len(pruned_rows)}"
     )
-    return pd.DataFrame(pruned_rows)
+    return _canonical_catalog(pruned_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +783,7 @@ def build_serial_reference(rules: list[dict]) -> pd.DataFrame:
             chunk = build_nl_chunk(rule, linear_df, syms, m)
             if not chunk.empty:
                 all_rows.extend(chunk.to_dict(orient="records"))
-    return pd.DataFrame(compose_and_prune(all_rows))
+    return _canonical_catalog(compose_and_prune(all_rows))
 
 
 # ---------------------------------------------------------------------------
