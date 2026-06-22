@@ -330,11 +330,28 @@ def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr]
         ]  # Select all columns from tbl plus Weerstation and STN
     )
 
-    # Extract hour (HH) and date (YYYYMMDD) for the join
+    # Extract hour (HH) and date (YYYYMMDD) for the join.
+    # According to KNMI, "HH = tijd (HH=uur, UT.12 UT=13 MET, 14 MEZT. 
+    # Uurvak 05 loopt van 04.00 UT tot 5.00 UT / time (HH uur/hour, UT. 12 UT=13 MET, 
+    # 14 MEZT. Hourly division 05 runs from 04.00 UT to 5.00 UT"
+    # KNMI hourly data labels each row with an "uurvak" HH in 1..24, where
+    # uurvak h covers [(h-1):00, h:00) UT and the instantaneous values (T, U,
+    # ...) are the observation at the end of that vak, i.e. at h:00 UT.
+    # ReadingDate is naive UTC, so a reading at clock-hour h:-- must join to
+    # uurvak h. Deriving both YYYYMMDD and HH from (ReadingDate -
+    # 1 hour) yields exactly that (ref.hour()+1 == h for h in 1..23) and also
+    # handles the midnight boundary correctly: a 00:00 reading maps to uurvak
+    # 24 of the previous day instead of the non-existent HH=0.
+    #
+    # This replaces an earlier "+1 on ReadingDate.hour()" that over-shifted
+    # every reading by one uurvak; the one-hour lead was confirmed empirically
+    # by cross-correlating TemperatuurBuitenWarmtepomp (local sensor) against
+    # the joined KNMI temperature (peak correlation at a -1 hour shift).
     if 'YYYYMMDD' not in tbl.columns:
+        ref = tbl.ReadingDate - ibis.interval(hours=1)
         tbl = tbl.mutate(
-            HH=tbl.ReadingDate.hour() + 1,
-            YYYYMMDD=tbl.ReadingDate.strftime("%Y%m%d").cast("int"),
+            HH=ref.hour() + 1,
+            YYYYMMDD=ref.strftime("%Y%m%d").cast("int"),
         )
 
     # Join with weather data
@@ -425,12 +442,14 @@ def get_dfs():
         )
 
         if "YYYYMMDD" not in dfs.columns:
-            dfs[interval]["HH"] = (
-                dfs[interval]["ReadingDate"].dt.strftime("%H").astype(int) + 1
-            )
-            dfs[interval]["YYYYMMDD"] = (
-                dfs[interval]["ReadingDate"].dt.strftime("%Y%m%d").astype(int)
-            )
+            # See join_weather_data: KNMI uurvak HH (1..24) for a reading at
+            # clock-hour h:00 UT is uurvak h (obs at end of vak), so derive
+            # both HH and YYYYMMDD from (ReadingDate - 1 hour). This avoids the
+            # one-uurvak over-shift of the old "+1" and maps 00:00 readings to
+            # uurvak 24 of the previous day rather than the non-existent HH=0.
+            ref = dfs[interval]["ReadingDate"] - pd.Timedelta(hours=1)
+            dfs[interval]["HH"] = ref.dt.hour + 1
+            dfs[interval]["YYYYMMDD"] = ref.dt.strftime("%Y%m%d").astype(int)
 
         dfs[interval] = pd.merge(
             dfs[interval],
