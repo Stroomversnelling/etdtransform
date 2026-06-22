@@ -1,8 +1,9 @@
 """
 validate_rule_expressions — SymPy-based validation of Rule table entries.
 
-Kept in etdtransform to contain the SymPy dependency. Called by sync_data_model.py
-(etdworkflow) via a thin import, so the rest of etdworkflow stays SymPy-free.
+Kept in etdtransform to contain the SymPy dependency. The data model sync
+tooling calls this via a thin import, so the rest of the sync layer stays
+SymPy-free.
 """
 
 from sympy.parsing.sympy_parser import parse_expr

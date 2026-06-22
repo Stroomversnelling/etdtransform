@@ -2,8 +2,10 @@
 equation-catalog builder, partitioned per physical model.
 
 Public entry points: build_chunked, build_serial_reference,
-verify_against_serial. See etdworkflow/docs/equation-catalog/ for the
-conceptual strategy and the dated performance briefs.
+verify_against_serial. The design used here balances performance
+and catalog converage by minimizing the size of a system 
+of non-linear equations to solve through partitioning and expansion
+substituting linear equations into the non-linear derivations.
 
 Partitioning
 ------------
@@ -14,7 +16,7 @@ Each model is built independently:
   for model M:
     linear chunk     -- BFS+Pareto over linear rules that include M in
                         their physical_models list.
-    nl-chunk per NL rule R in M
+    non-linear (NL) chunk per NL rule R in M
                      -- sp.solve direct isolations + expansion pass
                         substituting linear-catalog derivations into R
                         and re-solving the result.
@@ -41,8 +43,8 @@ Two phases on the same ProcessPoolExecutor:
 
 This module is pure etdtransform -- it only depends on sympy, pandas,
 and other etdtransform.catalog primitives (EquationRegistry,
-build_catalog). It does NOT import etdmap, so etdworkflow can call
-build_chunked() during sync even while etdmap is mid-flight broken.
+build_catalog). It does NOT import etdmap, so the sync tooling can call
+build_chunked() during catalog rebuild even while etdmap is mid-flight broken.
 
 Future improvement: single-build with model propagation
 -------------------------------------------------------

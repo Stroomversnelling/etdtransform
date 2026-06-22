@@ -20,7 +20,9 @@ from unittest.mock import patch
 
 import etdtransform
 from etdtransform.aggregate import (
+    _catalog_hash,
     _derive_columns_in_parquet,
+    _write_calc_provenance,
     resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
 )
@@ -156,6 +158,14 @@ class TestResampleDerive:
         # mean of the per-5min ratios for bucket 1 would be (25 + 100)/... -> not 30
         assert float(df15[_ZP].iloc[0]) != pytest.approx(62.5, rel=REL_TOL)
 
+        # provenance sidecar: which equation produced the ratio, per scope.
+        prov = _read(os.path.join(out, "derive_provenance_household.parquet"))
+        assert (prov["variable"] == _ZP).all()
+        assert "household_15min" in set(prov["scope"])
+        rhs = prov.loc[prov["scope"] == "household_15min", "rhs_text"].iloc[0]
+        assert "Zelfgebruik" in rhs and "ZonopwekBruto" in rhs
+        assert prov["catalog_hash"].notna().all()
+
 
 # ---------------------------------------------------------------------------
 # Integration: project (cross-household) aggregation
@@ -191,3 +201,40 @@ class TestProjectDerive:
         # (== sum/sum; the /N cancels). NOT the mean of per-HH ratios (= 30).
         assert float(prj[_ZP].iloc[0]) == pytest.approx(100.0 / 6.0, rel=1e-6)
         assert float(prj[_ZP].iloc[0]) != pytest.approx(30.0, rel=1e-3)
+
+        prov = _read(str(tmp_path / "derive_provenance_project.parquet"))
+        assert "project_5min" in set(prov["scope"])
+        assert (prov["variable"] == _ZP).all()
+
+
+# ---------------------------------------------------------------------------
+# Provenance helpers (calculated-stage)
+# ---------------------------------------------------------------------------
+
+class TestProvenanceHelpers:
+    def test_catalog_hash_is_order_independent_and_content_sensitive(self):
+        c = pd.DataFrame({"lhs": ["A", "B"], "rhs_text": ["X+Y", "Z"]})
+        c_reordered = c.iloc[::-1].reset_index(drop=True)
+        assert _catalog_hash(c) == _catalog_hash(c_reordered)  # sorted internally
+        c_changed = pd.DataFrame({"lhs": ["A", "B"], "rhs_text": ["X+Y", "W"]})
+        assert _catalog_hash(c) != _catalog_hash(c_changed)
+
+    def test_write_calc_provenance_roundtrip(self, tmp_path):
+        out = str(tmp_path / "household_calculated.parquet")  # only dirname is used
+        plan_rows = [
+            {"schema_group_id": 0, "variable": _ZP,
+             "rhs_text": "100*Zelfgebruik/ZonopwekBruto",
+             "rhs_vars": "Zelfgebruik,ZonopwekBruto"},
+        ]
+        hh_rows = [
+            {"HuisIdBSV": 1, "schema_group_id": 0},
+            {"HuisIdBSV": 2, "schema_group_id": 0},
+        ]
+        _write_calc_provenance(out, plan_rows, hh_rows, "cafef00d")
+
+        plan = _read(str(tmp_path / "derivation_plan.parquet"))
+        hh = _read(str(tmp_path / "household_derivation.parquet"))
+        assert list(plan["variable"]) == [_ZP]
+        assert (plan["catalog_hash"] == "cafef00d").all()
+        assert set(int(x) for x in hh["HuisIdBSV"]) == {1, 2}
+        assert (hh["schema_group_id"] == 0).all()

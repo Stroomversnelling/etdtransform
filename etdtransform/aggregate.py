@@ -777,6 +777,72 @@ def impute_hh_data_5min_chunked(
     logging.info("[chunked impute] Done.")
 
 
+def _catalog_hash(catalog_df) -> str:
+    """Stable short content hash of the catalog (lhs + rhs_text pairs).
+
+    Lets derivation provenance be pinned to the exact catalog that produced it,
+    so a later reader knows the recorded equations came from this catalog
+    version (the catalog is rebuilt from Grist rules by sync_data_model.py).
+    """
+    import hashlib
+    pairs = sorted(
+        f"{lhs}={rhs}" for lhs, rhs in zip(catalog_df["lhs"], catalog_df["rhs_text"])
+    )
+    return hashlib.sha1("\n".join(pairs).encode("utf-8")).hexdigest()[:12]
+
+
+def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash):
+    """Persist per-schema-group derivation provenance next to household_calculated.
+
+    Two compact sidecars (factored by schema group, so size is groups x derived
+    vars + one row per household, not households x vars):
+      - derivation_plan.parquet:      schema_group_id -> (variable, rhs_text, rhs_vars)
+      - household_derivation.parquet: HuisIdBSV -> schema_group_id
+
+    A variable absent from a group's plan was provided/measured (not derived).
+    Both carry catalog_hash so the equations are reproducible.
+    """
+    out_dir = os.path.dirname(output_path) or "."
+    plan_df = pd.DataFrame(
+        plan_rows, columns=["schema_group_id", "variable", "rhs_text", "rhs_vars"]
+    ).astype({
+        "schema_group_id": "Int64", "variable": "string",
+        "rhs_text": "string", "rhs_vars": "string",
+    })
+    plan_df["catalog_hash"] = pd.array([catalog_hash] * len(plan_df), dtype="string")
+    plan_df.to_parquet(os.path.join(out_dir, "derivation_plan.parquet"))
+
+    hh_df = pd.DataFrame(
+        hh_rows, columns=["HuisIdBSV", "schema_group_id"]
+    ).astype({"HuisIdBSV": "Int64", "schema_group_id": "Int64"})
+    hh_df["catalog_hash"] = pd.array([catalog_hash] * len(hh_df), dtype="string")
+    hh_df.to_parquet(os.path.join(out_dir, "household_derivation.parquet"))
+
+    logging.info(
+        f"[calc ibis] derivation provenance: {len(plan_df)} plan rows over "
+        f"{hh_df['schema_group_id'].nunique()} schema groups, "
+        f"{len(hh_df)} households, catalog {catalog_hash}"
+    )
+
+
+def _write_derive_provenance(output_dir, level, rows, catalog_hash):
+    """Persist which catalog equation produced each 'derive' (ratio) variable at
+    each resample/aggregate scope, to derive_provenance_{level}.parquet
+    (columns: scope, variable, rhs_text, rhs_vars, catalog_hash)."""
+    if not rows:
+        return
+    df = pd.DataFrame(
+        rows, columns=["scope", "variable", "rhs_text", "rhs_vars"]
+    ).astype("string")
+    df["catalog_hash"] = pd.array([catalog_hash] * len(df), dtype="string")
+    path = os.path.join(output_dir, f"derive_provenance_{level}.parquet")
+    df.to_parquet(path)
+    logging.info(
+        f"[derive] provenance: {len(df)} rows -> {os.path.basename(path)} "
+        f"(catalog {catalog_hash})"
+    )
+
+
 def add_calculated_columns_to_hh_data_ibis(
     source_path: str,
     output_path: str,
@@ -902,6 +968,11 @@ def add_calculated_columns_to_hh_data_ibis(
     # Phase 2 + 3: plan and mutate per schema group
     tmp_dir = tempfile.mkdtemp(prefix="etd_calc_")
     temp_paths = []
+    # Derivation provenance accumulators (which equation derived each variable
+    # per schema group, and which households belong to each group).
+    _prov_plan_rows: list = []
+    _prov_hh_rows: list = []
+    _cat_hash = _catalog_hash(catalog_df)
 
     try:
         for group_idx, (available_cols, group_ids) in enumerate(schema_groups.items()):
@@ -969,6 +1040,14 @@ def add_calculated_columns_to_hh_data_ibis(
 
             for col_name, rhs_expr in plan:
                 group_tbl = group_tbl.mutate(**{col_name: sympy_to_ibis(rhs_expr, group_tbl)})
+                _prov_plan_rows.append({
+                    "schema_group_id": group_idx,
+                    "variable": col_name,
+                    "rhs_text": str(rhs_expr),
+                    "rhs_vars": ",".join(sorted(str(s) for s in rhs_expr.free_symbols)),
+                })
+            for _hid in group_ids:
+                _prov_hh_rows.append({"HuisIdBSV": int(_hid), "schema_group_id": group_idx})
 
             temp_path = os.path.join(tmp_dir, f"calc_group_{group_idx:04d}.parquet")
             group_tbl.to_parquet(temp_path)
@@ -1023,6 +1102,8 @@ def add_calculated_columns_to_hh_data_ibis(
             pf = None
 
         logging.info("[calc ibis] Saved household_calculated.parquet")
+
+        _write_calc_provenance(output_path, _prov_plan_rows, _prov_hh_rows, _cat_hash)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1304,12 +1385,13 @@ def _derive_columns_in_parquet(path, derive_cols, catalog_df=None):
     from etdtransform.calculated_columns import sympy_to_ibis
 
     if not derive_cols:
-        return
+        return []
     if catalog_df is None:
         catalog_df = load_catalog()
 
     con = ibis.duckdb.connect()
     derived_now = []
+    prov_rows = []  # {variable, rhs_text, rhs_vars} actually used
     tmp_path = None
     try:
         tbl = con.read_parquet(path)
@@ -1336,6 +1418,11 @@ def _derive_columns_in_parquet(path, derive_cols, catalog_df=None):
         for col, rhs_expr in plan:
             tbl = tbl.mutate(**{col: sympy_to_ibis(rhs_expr, tbl)})
             derived_now.append(col)
+            prov_rows.append({
+                "variable": col,
+                "rhs_text": str(rhs_expr),
+                "rhs_vars": ",".join(sorted(str(s) for s in rhs_expr.free_symbols)),
+            })
 
         if derived_now:
             tbl = tbl.mutate(
@@ -1351,6 +1438,7 @@ def _derive_columns_in_parquet(path, derive_cols, catalog_df=None):
         logging.info(
             f"[derive] {os.path.basename(path)}: derived {sorted(derived_now)}"
         )
+    return prov_rows
 
 
 def resample_hh_data_duckdb(
@@ -1416,6 +1504,7 @@ def resample_hh_data_duckdb(
         if cfg["resample_method"] == "derive"
     ]
     catalog_df = None
+    _derive_prov: list = []
     if derive_cols:
         from etdmap.catalog import load_catalog
         catalog_df = load_catalog()
@@ -1521,9 +1610,17 @@ def resample_hh_data_duckdb(
             # per-interval from the calculated stage); only the grouping
             # intervals need re-derivation.
             if derive_cols:
-                _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
+                _rows = _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
+                _derive_prov.extend(
+                    {"scope": f"household_{interval}", **r} for r in _rows
+                )
 
         logging.info(f"resample_hh_data_duckdb: done {interval}")
+
+    if _derive_prov:
+        _write_derive_provenance(
+            output_dir, "household", _derive_prov, _catalog_hash(catalog_df)
+        )
 
 
 def aggregate_project_data_duckdb(
@@ -1567,6 +1664,7 @@ def aggregate_project_data_duckdb(
 
     # Load the catalog once if any variable is recomputed post-aggregation.
     catalog_df = None
+    _derive_prov: list = []
     if any(cfg["aggregate_method"] == "derive" for cfg in config.values()):
         from etdmap.catalog import load_catalog
         catalog_df = load_catalog()
@@ -1668,9 +1766,17 @@ def aggregate_project_data_duckdb(
         # sum(numerator)/sum(denominator) over households, never the mean of the
         # per-household ratios.
         if derive_cols:
-            _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
+            _rows = _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
+            _derive_prov.extend(
+                {"scope": f"project_{interval}", **r} for r in _rows
+            )
 
         logging.info(f"aggregate_project_data_duckdb: done {interval}")
+
+    if _derive_prov:
+        _write_derive_provenance(
+            output_dir, "project", _derive_prov, _catalog_hash(catalog_df)
+        )
 
 
 # def aggregate_weerstation_data(index_df):
@@ -2022,14 +2128,26 @@ def resample_and_save(
     """
     if alt_name is None:
         alt_name = "_".join(group_column)
+    # Identify 'derive' columns before resampling. They are not resampled
+    # directly (skipped in resample_by_columns); they are recomputed from their
+    # resampled components as a post-step below.
+    derive_cols = [
+        v for v, c in active_aggregation_variables(df).items()
+        if c["resample_method"] == "derive"
+    ]
     df = df.set_index("ReadingDate")
     df = resample_by_columns(df, group_column=group_column, interval=interval)
     df.reset_index(inplace=True)
     safe_name = re.sub(r"\W+", "_", alt_name.lower())
-    df.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
-        engine="pyarrow",
+    out_path = os.path.join(
+        etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"
     )
+    df.to_parquet(out_path, engine="pyarrow")
+    # Recompute derive (ratio) columns from the resampled components -- the same
+    # catalog-based post-step the DuckDB path uses (_derive_columns_in_parquet).
+    # Done after the parquet is written so the helper can rewrite it in place.
+    if derive_cols:
+        _derive_columns_in_parquet(out_path, derive_cols)
 
 
 def resample_by_columns(
@@ -2087,6 +2205,13 @@ def resample_by_columns(
     )
 
     for var, config in active_aggregation_variables(df).items():
+        # 'derive' columns (intensive ratios, e.g. ZelfgebruikPercentage) are
+        # not resampled directly -- they are recomputed from their resampled
+        # components as a post-step in resample_and_save, exactly as the DuckDB
+        # path does. Skip them here so resample_variable is never asked to
+        # resample a ratio.
+        if config["resample_method"] == "derive":
+            continue
         logging.info(f"in loop for {var}")
         result = resample_variable(df, var, config, interval, group_column, min_count)
         combined_results = combined_results.merge(
@@ -2148,6 +2273,12 @@ def resample_variable(df, var, config, interval, group_column, min_count):
         return resample_max(df_copy, var, interval, group_column, min_count)
     elif method == "avg":
         return resample_avg(df_copy, var, interval, group_column, min_count)
+    # 'derive' columns (intensive ratios) are recomputed from their resampled
+    # components as a post-step in resample_and_save, exactly as the DuckDB path
+    # does; the caller skips them so they never reach this dispatch. Any other
+    # method is a data-model/config error -- fail loudly instead of returning
+    # None (which previously caused a downstream merge(None) crash).
+    raise ValueError(f"Unknown resample_method '{method}' for column '{var}'")
 
 
 def resample_max(df, column, interval, group_column, min_count):

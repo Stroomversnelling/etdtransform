@@ -15,13 +15,11 @@ The output schema is identical to ``get_data_stats`` (enforced via the
 shared ``etdmap._STATS_DTYPES`` contract -- parent ADR-018) so a single
 downstream report consumes both producers without branching on stage.
 
-Engine choice: ibis-on-DuckDB, not polars. See
-``etdworkflow/docs/performance/wide-parquet-stats-perf-2026-05-13b.md``
-for the memory-aware benchmark that showed polars peaks at ~50 GB RSS
-on this workload (unusable on laptop-class hardware) while ibis stays
-at 2 GB exact or 0.4 GB with ``approx_quantile``. The earlier brief
-``./wide-parquet-stats-perf-2026-05-13.md`` is preserved as the
-cautionary tale for why a wall-time-only profile is insufficient.
+Engine choice: ibis-on-DuckDB, not polars. A memory-aware benchmark
+showed polars peaks at ~50 GB RSS on this workload (unusable on
+laptop-class hardware) while ibis stays at 2 GB exact or 0.4 GB with
+``approx_quantile``. A wall-time-only profile is insufficient here:
+it mis-ranks polars as fastest while hiding its memory cost.
 
 Quantile precision: defaults to DuckDB's ``approx_quantile`` (t-digest)
 because it is 2x faster than exact AND 5x less memory AND fits the
@@ -104,8 +102,7 @@ def get_data_stats(
             Median rel-err ~0.03 % on well-distributed columns; up to
             ~1-2 % on most, with isolated tail-quantile outliers up
             to ~26 % on heavy-tailed cumulative meters. ~2x faster
-            and ~5x less peak RSS than exact (see
-            ``etdworkflow/docs/performance/wide-parquet-stats-perf-2026-05-13b.md``).
+            and ~5x less peak RSS than exact.
             Adequate for outlier-detection reports.
           * ``'exact'`` -- pandas-compatible linear-interpolated
             quantile. Required for byte-equal cross-stage comparisons
