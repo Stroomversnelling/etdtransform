@@ -3,7 +3,8 @@ etdtransform.catalog — Adaptive equation catalog for variable derivation.
 
 Provides tools to:
   1. Build a catalog of all possible derivations for each variable from any valid
-     subset of other variables (using equations defined in the Grist Rule table).
+     subset of other variables (using equations defined in the data model's
+rule table).
   2. Serialize/deserialize the catalog to/from Parquet for fast loading.
   3. At query time, assess which columns in a specific dataset are 'effectively raw'
      (have sufficient real data) and select the best derivation formulas.
@@ -15,7 +16,7 @@ Public API:
   build_chunked         — chunked, cacheable, parallel build partitioned by
                           physical model; handles linear + non-linear rules
                           via sp.solve directs + expansion. Preferred entrypoint
-                          for sync_data_model.py since it caches per-chunk and
+                          for the project's sync tooling since it caches per-chunk and
                           avoids redundant work on no-change syncs.
   plan_chunked_build    — cheap dry-run: hash + cache-check only, no SymPy.
                           Returns the would_rebuild / would_hit list so

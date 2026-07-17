@@ -6,7 +6,7 @@ on the shared ibis_pipeline fixture from test_pipeline_equivalence.py.
 
 Config isolation: uses _TEST_CONFIG to cover both active method patterns
 (Diff/sum-resample/avg-aggregate and non-Diff/sum-resample/avg-aggregate)
-so tests remain stable across Grist syncs.
+so tests remain stable across data-model syncs.
 """
 
 import pytest

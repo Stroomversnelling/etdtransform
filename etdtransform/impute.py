@@ -922,3 +922,140 @@ def process_and_impute(
         imputation_summary_project,
         imputation_reading_date_stats_df,
     )
+
+def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
+    """
+    Computational batch-safety guard for the averaging/imputation chain.
+
+    Independent of the registry coexistence guard (which deliberately relaxes
+    once index.parquet is retired): even in the post-switch era, this chain
+    must refuse input it cannot impute correctly --
+
+    - a household spanning MORE THAN ONE batch: concatenating batches would let
+      the large-gap project-average method impute across the BETWEEN-batch gap,
+      which is real non-delivery (the cross-batch continuity invariant).
+      Batch-aware imputation is native-resolution-phase work; until it exists,
+      stop loudly (HuisBatchOverlapError).
+    - duplicate (HuisIdBSV, ReadingDate) rows: overlapping batch periods
+      double-weight project averages and break the sort/diff math (ValueError).
+    """
+    from etdmap.index_helpers import HuisBatchOverlapError
+
+    if "HuisBatchIdBSV" in df.columns:
+        counts = df.groupby("HuisIdBSV")["HuisBatchIdBSV"].nunique()
+        multi = sorted(int(h) for h, n in counts.items() if n > 1)
+        if multi:
+            raise HuisBatchOverlapError(
+                f"[imputation] Household(s) {multi} span more than one batch. "
+                f"Imputing a concatenated multi-batch series would fill the "
+                f"between-batch gap (real non-delivery). Batch-aware imputation "
+                f"is not implemented yet; impute per batch or exclude."
+            )
+    dup_mask = df.duplicated(subset=["HuisIdBSV", "ReadingDate"])
+    if bool(dup_mask.any()):
+        bad = sorted(int(h) for h in df.loc[dup_mask, "HuisIdBSV"].dropna().unique())
+        raise ValueError(
+            f"[imputation] Duplicate (HuisIdBSV, ReadingDate) rows for household(s) "
+            f"{bad} -- overlapping batch periods double-weight project averages and "
+            f"break the diff math. Resolve the batch overlap first."
+        )
+
+
+def _assert_batch_safe_ibis(tbl) -> None:
+    """Engine-side variant of assert_imputation_input_batch_safe for lazy tables
+    (cheap aggregates; the table is never materialised in full)."""
+    from etdmap.index_helpers import HuisBatchOverlapError
+
+    if "HuisBatchIdBSV" in tbl.columns:
+        per_hh = (
+            tbl.group_by("HuisIdBSV")
+            .aggregate(n_batches=tbl["HuisBatchIdBSV"].nunique())
+        )
+        multi = per_hh.filter(per_hh.n_batches > 1)["HuisIdBSV"].execute()
+        if len(multi):
+            raise HuisBatchOverlapError(
+                f"[prepare_diffs] Household(s) {sorted(int(h) for h in multi)} span "
+                f"more than one batch; project averages would mix batches. "
+                f"Batch-aware averaging is not implemented yet."
+            )
+    n_rows = int(tbl.count().execute())
+    n_keys = int(tbl[["HuisIdBSV", "ReadingDate"]].distinct().count().execute())
+    if n_rows != n_keys:
+        raise ValueError(
+            f"[prepare_diffs] {n_rows - n_keys} duplicate (HuisIdBSV, ReadingDate) "
+            f"row(s) -- overlapping batch periods would double-weight the project "
+            f"averages. Resolve the batch overlap first."
+        )
+
+
+def prepare_diffs_sharded(
+    mapped_folder_path=None,
+    aggregate_folder_path=None,
+    cumulative_columns: list = None,
+    huis_ids=None,
+):
+    """
+    Sharded version of the avg-diffs stage: compute the imputation estimation
+    inputs (avg_diffs.parquet + household_diff_max_bounds.parquet) directly
+    from the SHARDED mapped data.
+
+    I/O shell only -- the computation is the SAME prepare_diffs_for_impute_ibis
+    the legacy path uses, fed a lazy table built from mapped_household_table
+    (DuckDB hive-glob, per the measured perf decision) with ProjectIdBSV joined
+    from the batch registry and Meenemen inclusion applied at read time.
+
+    Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
+    pipeline's artifact area), keeping legacy artifacts untouched.
+
+    Batch safety: refuses multi-batch households and overlapping batch periods
+    (see assert_imputation_input_batch_safe) -- the estimation inputs feed
+    everything downstream.
+    """
+    import ibis as _ibis
+
+    from etdmap.index_helpers import read_batch_index
+    from etdtransform.load_data import included_household_ids, mapped_household_table
+
+    if mapped_folder_path is None:
+        mapped_folder_path = etdtransform.options.mapped_folder_path
+    if aggregate_folder_path is None:
+        raise ValueError(
+            "prepare_diffs_sharded: aggregate_folder_path is required and has "
+            "no default (the config value points at the promoted production "
+            "area)."
+        )
+
+    if huis_ids is not None:
+        ids = sorted(int(x) for x in huis_ids)
+    else:
+        ids = included_household_ids(mapped_folder_path)
+
+    batch_index_df, _ = read_batch_index(mapped_folder_path)
+    project_map = _ibis.memtable(
+        pd.DataFrame({
+            "HuisBatchIdBSV": batch_index_df["HuisBatchIdBSV"].astype("int64"),
+            "ProjectIdBSV": batch_index_df["ProjectIdBSV"].astype("int64"),
+        })
+    )
+
+    tbl = mapped_household_table(mapped_folder_path)
+    tbl = tbl.filter(tbl["HuisIdBSV"].isin(ids))
+    tbl = tbl.join(project_map, tbl["HuisBatchIdBSV"] == project_map["HuisBatchIdBSV"])
+
+    _assert_batch_safe_ibis(tbl)
+
+    out_dir = os.path.join(str(aggregate_folder_path), "sharded")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # prepare_diffs_for_impute_ibis writes via options.aggregate_folder_path;
+    # scope it to the sharded artifact area for this call.
+    previous = etdtransform.options.aggregate_folder_path
+    etdtransform.options.aggregate_folder_path = out_dir
+    try:
+        return prepare_diffs_for_impute_ibis(
+            tbl,
+            project_id_column="ProjectIdBSV",
+            cumulative_columns=cumulative_columns,
+        )
+    finally:
+        etdtransform.options.aggregate_folder_path = previous

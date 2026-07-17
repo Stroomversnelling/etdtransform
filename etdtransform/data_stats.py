@@ -116,14 +116,17 @@ def get_data_stats(
         ``quantile_mode`` column recording the precision used so
         downstream consumers can detect approximate values.
     """
-    import ibis  # heavy dep; lazy-imported so module load stays cheap
+    import ibis  # noqa: F401  heavy dep; lazy-imported so module load stays cheap
+    from etdtransform.load_data import source_table
 
     parquet_path = str(parquet_path)
-    tbl = ibis.read_parquet(parquet_path)
+    # Source is format-detected (file or hive shard directory) by the shared
+    # read layer.
+    tbl = source_table(parquet_path)
     schema = tbl.schema()
 
     if excluded_cols is None:
-        excluded_cols = {"HuisIdBSV", "ProjectIdBSV", "ReadingDate"}
+        excluded_cols = {"HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV", "ReadingDate"}
 
     if value_cols is None:
         # Auto-discover numeric / boolean columns. ibis is_numeric() does
@@ -222,7 +225,28 @@ def get_data_stats(
                 "p75": quantile_op(e, 0.75),
                 "p99": quantile_op(e, 0.99),
             }
-            sub = slc.group_by("HuisIdBSV").aggregate(**agg_exprs).execute()
+            import duckdb
+            try:
+                sub = slc.group_by("HuisIdBSV").aggregate(**agg_exprs).execute()
+            except duckdb.OutOfRangeException as exc:
+                # Variance of very large values overflows float64 (e.g. an
+                # unbounded ratio column with near-zero denominators). The
+                # column's stats become NA -- "we do not know", stated
+                # visibly -- instead of killing the whole report; counts
+                # cannot overflow and are kept.
+                logging.warning(
+                    f"get_data_stats: numeric reductions overflowed for "
+                    f"column '{col}' (season '{season_name}'): {exc}. Stats "
+                    f"for this column are NA; counts are kept."
+                )
+                sub = (
+                    slc.group_by("HuisIdBSV")
+                       .aggregate(count=slc[col].count())
+                       .execute()
+                )
+                for _stat in ("mean", "std", "min", "max",
+                              "median", "p01", "p25", "p75", "p99"):
+                    sub[_stat] = pd.array([pd.NA] * len(sub), dtype="Float64")
             sub = sub[sub["count"].fillna(0) > 0].copy()
             if sub.empty:
                 continue

@@ -30,7 +30,7 @@ Caching
 -------
 Every chunk is hashed and stored in cache_dir/. Hashes are computed on
 *canonical* rule content (sympy-simplified RHS, sorted models, sorted
-rules) so cosmetic differences in the Grist export do not invalidate
+rules) so cosmetic differences in the exported rule text do not invalidate
 the cache. The on-sync rebuild path is: hash, check cache, build only
 the misses.
 
@@ -85,8 +85,8 @@ from typing import Callable
 import pandas as pd
 
 
-# Default model when a rule has no physical_models field. The Grist
-# Rule table currently requires every rule to declare its models, so
+# Default model when a rule has no physical_models field. The data
+# model's rule table requires every rule to declare its models, so
 # this is a safety fallback for malformed input.
 _DEFAULT_MODEL = "Universeel"
 
@@ -499,7 +499,7 @@ def plan_chunked_build(rules: list[dict], cache_dir: Path | str) -> dict:
     chunk hashes, checks the cache directory for the corresponding
     parquet files. No process pool, no expansion work, no row counts.
 
-    Used by sync_data_model.py's default dry-run path so a no-change
+    Used by the sync tooling's default dry-run path so a no-change
     sync can report "0 chunks would rebuild" in under a second without
     paying the cold-build cost. Apply (and dry-run + simulate flag)
     still call build_chunked, which produces identical numbers because

@@ -108,6 +108,25 @@ etdtransform.options.weather_folder = 'KNMI_weather_data_folder_path' # path to 
 etdtransform.options.weather_file = 'path_to_KNMI_stations_file' # path to the KNMI weather stations data file
 ```
 
+# Storage layouts and format detection
+
+Pipeline data comes in one of two layouts (see the etdmap README section
+"Households, batches, and the registry" for the concepts):
+
+- **flat**: one parquet file per stage, or one file per household for mapped
+  data (`household_<n>_table.parquet`).
+- **sharded**: a partitioned folder tree whose directory names carry the ids
+  (`HuisIdBSV=<n>/HuisBatchIdBSV=<p>/*.parquet`).
+
+Every reading function in this package detects the layout itself -- a path
+that is a directory is read as shards (with per-supplier column differences
+unified by name), a path that is a file is read as before. Callers never pass
+a format. Producing sharded output from a pipeline stage is an explicit
+choice (`partition_output=True` where supported); the default single-file
+writes are unchanged. Stages that read a sharded source validate it on
+entry: duplicate household/timestamp rows or a household with data in more
+than one batch raise an error instead of being silently combined.
+
 # Loading mapped data as Ibis tables
 
 Typically, we will first load data from the mapped parquet files stored in the configured folders. We prefer to load them as Ibis tables and - after selecting the appropriate columns and filtering the desired rows, and merging with other required data - transforming them to an in-memory format, such as a Pandas dataframe. This ensures that the data is loaded quickly and efficiently despite the large number of columns and records in the dataset. We will provide a few examples below.

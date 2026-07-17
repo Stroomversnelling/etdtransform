@@ -23,7 +23,7 @@ Notes:
 - Cleanup candidate: keep DuckDB variant (fastest, no ibis expression tree
   size limit), delete pandas and ibis variants once validated.
 
-## Step 2 -- Diff averages
+## Step 2 -- Diff averages (interval averages)
 
 Computes per-project average `{col}Diff` values used as imputation priors.
 
@@ -101,6 +101,30 @@ Notes:
   `sympy_to_ibis` (uses `sp.lambdify`; ibis columns overload Python
   arithmetic operators).
 - Cleanup candidate: delete pandas variant once ibis path is validated.
+
+## Sharded input and output
+
+Independently of the engine variants above, every stage works on both
+storage layouts (see "Storage layouts and format detection" in the README):
+
+- **Reading** is format-detected everywhere: a sharded folder source is read
+  with per-supplier column differences unified by name; a single parquet
+  file is read as before. This applies to the whole chain -- household
+  aggregation, diff averages, imputation, calculated columns, resampling,
+  project aggregation and the wide-stage statistics.
+- **Writing** sharded output is an explicit choice. The imputation stage has
+  a sharded version (`prepare_diffs_sharded` +
+  `impute_mapped_households_sharded`, sharing the exact same computation
+  core as the single-file shell); calculated columns and resampling take
+  `partition_output=True`. Project-level outputs stay single files (they
+  are small).
+- **Guards**: a sharded source is validated where computation starts --
+  duplicate (household, timestamp) rows or a household with data in more
+  than one batch raise an error rather than being silently combined.
+
+Cross-format equivalence tests (`tests/test_sharded_*.py`,
+`tests/test_aggregate_read_layer.py`) assert that the same data stored flat
+and sharded produces identical results at every stage.
 
 ## Cross-check tests
 

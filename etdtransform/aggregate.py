@@ -44,10 +44,10 @@ def read_hh_data(interval="default", metadata_columns=None):
     """
     if not metadata_columns:
         metadata_columns = []
-    df = pd.read_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"),
-        dtype_backend="numpy_nullable",
-    )
+    from etdmap.storage import read_source_frame, resolve_source_path
+    df = read_source_frame(resolve_source_path(
+        etdtransform.options.aggregate_folder_path, f"household_{interval}"
+    ))
     return add_index_columns(df, columns=metadata_columns)
 
 
@@ -315,18 +315,42 @@ def aggregate_hh_data_duckdb(
 
     logging.info(f"DuckDB aggregation: {len(ids_df)} households (sample {sample_ratio*100:.0f}%).")
 
+    # Reads go through the shared format-detecting resolver: this function
+    # works unchanged on flat or sharded mapped data and keeps writing the
+    # same household_default.parquet.
+    from etdmap.index_helpers import HuisBatchOverlapError
+    from etdtransform.load_data import mapped_household_files
+
     folder = etdtransform.options.mapped_folder_path
     mapping_rows = []
     file_paths = []
+    n_skipped = 0
     for row in ids_df.itertuples(index=False):
-        path = os.path.join(folder, f"household_{row.HuisIdBSV}_table.parquet")
-        if not os.path.exists(path):
+        try:
+            files = mapped_household_files(int(row.HuisIdBSV), mapped_folder_path=folder)
+        except FileNotFoundError:
+            # Legacy semantics: index rows without mapped data are skipped.
+            n_skipped += 1
             continue
+        if len(files) > 1:
+            # Batch-safety guard at this compute entry point: the default
+            # stage assumes ONE file per household; unioning two batches
+            # here would silently double rows in the monolith.
+            raise HuisBatchOverlapError(
+                f"HuisIdBSV {int(row.HuisIdBSV)} has data in multiple "
+                f"HuisBatches ({[hbid for _, hbid in files]}); the stage-2 "
+                f"default aggregation expects one file per household."
+            )
+        path, _hbid = files[0]
         # Use forward slashes — DuckDB on Windows handles both but forward is safer in SQL
-        fwd = path.replace("\\", "/")
+        fwd = str(path).replace("\\", "/")
         mapping_rows.append((fwd, int(row.HuisIdBSV), int(row.ProjectIdBSV)))
         file_paths.append(fwd)
 
+    if n_skipped:
+        logging.warning(
+            f"{n_skipped} household(s) in the index have no mapped data files; skipped."
+        )
     if not file_paths:
         raise ValueError("No household parquet files found.")
 
@@ -348,7 +372,11 @@ def aggregate_hh_data_duckdb(
             available = {
                 r[0]
                 for r in con.execute(
-                    f"DESCRIBE SELECT * FROM read_parquet([{paths_sql}], union_by_name=True)"
+                    # hive_partitioning=false: shard paths contain HuisIdBSV=/
+                    # HuisBatchIdBSV= directories and DuckDB would otherwise
+                    # auto-inject them as columns; this function's ids come
+                    # from the index join, identically for flat and sharded.
+                    f"DESCRIBE SELECT * FROM read_parquet([{paths_sql}], union_by_name=True, hive_partitioning=false)"
                 ).fetchall()
             }
             # Strict projection: only the requested cumulative columns.
@@ -364,7 +392,7 @@ def aggregate_hh_data_duckdb(
         con.execute(f"""
             COPY (
                 SELECT {col_sql}
-                FROM read_parquet([{paths_sql}], union_by_name=True, filename=True) d
+                FROM read_parquet([{paths_sql}], union_by_name=True, filename=True, hive_partitioning=false) d
                 JOIN id_map m ON d.filename = m.file_path
             ) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)
         """)
@@ -573,6 +601,285 @@ def impute_hh_data_5min(
     return df
 
 
+def _finalize_impute_outputs(
+    all_gap_stats,
+    total_records,
+    output_folder,
+    imputed_read_sql: str,
+    imputed_schema_names,
+    cum_cols,
+    log_prefix: str = "[impute]",
+) -> None:
+    """
+    Shared step-4+5 finalizer for both imputation shells: combine gap stats,
+    write impute_gap_stats + household/project summaries, and compute the
+    post-imputation household_aggregated_diff (DuckDB over the finished
+    output -- monolith path or hive glob, via ``imputed_read_sql``).
+
+    Extracted VERBATIM from the legacy chunked shell so the two paths produce
+    identical artifacts (protected by test_total_imputation_workflow).
+    """
+    import duckdb
+    import numpy as np
+
+    from etdtransform.vectorized_impute import methods_to_bitwise
+
+    logging.info(f"{log_prefix} Combining gap stats and saving summaries...")
+    non_empty = [g for g in all_gap_stats if not g.empty]
+    if not non_empty:
+        raise RuntimeError(
+            f"{log_prefix} No gap stats produced across any chunk. "
+            "This means no Diff columns were present after merging diffs. "
+            "Ensure prepare_diffs_for_impute has been run before imputation."
+        )
+    imputation_gap_stats_df = pd.concat(non_empty, ignore_index=True)
+    imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
+        imputation_gap_stats_df["methods"]
+    )
+
+    imputation_gap_stats_df.to_parquet(
+        os.path.join(str(output_folder), "impute_gap_stats.parquet"),
+        engine="pyarrow",
+    )
+
+    total_records_df = pd.DataFrame(
+        [{"HuisIdBSV": k, "total_records": v} for k, v in total_records.items()]
+    )
+    summary_house = (
+        imputation_gap_stats_df[[
+            "ProjectIdBSV", "HuisIdBSV", "column", "diff_col_total",
+            "cum_col_min_max_diff", "missing", "imputed", "imputed_na",
+            "methods", "bitwise_methods",
+        ]]
+        .merge(total_records_df, on="HuisIdBSV")
+    )
+    summary_house["percentage_imputed"] = (
+        summary_house["imputed"] / summary_house["total_records"] * 100
+    )
+    summary_house.to_parquet(
+        os.path.join(str(output_folder), "impute_summary_household.parquet"),
+        engine="pyarrow",
+    )
+
+    total_project = (
+        imputation_gap_stats_df[["ProjectIdBSV", "HuisIdBSV"]]
+        .drop_duplicates()
+        .merge(total_records_df, on="HuisIdBSV")
+        .groupby("ProjectIdBSV")["total_records"].sum()
+        .reset_index()
+    )
+    summary_project = (
+        imputation_gap_stats_df.groupby(["ProjectIdBSV", "column"])
+        .agg(
+            bitwise_methods=("bitwise_methods", lambda x: np.bitwise_or.reduce(x.values)),
+            methods=("methods", lambda x: list(set().union(*x))),
+            missing=("missing", "sum"),
+            imputed=("imputed", "sum"),
+            imputed_na=("imputed_na", "sum"),
+        )
+        .reset_index()
+        .merge(total_project, on="ProjectIdBSV")
+    )
+    summary_project["percentage_imputed"] = (
+        summary_project["imputed"] / summary_project["total_records"] * 100
+    )
+    summary_project.to_parquet(
+        os.path.join(str(output_folder), "impute_summary_project.parquet"),
+        engine="pyarrow",
+    )
+
+    over_40 = summary_house[summary_house["percentage_imputed"] > 40]
+    for _, row in over_40.iterrows():
+        logging.warning(
+            f"House {int(row['HuisIdBSV'])}, Column {row['column']} has "
+            f"{row['percentage_imputed']:.2f}% imputed values."
+        )
+
+    # Aggregated diff via DuckDB on the finished output -- no pandas RAM
+    diff_cols_present = [
+        c for c in [f"{col}Diff" for col in cum_cols]
+        if c in imputed_schema_names
+    ]
+    if diff_cols_present:
+        agg_sql = ", ".join(f'AVG("{c}") AS "{c}"' for c in diff_cols_present)
+        aggregated_diff = duckdb.query(
+            f'SELECT ProjectIdBSV, ReadingDate, {agg_sql} '
+            f"FROM {imputed_read_sql} "
+            f"GROUP BY ProjectIdBSV, ReadingDate"
+        ).df()
+        for c in diff_cols_present:
+            aggregated_diff[c] = aggregated_diff[c].astype("Float64")
+        aggregated_diff.to_parquet(
+            os.path.join(str(output_folder), "household_aggregated_diff.parquet"),
+            engine="pyarrow",
+        )
+
+
+def _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound):
+    """
+    Shared per-chunk imputation core: sort -> merge project diffs ->
+    impute_and_normalize -> reconstruct cumulative columns.
+
+    IDENTICAL math for both shells -- the legacy single-file shell
+    (impute_hh_data_5min_chunked) and the sharded version
+    (impute_mapped_households_sharded). A future imputation rewrite lands HERE
+    once so the two paths cannot drift.
+
+    Returns (imputed_chunk_df, gap_stats_chunk).
+    """
+    from etdtransform.impute import sort_for_impute
+    from etdtransform.vectorized_impute import impute_and_normalize
+
+    chunk_df = sort_for_impute(chunk_df, "ProjectIdBSV")
+    chunk_df = chunk_df.merge(diffs, on=["ProjectIdBSV", "ReadingDate"], how="left")
+
+    chunk_df, gap_stats_chunk, _ = impute_and_normalize(
+        chunk_df, list(cum_cols), "ProjectIdBSV", max_bound
+    )
+
+    # Rebuild cumulative columns from imputed Diff columns per household.
+    # chunk_df is already sorted by sort_for_impute, so cumsum is correct.
+    cols_to_reconstruct = [c for c in cum_cols if f"{c}Diff" in chunk_df.columns]
+    chunk_df = reconstruct_cumulative_columns(chunk_df, cols_to_reconstruct)
+    return chunk_df, gap_stats_chunk
+
+
+def impute_mapped_households_sharded(
+    mapped_folder_path=None,
+    aggregate_folder_path=None,
+    cum_cols=None,
+    huis_ids=None,
+    chunk_size: int = 50,
+) -> None:
+    """
+    Sharded version of impute_hh_data_5min_chunked (stage 3).
+
+    I/O shell only -- the imputation math is the shared _impute_chunk_core.
+    Chunks are materialised with read_mapped_households (direct per-shard
+    reads -- the measured-fastest strategy for household batches);
+    ProjectIdBSV is joined from the batch registry; Meenemen inclusion comes
+    from batch_index at read time (the stage-2 filter's sharded replacement).
+
+    Inputs read from ``aggregate_folder_path``: avg_diffs.parquet and
+    household_diff_max_bounds.parquet (same artifacts the legacy shell uses --
+    identical inputs keep the two paths comparable).
+
+    Output: hive shards under
+    ``<aggregate_folder_path>/sharded/household_imputed/HuisIdBSV=<n>/HuisBatchIdBSV=<p>/part.parquet``
+    (ids in the path, not the files). The writer owns and clears its output
+    directory -- re-runs are idempotent. Gap stats are written to
+    ``<aggregate_folder_path>/sharded/impute_gap_stats.parquet``; the legacy
+    summary derivations stay with the legacy shell for now (tracked).
+    """
+    import glob as glob_mod
+    import shutil
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    # Function-level import: load_data imports from aggregate at module level.
+    from etdtransform.load_data import included_household_ids, read_mapped_households
+    from etdmap.index_helpers import read_batch_index
+
+    if mapped_folder_path is None:
+        mapped_folder_path = etdtransform.options.mapped_folder_path
+    if aggregate_folder_path is None:
+        raise ValueError(
+            "impute_mapped_households_sharded: aggregate_folder_path is "
+            "required and has no default (the config value points at the "
+            "promoted production area; this writer clears its output "
+            "directory before writing)."
+        )
+
+    if huis_ids is not None:
+        all_ids = sorted(int(x) for x in huis_ids)
+    else:
+        all_ids = included_household_ids(mapped_folder_path)
+    chunks = [all_ids[i:i + chunk_size] for i in range(0, len(all_ids), chunk_size)]
+    logging.info(
+        f"[sharded impute] {len(all_ids)} households -> {len(chunks)} chunk(s) of {chunk_size}"
+    )
+
+    # Estimation inputs from the SHARDED pipeline's artifact area (produced by
+    # prepare_diffs_sharded) -- the sharded chain is self-contained under
+    # <aggregate>/sharded/.
+    sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
+    diffs = pd.read_parquet(
+        os.path.join(sharded_agg, "avg_diffs.parquet"),
+        dtype_backend="numpy_nullable",
+    )
+    max_bound = pd.read_parquet(
+        os.path.join(sharded_agg, "household_diff_max_bounds.parquet"),
+        dtype_backend="numpy_nullable",
+    )
+
+    batch_index_df, _ = read_batch_index(mapped_folder_path)
+    project_by_batch = dict(zip(
+        (int(x) for x in batch_index_df["HuisBatchIdBSV"]),
+        (int(x) for x in batch_index_df["ProjectIdBSV"]),
+    ))
+
+    out_root = os.path.join(str(aggregate_folder_path), "sharded", "household_imputed")
+    if os.path.isdir(out_root):
+        shutil.rmtree(out_root)
+
+    all_gap_stats: list = []
+    total_records: dict = {}
+    for i, chunk_ids in enumerate(chunks):
+        logging.info(f"[sharded impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
+        chunk_df = read_mapped_households(chunk_ids, mapped_folder_path=mapped_folder_path)
+
+        # Computational batch-safety guard (independent of the registry
+        # coexistence guard): multi-batch households / overlapping periods
+        # cannot be imputed correctly yet -- loud stop, never silent blending.
+        from etdtransform.impute import assert_imputation_input_batch_safe
+        assert_imputation_input_batch_safe(chunk_df)
+
+        chunk_df["ProjectIdBSV"] = pd.array(
+            [project_by_batch.get(int(b)) for b in chunk_df["HuisBatchIdBSV"]],
+            dtype="Int64",
+        )
+
+        chunk_df, gap_stats_chunk = _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound)
+        all_gap_stats.append(gap_stats_chunk)
+        for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
+            total_records[int(hid)] = int(cnt)
+
+        for (hid, hbid), g in chunk_df.groupby(["HuisIdBSV", "HuisBatchIdBSV"], sort=True):
+            part_dir = os.path.join(
+                out_root, f"HuisIdBSV={int(hid)}", f"HuisBatchIdBSV={int(hbid)}"
+            )
+            os.makedirs(part_dir, exist_ok=True)
+            # Hive convention: partition ids live in the path, not the file.
+            g = g.drop(columns=["HuisIdBSV", "HuisBatchIdBSV"])
+            pq.write_table(
+                pa.Table.from_pandas(g, preserve_index=False),
+                os.path.join(part_dir, "part.parquet"),
+                compression="snappy",
+            )
+        del chunk_df
+
+    # Step 4+5 via the shared finalizer, into the sharded artifact area; the
+    # aggregated diff reads the hive glob of the imputed shards.
+    imputed_glob = os.path.join(out_root, "**", "*.parquet").replace("\\", "/")
+    first_part = sorted(
+        glob_mod.glob(os.path.join(out_root, "HuisIdBSV=*", "HuisBatchIdBSV=*", "*.parquet"))
+    )
+    schema_names = pq.read_schema(first_part[0]).names if first_part else []
+    _finalize_impute_outputs(
+        all_gap_stats,
+        total_records,
+        output_folder=sharded_agg,
+        imputed_read_sql=(
+            f"read_parquet('{imputed_glob}', hive_partitioning=true, union_by_name=true)"
+        ),
+        imputed_schema_names=schema_names,
+        cum_cols=cum_cols,
+        log_prefix="[sharded impute]",
+    )
+    logging.info(f"[sharded impute] Done -> {out_root}")
+
+
 def impute_hh_data_5min_chunked(
     source_path,
     chunk_size: int = 50,
@@ -658,17 +965,7 @@ def impute_hh_data_5min_chunked(
             dtype_backend="numpy_nullable",
         )
 
-        chunk_df = sort_for_impute(chunk_df, "ProjectIdBSV")
-        chunk_df = chunk_df.merge(diffs, on=["ProjectIdBSV", "ReadingDate"], how="left")
-
-        chunk_df, gap_stats_chunk, _ = impute_and_normalize(
-            chunk_df, list(cum_cols), "ProjectIdBSV", max_bound
-        )
-
-        # Rebuild cumulative columns from imputed Diff columns per household.
-        # chunk_df is already sorted by sort_for_impute, so cumsum is correct.
-        cols_to_reconstruct = [c for c in cum_cols if f"{c}Diff" in chunk_df.columns]
-        chunk_df = reconstruct_cumulative_columns(chunk_df, cols_to_reconstruct)
+        chunk_df, gap_stats_chunk = _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound)
 
         all_gap_stats.append(gap_stats_chunk)
         for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
@@ -683,96 +980,16 @@ def impute_hh_data_5min_chunked(
     if writer:
         writer.close()
 
-    # Step 4: combine gap stats and save summaries
-    logging.info("[chunked impute] Combining gap stats and saving summaries...")
-    non_empty = [g for g in all_gap_stats if not g.empty]
-    if not non_empty:
-        raise RuntimeError(
-            "[chunked impute] No gap stats produced across any chunk. "
-            "This means no Diff columns were present after merging diffs. "
-            "Ensure prepare_diffs_for_impute has been run before imputation."
-        )
-    imputation_gap_stats_df = pd.concat(non_empty, ignore_index=True)
-    imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
-        imputation_gap_stats_df["methods"]
+    # Step 4+5 via the shared finalizer (gap stats, summaries, aggregated diff)
+    _finalize_impute_outputs(
+        all_gap_stats,
+        total_records,
+        output_folder=etdtransform.options.aggregate_folder_path,
+        imputed_read_sql=f"read_parquet('{out_path}')",
+        imputed_schema_names=pq.read_schema(out_path).names,
+        cum_cols=cum_cols,
+        log_prefix="[chunked impute]",
     )
-
-    imputation_gap_stats_df.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "impute_gap_stats.parquet"),
-        engine="pyarrow",
-    )
-
-    total_records_df = pd.DataFrame(
-        [{"HuisIdBSV": k, "total_records": v} for k, v in total_records.items()]
-    )
-    summary_house = (
-        imputation_gap_stats_df[[
-            "ProjectIdBSV", "HuisIdBSV", "column", "diff_col_total",
-            "cum_col_min_max_diff", "missing", "imputed", "imputed_na",
-            "methods", "bitwise_methods",
-        ]]
-        .merge(total_records_df, on="HuisIdBSV")
-    )
-    summary_house["percentage_imputed"] = (
-        summary_house["imputed"] / summary_house["total_records"] * 100
-    )
-    summary_house.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "impute_summary_household.parquet"),
-        engine="pyarrow",
-    )
-
-    total_project = (
-        imputation_gap_stats_df[["ProjectIdBSV", "HuisIdBSV"]]
-        .drop_duplicates()
-        .merge(total_records_df, on="HuisIdBSV")
-        .groupby("ProjectIdBSV")["total_records"].sum()
-        .reset_index()
-    )
-    summary_project = (
-        imputation_gap_stats_df.groupby(["ProjectIdBSV", "column"])
-        .agg(
-            bitwise_methods=("bitwise_methods", lambda x: np.bitwise_or.reduce(x.values)),
-            methods=("methods", lambda x: list(set().union(*x))),
-            missing=("missing", "sum"),
-            imputed=("imputed", "sum"),
-            imputed_na=("imputed_na", "sum"),
-        )
-        .reset_index()
-        .merge(total_project, on="ProjectIdBSV")
-    )
-    summary_project["percentage_imputed"] = (
-        summary_project["imputed"] / summary_project["total_records"] * 100
-    )
-    summary_project.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "impute_summary_project.parquet"),
-        engine="pyarrow",
-    )
-
-    # Step 5: aggregated diff via DuckDB on the finished parquet — no pandas RAM
-    diff_cols_present = [
-        c for c in [f"{col}Diff" for col in cum_cols]
-        if c in pq.read_schema(out_path).names
-    ]
-    if diff_cols_present:
-        agg_sql = ", ".join(f'AVG("{c}") AS "{c}"' for c in diff_cols_present)
-        aggregated_diff = duckdb.query(
-            f'SELECT ProjectIdBSV, ReadingDate, {agg_sql} '
-            f"FROM read_parquet('{out_path}') "
-            f"GROUP BY ProjectIdBSV, ReadingDate"
-        ).df()
-        for c in diff_cols_present:
-            aggregated_diff[c] = aggregated_diff[c].astype("Float64")
-        aggregated_diff.to_parquet(
-            os.path.join(etdtransform.options.aggregate_folder_path, "household_aggregated_diff.parquet"),
-            engine="pyarrow",
-        )
-
-    over_40 = summary_house[summary_house["percentage_imputed"] > 40]
-    for _, row in over_40.iterrows():
-        logging.warning(
-            f"House {int(row['HuisIdBSV'])}, Column {row['column']} has "
-            f"{row['percentage_imputed']:.2f}% imputed values."
-        )
 
     logging.info("[chunked impute] Done.")
 
@@ -782,7 +999,8 @@ def _catalog_hash(catalog_df) -> str:
 
     Lets derivation provenance be pinned to the exact catalog that produced it,
     so a later reader knows the recorded equations came from this catalog
-    version (the catalog is rebuilt from Grist rules by sync_data_model.py).
+    version (the catalog is rebuilt from the data model's rules by the
+    project's sync tooling).
     """
     import hashlib
     pairs = sorted(
@@ -850,6 +1068,7 @@ def add_calculated_columns_to_hh_data_ibis(
     catalog_df=None,
     target_columns=None,
     fillna_vars: list = None,
+    partition_output: bool = False,
 ) -> None:
     """
     Ibis/DuckDB variant: derives calculated columns without a full pandas load.
@@ -878,6 +1097,19 @@ def add_calculated_columns_to_hh_data_ibis(
         Use for device columns that were not installed (all-null in the source)
         but must be treated as 0 for downstream calculations to be correct.
         Columns not present in the source parquet are logged and skipped.
+    partition_output : bool
+        When True, write hive shards (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/) under
+        output_path (a directory, cleared before writing) instead of one
+        parquet file. Requires HuisBatchIdBSV in the source (a sharded
+        directory source provides it as a hive column). Default False: the
+        single-file write is unchanged.
+
+    Notes
+    -----
+    source_path may be a parquet FILE or a hive-sharded DIRECTORY
+    (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/*.parquet); reads are format-detected.
+    With a directory source the input is validated at entry: duplicate
+    (HuisIdBSV, ReadingDate) rows raise (overlapping batch periods).
     """
     import duckdb
     import shutil
@@ -903,9 +1135,30 @@ def add_calculated_columns_to_hh_data_ibis(
         req_perf_cols = set(required_performance_data_columns)
     derivable_in_catalog = set(catalog_df["lhs"].unique())
 
+    # Source is format-detected (file or hive shard directory) by the shared
+    # read layer.
+    from etdmap.storage import source_is_sharded
+    from etdtransform.load_data import source_table
+
+    source_is_dir = source_is_sharded(source_path)
+
+    def _read_source_table():
+        return source_table(source_path)
+
     # Phase 1: schema check + rename shim + availability analysis
-    tbl = ibis.read_parquet(source_path)
+    tbl = _read_source_table()
     parquet_col_set = set(tbl.columns)
+
+    if source_is_dir:
+        # Batch-safety guard at this compute entry point: duplicate
+        # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
+        from etdtransform.impute import _assert_batch_safe_ibis
+        _assert_batch_safe_ibis(tbl)
+    if partition_output and "HuisBatchIdBSV" not in parquet_col_set:
+        raise ValueError(
+            "partition_output=True requires a HuisBatchIdBSV column in the "
+            "source; the source has none."
+        )
 
     # Zon-opwekTotaalDiff -> ZonopwekBruto compatibility shim
     # (hyphenated name is unparseable as a SymPy symbol; rename before catalog use)
@@ -1025,7 +1278,7 @@ def add_calculated_columns_to_hh_data_ibis(
                     + (f" (required: {sorted(not_req)})" if not_req else "")
                 )
 
-            group_tbl = ibis.read_parquet(source_path)
+            group_tbl = _read_source_table()
             group_tbl = group_tbl.filter(group_tbl["HuisIdBSV"].isin(group_ids))
             if has_zon_rename:
                 group_tbl = group_tbl.rename({"ZonopwekBruto": "Zon-opwekTotaalDiff"})
@@ -1059,6 +1312,36 @@ def add_calculated_columns_to_hh_data_ibis(
 
         if not temp_paths:
             raise RuntimeError("[calc ibis] No schema groups processed -- no output written.")
+
+        if partition_output:
+            # Phase 4 (hive output): one partitioned DuckDB COPY over the group
+            # parquets. The writer owns and clears its output directory --
+            # re-runs are idempotent (same convention as the sharded impute).
+            if os.path.isdir(output_path):
+                shutil.rmtree(output_path)
+            os.makedirs(output_path, exist_ok=True)
+            _paths_sql = ", ".join(
+                "'" + p.replace("\\", "/") + "'" for p in temp_paths
+            )
+            _out_sql = str(output_path).replace("\\", "/")
+            con = duckdb.connect()
+            try:
+                con.execute(f"""
+                    COPY (
+                        SELECT * FROM read_parquet([{_paths_sql}], union_by_name=True)
+                    ) TO '{_out_sql}' (
+                        FORMAT PARQUET, COMPRESSION SNAPPY,
+                        PARTITION_BY (HuisIdBSV, HuisBatchIdBSV),
+                        OVERWRITE_OR_IGNORE TRUE
+                    )
+                """)
+            finally:
+                con.close()
+            logging.info(
+                f"[calc ibis] Saved calculated hive shards -> {output_path}"
+            )
+            _write_calc_provenance(output_path, _prov_plan_rows, _prov_hh_rows, _cat_hash)
+            return None
 
         # Phase 4: combine with Polars streaming (diagonal_relaxed fills missing cols with null)
         import polars as pl
@@ -1167,9 +1450,10 @@ def read_aggregate(name, interval):
     This function reads a parquet file based on the provided name and interval.
     """
     safe_name = re.sub(r"\W+", "_", name.lower())
-    return pd.read_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}.parquet"),
-    )
+    from etdmap.storage import read_source_frame, resolve_source_path
+    return read_source_frame(resolve_source_path(
+        etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}"
+    ))
 
 
 def get_aggregate_table(name, interval):
@@ -1193,11 +1477,11 @@ def get_aggregate_table(name, interval):
     This function reads a parquet file and returns it as an ibis table.
     """
     safe_name = re.sub(r"\W+", "_", name.lower())
-    parquet_path = os.path.join(
-        etdtransform.options.aggregate_folder_path,
-        f"{safe_name}_{interval}.parquet",
-    )
-    return ibis.read_parquet(parquet_path)
+    from etdmap.storage import resolve_source_path
+    from etdtransform.load_data import source_table
+    return source_table(resolve_source_path(
+        etdtransform.options.aggregate_folder_path, f"{safe_name}_{interval}"
+    ))
 
 
 def resample_hh_data(df=None, intervals=("60min", "15min", "5min")):
@@ -1445,6 +1729,7 @@ def resample_hh_data_duckdb(
     source_path: str,
     output_dir: str,
     intervals: tuple = ("60min", "15min", "5min"),
+    partition_output: bool = False,
 ) -> None:
     """
     Resample household_calculated.parquet to multiple time intervals using DuckDB.
@@ -1482,16 +1767,41 @@ def resample_hh_data_duckdb(
         (anything other than float, int, or boolean).
     """
     import duckdb
+    import shutil
     import pyarrow as pa
     import pyarrow.parquet as pq
     from etdmap.data_model import get_aggregation_config
 
     config = get_aggregation_config()
 
-    # Determine which config columns actually exist in the source file.
-    _source_schema = pq.read_schema(source_path)
-    source_schema_names = set(_source_schema.names)
-    _schema_types = {field.name: field.type for field in _source_schema}
+    # Source is format-detected (file or hive shard directory) by the shared
+    # read layer (union_by_name across per-supplier schemas -- the same union
+    # the legacy monolith concat produced). The SQL math below is identical
+    # for both layouts.
+    from etdmap.storage import (
+        source_is_sharded,
+        source_schema_names as _schema_names_of,
+        source_schema_types,
+        source_sql,
+    )
+    from etdtransform.load_data import source_table
+
+    source_is_dir = source_is_sharded(source_path)
+    source_schema_names = _schema_names_of(source_path)
+    _schema_types = source_schema_types(source_path)
+    _src_sql = source_sql(source_path)
+    if source_is_dir:
+        # Batch-safety guard at this compute entry point: duplicate
+        # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
+        from etdtransform.impute import _assert_batch_safe_ibis
+        _assert_batch_safe_ibis(source_table(source_path))
+
+    if partition_output and "HuisBatchIdBSV" not in source_schema_names:
+        raise ValueError(
+            "partition_output=True requires a HuisBatchIdBSV column in the "
+            "source; the source has none."
+        )
+
     active_config = {
         col: cfg for col, cfg in config.items() if col in source_schema_names
     }
@@ -1543,11 +1853,28 @@ def resample_hh_data_duckdb(
     diff_cols = [col for col in active_config if col.endswith("Diff")]
     cumul_cols = [col[:-4] for col in diff_cols]  # strip "Diff" suffix
 
-    id_cols = ["HuisIdBSV", "ProjectIdBSV", "ReadingDate"]
+    # The batch id rides along when the source carries it (hive shards);
+    # grouping by it does not change the grain while households are 1:1.
+    _batch_id = ["HuisBatchIdBSV"] if source_is_dir else []
+    id_cols = ["HuisIdBSV"] + _batch_id + ["ProjectIdBSV", "ReadingDate"]
+    _group_ids_sql = ", ".join(["HuisIdBSV"] + _batch_id + ["ProjectIdBSV"])
 
     for interval in intervals:
-        out_path = os.path.join(output_dir, f"household_{interval}.parquet")
-        logging.info(f"resample_hh_data_duckdb: writing {interval} -> {out_path}")
+        if partition_output:
+            out_target = os.path.join(output_dir, f"household_{interval}")
+            # The writer owns and clears its output directory (idempotent
+            # re-runs; same convention as the other sharded writers).
+            if os.path.isdir(out_target):
+                shutil.rmtree(out_target)
+            os.makedirs(out_target, exist_ok=True)
+            _copy_opts = (
+                "FORMAT PARQUET, COMPRESSION SNAPPY, "
+                "PARTITION_BY (HuisIdBSV, HuisBatchIdBSV), OVERWRITE_OR_IGNORE TRUE"
+            )
+        else:
+            out_target = os.path.join(output_dir, f"household_{interval}.parquet")
+            _copy_opts = "FORMAT PARQUET, COMPRESSION SNAPPY"
+        logging.info(f"resample_hh_data_duckdb: writing {interval} -> {out_target}")
 
         if interval == "5min":
             # Column selection only -- include config columns + existing cumulative counterparts.
@@ -1559,8 +1886,8 @@ def resample_hh_data_duckdb(
             # not parsed as arithmetic expressions by DuckDB.
             quoted = ", ".join(f'"{c}"' for c in select_cols)
             sql = (
-                f"COPY (SELECT {quoted} FROM read_parquet({_sql_path(source_path)}))"
-                f" TO {_sql_path(out_path)} (FORMAT PARQUET, COMPRESSION SNAPPY)"
+                f"COPY (SELECT {quoted} FROM {_src_sql})"
+                f" TO {_sql_path(out_target)} ({_copy_opts})"
             )
             with duckdb.connect() as con:
                 con.execute(sql)
@@ -1590,17 +1917,17 @@ def resample_hh_data_duckdb(
             COPY (
                 WITH resampled AS (
                     SELECT
-                        HuisIdBSV, ProjectIdBSV,
+                        {_group_ids_sql},
                         TIME_BUCKET({bucket_expr}, ReadingDate) AS ReadingDate,
                         {resample_clause}
-                    FROM read_parquet({_sql_path(source_path)})
-                    GROUP BY HuisIdBSV, ProjectIdBSV,
+                    FROM {_src_sql}
+                    GROUP BY {_group_ids_sql},
                              TIME_BUCKET({bucket_expr}, ReadingDate)
                 )
                 SELECT *{cumsum_clause}
                 FROM resampled
                 ORDER BY HuisIdBSV, ProjectIdBSV, ReadingDate
-            ) TO {_sql_path(out_path)} (FORMAT PARQUET, COMPRESSION SNAPPY)
+            ) TO {_sql_path(out_target)} ({_copy_opts})
             """
             with duckdb.connect() as con:
                 con.execute(sql)
@@ -1608,12 +1935,28 @@ def resample_hh_data_duckdb(
             # Recompute derive columns (ratios) from their now-resampled
             # components. The 5min branch carries them as-is (already correct
             # per-interval from the calculated stage); only the grouping
-            # intervals need re-derivation.
+            # intervals need re-derivation. For hive output the SAME in-place
+            # derivation runs per shard file (row-wise ratios: identical math);
+            # provenance rows are deduplicated across shards.
             if derive_cols:
-                _rows = _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
-                _derive_prov.extend(
-                    {"scope": f"household_{interval}", **r} for r in _rows
-                )
+                if partition_output:
+                    import glob as glob_mod
+                    _seen_prov = set()
+                    for _shard in sorted(glob_mod.glob(
+                        os.path.join(out_target, "**", "*.parquet"), recursive=True
+                    )):
+                        for r in _derive_columns_in_parquet(_shard, derive_cols, catalog_df):
+                            _key = tuple(sorted((k, str(v)) for k, v in r.items()))
+                            if _key not in _seen_prov:
+                                _seen_prov.add(_key)
+                                _derive_prov.append(
+                                    {"scope": f"household_{interval}", **r}
+                                )
+                else:
+                    _rows = _derive_columns_in_parquet(out_target, derive_cols, catalog_df)
+                    _derive_prov.extend(
+                        {"scope": f"household_{interval}", **r} for r in _rows
+                    )
 
         logging.info(f"resample_hh_data_duckdb: done {interval}")
 
@@ -1625,6 +1968,7 @@ def resample_hh_data_duckdb(
 
 def aggregate_project_data_duckdb(
     intervals: tuple = ("5min", "15min", "60min"),
+    aggregate_folder_path=None,
 ) -> None:
     """
     Aggregate resampled household parquet files to project level using DuckDB.
@@ -1660,7 +2004,11 @@ def aggregate_project_data_duckdb(
     from etdmap.data_model import get_aggregation_config
 
     config = get_aggregation_config()
-    output_dir = etdtransform.options.aggregate_folder_path
+    output_dir = (
+        aggregate_folder_path
+        if aggregate_folder_path is not None
+        else etdtransform.options.aggregate_folder_path
+    )
 
     # Load the catalog once if any variable is recomputed post-aggregation.
     catalog_df = None
@@ -1674,13 +2022,30 @@ def aggregate_project_data_duckdb(
     cumul_cols_all = [col[:-4] for col in diff_cols_all]
 
     for interval in intervals:
-        source_path = os.path.join(output_dir, f"household_{interval}.parquet")
         out_path = os.path.join(output_dir, f"project_{interval}.parquet")
         logging.info(f"aggregate_project_data_duckdb: writing {interval} -> {out_path}")
 
-        _source_schema = pq.read_schema(source_path)
-        source_schema_names = set(_source_schema.names)
-        _schema_types = {field.name: field.type for field in _source_schema}
+        # Source is format-detected (file or hive shard directory) by the
+        # shared read layer. Project output stays a single parquet file in
+        # either case (project-level data is small).
+        from etdmap.storage import (
+            resolve_source_path,
+            source_is_sharded,
+            source_schema_names as _schema_names_of,
+            source_schema_types,
+            source_sql,
+        )
+        from etdtransform.load_data import source_table
+
+        source_path = resolve_source_path(output_dir, f"household_{interval}")
+        source_schema_names = _schema_names_of(source_path)
+        _schema_types = source_schema_types(source_path)
+        _src_sql = source_sql(source_path)
+        if source_is_sharded(source_path):
+            # Batch-safety guard: duplicate (HuisIdBSV, ReadingDate) rows in
+            # the household input would double-count project sums.
+            from etdtransform.impute import _assert_batch_safe_ibis
+            _assert_batch_safe_ibis(source_table(source_path))
         active_config = {col: cfg for col, cfg in config.items() if col in source_schema_names}
 
         # Validate types -- same rule as resample_hh_data_duckdb. Float, int,
@@ -1749,7 +2114,7 @@ def aggregate_project_data_duckdb(
                     ProjectIdBSV,
                     ReadingDate,
                     {agg_clause}
-                FROM read_parquet({_sql_path(source_path)})
+                FROM {_src_sql}
                 GROUP BY ProjectIdBSV, ReadingDate
             )
             SELECT *{cumsum_clause}
@@ -2410,12 +2775,12 @@ def resample_avg(df, column, interval, group_column, min_count):
 # Active aggregation map: variable -> {resample_method, aggregate_method}.
 # Sourced from the etdmap data model (etdmodel.csv -> AggregatieMeenemen=True
 # rows with their ResamplingMethode / AggregatieMethode columns). Update the
-# Grist data model and re-sync etdmodel.csv to change what gets aggregated;
+# source data model and re-sync etdmodel.csv to change what gets aggregated;
 # do not maintain a separate hardcoded list here.
 #
 # Compatibility shim: keep both naming conventions for the Zon production
 # variable in the dict so callers can look up by either name. The data model
-# typically registers both `Zon-opwekTotaalDiff` (Grist-original, hyphenated)
+# typically registers both `Zon-opwekTotaalDiff` (the data model's original, hyphenated name)
 # and `ZonopwekBruto` (runtime form used by SymPy / catalog code -- see
 # has_zon_rename in this file and the same shim in calculated_columns.py).
 # This idempotent additive shim ensures the alias still exists if either

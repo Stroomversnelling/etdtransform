@@ -48,27 +48,35 @@ def get_household_tables(include_weather: bool = True, include_preimputed_data: 
         household_tbls["weather"] = get_weather_data_table()
         weather_station_table = get_weather_station_table()
 
+    # Sources are format-detected: a stage stored as a shard directory or as
+    # a single parquet file loads through the same call.
+    from etdmap.storage import resolve_source_path as _resolve
+
     if include_preimputed_data:
-        household_parquet = os.path.join(etdtransform.options.aggregate_folder_path, "household_default.parquet")
-        household_table = ibis.read_parquet(household_parquet)
+        household_source = _resolve(
+            etdtransform.options.aggregate_folder_path, "household_default"
+        )
+        household_table = source_table(household_source)
         if "HuisIdBSV" not in household_table.columns:
             household_table = household_table.rename(HuisIdBSV="HuisCode")
         hh_joined = join_index_table(household_table)
         household_tbls["default"] = hh_joined
 
     if include_calculated_data:
-        household_parquet = os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet")
-        household_table = ibis.read_parquet(household_parquet)
+        household_source = _resolve(
+            etdtransform.options.aggregate_folder_path, "household_calculated"
+        )
+        household_table = source_table(household_source)
         if "HuisIdBSV" not in household_table.columns:
             household_table = household_table.rename(HuisIdBSV="HuisCode")
         hh_joined = join_index_table(household_table)
         household_tbls["calculated"] = hh_joined
 
     for interval in intervals:
-        household_parquet = os.path.join(
-            etdtransform.options.aggregate_folder_path, f"household_{interval}.parquet"
+        household_source = _resolve(
+            etdtransform.options.aggregate_folder_path, f"household_{interval}"
         )
-        household_table = ibis.read_parquet(household_parquet)
+        household_table = source_table(household_source)
 
         if "HuisIdBSV" not in household_table.columns:
             household_table = household_table.rename(HuisIdBSV="HuisCode")
@@ -525,3 +533,97 @@ def get_dfs():
             )  # Print a few details of missing records
 
     return dfs
+
+
+# ---------------------------------------------------------------------------
+# Reading mapped household data.
+#
+# Mapped data is stored either as one parquet file per household (the legacy
+# "flat" layout) or as a partitioned folder tree (the "sharded" layout, with
+# folder names like HuisIdBSV=1/HuisBatchIdBSV=1). All reading functions
+# detect the layout themselves -- callers never pass a format.
+#
+# Two read patterns, chosen by measurement:
+#   - a specific set of households: read each household's file directly with
+#     pandas (filtering a whole-folder scan down to a few households was
+#     measured 3x slower);
+#   - the whole dataset: one lazy DuckDB/ibis query over all files at once.
+#
+# The functions that need no query engine live in etdmap.storage (etdmap is
+# the base loading library that every repo already uses). They are
+# re-exported here so existing callers keep working; this module adds only
+# the DuckDB/ibis-based table constructors.
+# ---------------------------------------------------------------------------
+
+from etdmap.storage import (  # noqa: F401  (re-exports)
+    detect_mapped_format,
+    mapped_household_files,
+    read_mapped_households,
+    read_source_frame,
+    resolve_source_path,
+    shard_glob,
+    source_is_sharded,
+)
+
+
+def source_table(path) -> "ibis.Expr":
+    """
+    Lazy ibis/DuckDB table over ANY stage source: a single parquet file or a
+    hive shard directory (union_by_name across per-supplier schemas; hive
+    partition ids as columns). The one engine-bound wrapper on top of
+    etdmap.storage's format detection.
+    """
+    p = str(path)
+    if source_is_sharded(p):
+        return ibis.read_parquet(
+            shard_glob(p).replace("\\", "/"),
+            hive_partitioning=True,
+            union_by_name=True,
+        )
+    return ibis.read_parquet(p)
+
+
+def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
+    """
+    Whole-dataset lazy table over the SHARDED mapped data: one Ibis expression
+    over all shards (hive partition columns HuisIdBSV/HuisBatchIdBSV included;
+    per-supplier schema differences handled by union_by_name). Filters on
+    HuisIdBSV/HuisBatchIdBSV prune partitions engine-side.
+
+    Sharded-forward API: for a flat-only folder the legacy whole-table view is
+    the stage-2 monolith (household_default.parquet via the existing loaders),
+    so this raises rather than reimplementing that path.
+    """
+    if mapped_folder_path is None:
+        mapped_folder_path = etdtransform.options.mapped_folder_path
+    root = str(mapped_folder_path)
+    if detect_mapped_format(root) != "sharded":
+        raise ValueError(
+            f"mapped_household_table requires the sharded layout; {root} is flat. "
+            f"The legacy whole-table view of flat mapped data is the stage-2 "
+            f"monolith (household_default.parquet via get_household_tables/"
+            f"read_hh_data)."
+        )
+    pattern = os.path.join(root, "sharded", "**", "*.parquet").replace("\\", "/")
+    return ibis.read_parquet(pattern, hive_partitioning=True, union_by_name=True)
+
+
+def included_household_ids(mapped_folder_path=None) -> list:
+    """
+    HuisIdBSV values with Meenemen == True, from the batch registry.
+
+    This is the sharded path's replacement for the stage-2 Meenemen filter:
+    inclusion is resolved at READ time from batch_index (the reviewed
+    household-batch registry),
+    instead of being baked into a materialised default file. Loading goes
+    through etdmap's guarded reader (1:1 correspondence + required cadence).
+    """
+    from etdmap.index_helpers import read_batch_index
+
+    if mapped_folder_path is None:
+        mapped_folder_path = etdtransform.options.mapped_folder_path
+    batch_index_df, _ = read_batch_index(mapped_folder_path)
+    included = batch_index_df.loc[
+        batch_index_df["Meenemen"] == True, "HuisIdBSV"  # noqa: E712
+    ]
+    return sorted(int(h) for h in included.dropna().unique())
