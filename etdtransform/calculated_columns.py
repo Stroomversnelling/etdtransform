@@ -240,17 +240,17 @@ def add_calculated_columns_adaptive(
     # Plan cache keyed on (frozenset(available), frozenset(targets)).
     # Households with identical column-availability patterns share a plan.
     # plan_stats tracks per-plan: derived cols, not_derivable cols, and which
-    # (project, huis) pairs used it — for structured end-of-run logging.
+    # (project, household) pairs used it — for structured end-of-run logging.
     _plan_cache: dict = {}
     _plan_stats: dict = {}  # cache_key -> {derived, not_derivable, households}
 
     # Write new columns in-place via df.loc to avoid per-household copies and
-    # the pd.concat peak at the end.  The groupby yields (huis_id, row_index)
+    # the pd.concat peak at the end.  The groupby yields (household_id, row_index)
     # pairs so we never materialise a per-household copy of the full frame.
-    for huis_id, idx in df.groupby("HuisIdBSV", sort=False).groups.items():
-        huis_slice = df.loc[idx]
-        project_id = huis_slice["ProjectIdBSV"].iloc[0] if has_project_col else None
-        available = frozenset(adapter.available_columns(huis_slice))
+    for household_id, idx in df.groupby("HuisIdBSV", sort=False).groups.items():
+        household_slice = df.loc[idx]
+        project_id = household_slice["ProjectIdBSV"].iloc[0] if has_project_col else None
+        available = frozenset(adapter.available_columns(household_slice))
 
         if explicit_targets is None:
             targets = (all_perf_data_cols - available) & derivable_in_catalog
@@ -262,10 +262,10 @@ def add_calculated_columns_adaptive(
 
         cache_key = (available, frozenset(targets))
         if cache_key not in _plan_cache:
-            report = adapter.feasibility_report(huis_slice, targets)
+            report = adapter.feasibility_report(household_slice, targets)
             not_derivable = frozenset(report["not_derivable"])
             derivable = targets - not_derivable
-            plan = adapter.execution_plan(huis_slice, derivable) if derivable else []
+            plan = adapter.execution_plan(household_slice, derivable) if derivable else []
             derived_cols = frozenset(col for col, _ in plan)
             _plan_cache[cache_key] = plan
             _plan_stats[cache_key] = {
@@ -275,7 +275,7 @@ def add_calculated_columns_adaptive(
                 "households": [],
             }
 
-        _plan_stats[cache_key]["households"].append((project_id, huis_id))
+        _plan_stats[cache_key]["households"].append((project_id, household_id))
 
         for col_name, rhs_expr in _plan_cache[cache_key]:
             rhs_vars = [str(s) for s in rhs_expr.free_symbols]
@@ -384,9 +384,9 @@ def _log_adaptive_summary(plan_stats: dict, has_project_col: bool) -> None:
             outliers = [(p, h) for p, h in ms["households"] if p == proj_id]
             if not outliers:
                 continue
-            huis_ids = sorted(int(h) for _, h in outliers)
+            household_ids = sorted(int(h) for _, h in outliers)
             logging.warning(
-                f"[adaptive] {proj_label} | {len(outliers)} outlier HH {huis_ids} "
+                f"[adaptive] {proj_label} | {len(outliers)} outlier HH {household_ids} "
                 f"have a different provider schema | "
                 f"derived: {sorted(ms['derived'])} | "
                 f"could not derive: {sorted(ms['not_derivable'])}"

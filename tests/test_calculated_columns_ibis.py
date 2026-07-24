@@ -161,14 +161,14 @@ def _make_multi_schema_df():
     C is all-NA for HH 1 (absent from its schema).
     """
     rows = []
-    for huis_id, a_val, b_val, c_val in [
+    for household_id, a_val, b_val, c_val in [
         (1, 1.0, 2.0, None),   # HH 1: A and B
         (2, 3.0, None, 4.0),   # HH 2: A and C
         (3, 5.0, 6.0, 7.0),   # HH 3: A, B, and C
     ]:
         for _ in range(N):
             rows.append({
-                "HuisIdBSV": pd.NA if huis_id is None else huis_id,
+                "HuisIdBSV": pd.NA if household_id is None else household_id,
                 "ProjectIdBSV": 1,
                 "A": a_val,
                 "B": b_val,
@@ -217,17 +217,17 @@ class TestIbisVsPandasMultiSchema:
         )
         df_ibis = pd.read_parquet(out, dtype_backend="numpy_nullable")
 
-        for huis_id in [1, 2, 3]:
+        for household_id in [1, 2, 3]:
             pandas_vals = (
-                df_pandas[df_pandas["HuisIdBSV"] == huis_id]["Target"]
+                df_pandas[df_pandas["HuisIdBSV"] == household_id]["Target"]
                 .astype(float).tolist()
             )
             ibis_vals = (
-                df_ibis[df_ibis["HuisIdBSV"] == huis_id]["Target"]
+                df_ibis[df_ibis["HuisIdBSV"] == household_id]["Target"]
                 .astype(float).tolist()
             )
             assert ibis_vals == pytest.approx(pandas_vals, rel=1e-9), (
-                f"HH {huis_id}: pandas={pandas_vals} ibis={ibis_vals}"
+                f"HH {household_id}: pandas={pandas_vals} ibis={ibis_vals}"
             )
 
     def test_three_schema_groups_produced(self, tmp_path, caplog):

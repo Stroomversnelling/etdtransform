@@ -185,7 +185,7 @@ def get_data_stats(
 
     long_pieces = []
     group_n_pieces = []
-    huis_universe: set = set()
+    household_universe: set = set()
 
     for season_name, month_set in slice_specs:
         if month_set is None:
@@ -203,7 +203,7 @@ def get_data_stats(
         )
         n_df["season"] = season_name
         group_n_pieces.append(n_df)
-        huis_universe.update(n_df["HuisIdBSV"].tolist())
+        household_universe.update(n_df["HuisIdBSV"].tolist())
 
         # Numeric cols: one ibis execute per column. DuckDB does NOT
         # fuse quantile() expressions across cols, so per-col is the
@@ -298,7 +298,7 @@ def get_data_stats(
     # universe; missing stats stay NaN.
     seasons_emitted = [s for s, _ in slice_specs]
     grid = pd.MultiIndex.from_product(
-        [sorted(huis_universe), value_cols, seasons_emitted],
+        [sorted(household_universe), value_cols, seasons_emitted],
         names=["HuisIdBSV", "variable", "season"],
     ).to_frame(index=False)
 

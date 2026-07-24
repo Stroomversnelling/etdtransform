@@ -233,14 +233,14 @@ def _meenemen_updated():
     Without this call the index has no Meenemen == True rows and every pipeline
     exits early with no output.
 
-    update_meenemen saves through save_index_to_parquet, which writes
-    batch_index.parquet together with index.parquet (single registry write
-    path). That requires the fixture HuisBatch sync CSV that etdmap's
+    update_meenemen saves through save_index_to_parquet, which writes the
+    single registry file (index.parquet including the household-batch
+    columns). That requires the fixture HuisBatch sync CSV that etdmap's
     conftest writes next to the fixture BSV metadata -- checked here so a
     missing prerequisite fails with a pointer instead of a skipped registry.
     """
-    _sync_csv = Path(str(etdmap.options.bsv_metadata_file)).parent / "huisbatch_sync.csv"
-    etdmap.options.huisbatch_csv_path = _sync_csv
+    _sync_csv = Path(str(etdmap.options.bsv_metadata_file)).parent / "household_batch_sync.csv"
+    etdmap.options.household_batch_csv_path = _sync_csv
     if not _sync_csv.exists():
         raise FileNotFoundError(
             f"Fixture HuisBatch sync CSV not found at {_sync_csv}. Run "

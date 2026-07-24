@@ -67,13 +67,13 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
 
     # The default file is the aggregated file for houseshold_dfs 
     # it should therefore be the legth of the household dfs
-    nmbr_huisids = len(index_df.loc[:, "HuisIdBSV"].unique())
-    huis_id_bsv = index_df.loc[0, "HuisIdBSV"]
-    file_name = f"household_{huis_id_bsv}_table.parquet"
+    nmbr_householdids = len(index_df.loc[:, "HuisIdBSV"].unique())
+    household_id = index_df.loc[0, "HuisIdBSV"]
+    file_name = f"household_{household_id}_table.parquet"
     file_path_hh = os.path.join(etdtransform.options.mapped_folder_path, file_name)
     household_df = pd.read_parquet(file_path_hh)
     len_per_hh = len(household_df)
-    assert len(default_df) == len_per_hh * nmbr_huisids, 'aggregated hh file (default) does not have the right length'  
+    assert len(default_df) == len_per_hh * nmbr_householdids, 'aggregated hh file (default) does not have the right length'  
 
     logging.info("Loading default data with additional columns.")
     # # "load default data", It's possible to also add columns

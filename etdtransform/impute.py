@@ -65,11 +65,11 @@ def calculate_average_diff(
         df.groupby([project_id_column, "HuisIdBSV"])[diff_columns].max().reset_index()
     )
     household_max.columns = [project_id_column, "HuisIdBSV"] + [
-        f"{col}_huis_max" for col in diff_columns
+        f"{col}_household_max" for col in diff_columns
     ]
 
     for col in diff_columns:
-        household_max[f"{col}_huis_max"] = household_max[f"{col}_huis_max"].astype(
+        household_max[f"{col}_household_max"] = household_max[f"{col}_household_max"].astype(
             "Float64",
         )
 
@@ -81,7 +81,7 @@ def calculate_average_diff(
         logging.info(f"Calculating the 95th percentile (upper bound) for {col}.")
         upper_bounds = (
             household_max.groupby(project_id_column)
-            .apply(safe_quantile, f"{col}_huis_max")
+            .apply(safe_quantile, f"{col}_household_max")
             .reset_index()
         )
         upper_bounds.columns = [project_id_column, f"{col}_upper_bound"]
@@ -91,10 +91,10 @@ def calculate_average_diff(
 
         logging.info(f"Identifying households to include for {col}.")
         household_max_with_bounds = household_max[
-            [project_id_column, "HuisIdBSV", f"{col}_huis_max"]
+            [project_id_column, "HuisIdBSV", f"{col}_household_max"]
         ].merge(upper_bounds, on=project_id_column, how="left")
         include_mask = (
-            household_max_with_bounds[f"{col}_huis_max"]
+            household_max_with_bounds[f"{col}_household_max"]
             < household_max_with_bounds[f"{col}_upper_bound"]
         )
         households_to_include = household_max_with_bounds.loc[include_mask, "HuisIdBSV"]
@@ -176,14 +176,14 @@ def calculate_average_diff_ibis(
 
     logging.info("Calculating Diff column averages (Ibis).")
 
-    hh_max_agg = {f"{col}_huis_max": tbl[col].cast("Float64").max() for col in diff_columns}
+    hh_max_agg = {f"{col}_household_max": tbl[col].cast("Float64").max() for col in diff_columns}
     household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
 
     avg_diff_dict = {}
 
     for col in diff_columns:
         logging.info(f"Handling column (Ibis): {col}")
-        max_col = f"{col}_huis_max"
+        max_col = f"{col}_household_max"
 
         # 95th percentile of per-household max (near-zero excluded), doubled → upper bound.
         # All projects appear in ub_tbl; projects with no qualifying households get NULL so
@@ -252,7 +252,7 @@ def calculate_average_diff_ibis(
                 f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
-        # huis_max is a measurement column — promote to Float64 to match the explicit
+        # household_max is a measurement column — promote to Float64 to match the explicit
         # .astype("Float64") in the pandas path (lines 72-74 of calculate_average_diff).
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
@@ -277,7 +277,7 @@ def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
     result_df = None
     for col, data in avg_diff_dict.items():
         df_col = data["household_max_with_bounds"][
-            [project_id_column, "HuisIdBSV", f"{col}_huis_max", f"{col}_upper_bound"]
+            [project_id_column, "HuisIdBSV", f"{col}_household_max", f"{col}_upper_bound"]
         ]
         if result_df is None:
             result_df = df_col
@@ -357,7 +357,7 @@ def equal_sig_fig(a, b, sig_figs):
 
 
 
-def validate_household_column(household_df, cum_col, huis_code):
+def validate_household_column(household_df, cum_col, household_id):
     """
     Validate a household column for data quality and completeness.
 
@@ -370,7 +370,7 @@ def validate_household_column(household_df, cum_col, huis_code):
         The DataFrame containing household data.
     cum_col : str
         The name of the cumulative column to validate.
-    huis_code : str
+    household_id : str
         The unique identifier for the household.
 
     Returns
@@ -393,32 +393,32 @@ def validate_household_column(household_df, cum_col, huis_code):
 
     if n_na == len_df:
         logging.info(
-            f"HuisIdBSV {huis_code} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
+            f"HuisIdBSV {household_id} has all {n_na} missing values in {cum_col} of {len_df} records. Skipping column.",
         )
         return False
     elif n_na / len_df > 0.4:
         percent_na = 100 * n_na / len_df
         logging.error(
-            f"HuisIdBSV {huis_code} has {percent_na:.2f}% missing values in {cum_col}. Consider removing.",
+            f"HuisIdBSV {household_id} has {percent_na:.2f}% missing values in {cum_col}. Consider removing.",
         )
     else:
         logging.info(
-            f"HuisIdBSV {huis_code} has {n_na} missing values in {cum_col} of {len_df} records.",
+            f"HuisIdBSV {household_id} has {n_na} missing values in {cum_col} of {len_df} records.",
         )
 
     if round(household_df[cum_col].sum(), 10) == 0:
         logging.info(
-            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}. Skipping column.",
+            f"HuisIdBSV {household_id} has no non-zero values in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[cum_col].max() - household_df[cum_col].min(), 10) == 0:
         logging.info(
-            f"HuisIdBSV {huis_code} has no change in {cum_col}. Skipping column.",
+            f"HuisIdBSV {household_id} has no change in {cum_col}. Skipping column.",
         )
         return False
     if round(household_df[f"{cum_col}Diff"].sum(), 10) == 0:
         logging.warning(
-            f"HuisIdBSV {huis_code} has no non-zero values in {cum_col}Diff before imputation.",
+            f"HuisIdBSV {household_id} has no non-zero values in {cum_col}Diff before imputation.",
         )
 
     return True
@@ -992,7 +992,7 @@ def prepare_diffs_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cumulative_columns: list = None,
-    huis_ids=None,
+    household_ids=None,
 ):
     """
     Sharded version of the avg-diffs stage: compute the imputation estimation
@@ -1002,7 +1002,7 @@ def prepare_diffs_sharded(
     I/O shell only -- the computation is the SAME prepare_diffs_for_impute_ibis
     the legacy path uses, fed a lazy table built from mapped_household_table
     (DuckDB hive-glob, per the measured perf decision) with ProjectIdBSV joined
-    from the batch registry and Meenemen inclusion applied at read time.
+    from the registry index and Meenemen inclusion applied at read time.
 
     Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
     pipeline's artifact area), keeping legacy artifacts untouched.
@@ -1013,7 +1013,7 @@ def prepare_diffs_sharded(
     """
     import ibis as _ibis
 
-    from etdmap.index_helpers import read_batch_index
+    from etdmap.index_helpers import read_index
     from etdtransform.load_data import included_household_ids, mapped_household_table
 
     if mapped_folder_path is None:
@@ -1025,16 +1025,22 @@ def prepare_diffs_sharded(
             "area)."
         )
 
-    if huis_ids is not None:
-        ids = sorted(int(x) for x in huis_ids)
+    if household_ids is not None:
+        ids = sorted(int(x) for x in household_ids)
     else:
         ids = included_household_ids(mapped_folder_path)
 
-    batch_index_df, _ = read_batch_index(mapped_folder_path)
+    index_df, _ = read_index(mapped_folder_path)
+    if "HuisBatchIdBSV" not in index_df.columns:
+        raise ValueError(
+            "The registry index.parquet has no HuisBatchIdBSV column; "
+            "re-run the registry save to add the household-batch columns."
+        )
+    registry = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
     project_map = _ibis.memtable(
         pd.DataFrame({
-            "HuisBatchIdBSV": batch_index_df["HuisBatchIdBSV"].astype("int64"),
-            "ProjectIdBSV": batch_index_df["ProjectIdBSV"].astype("int64"),
+            "HuisBatchIdBSV": registry["HuisBatchIdBSV"].astype("int64"),
+            "ProjectIdBSV": registry["ProjectIdBSV"].astype("int64"),
         })
     )
 

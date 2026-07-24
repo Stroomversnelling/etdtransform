@@ -130,9 +130,9 @@ def aggregate_hh_data_5min(sample_ratio=1.0):
     data_frames = []
 
     for _, row in ids_to_process.iterrows():
-        huis_id_bsv = row["HuisIdBSV"]
+        household_id = row["HuisIdBSV"]
         project_code = row["ProjectIdBSV"]
-        file_name = f"household_{huis_id_bsv}_table.parquet"
+        file_name = f"household_{household_id}_table.parquet"
         file_path = os.path.join(etdtransform.options.mapped_folder_path, file_name)
 
         if not os.path.exists(file_path):
@@ -140,7 +140,7 @@ def aggregate_hh_data_5min(sample_ratio=1.0):
 
         household_df = pd.read_parquet(file_path)
         household_df["ProjectIdBSV"] = project_code
-        household_df["HuisIdBSV"] = huis_id_bsv
+        household_df["HuisIdBSV"] = household_id
         data_frames.append(household_df)
 
         logging.info(f"Added {file_name}")
@@ -748,7 +748,7 @@ def impute_mapped_households_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cum_cols=None,
-    huis_ids=None,
+    household_ids=None,
     chunk_size: int = 50,
 ) -> None:
     """
@@ -757,8 +757,8 @@ def impute_mapped_households_sharded(
     I/O shell only -- the imputation math is the shared _impute_chunk_core.
     Chunks are materialised with read_mapped_households (direct per-shard
     reads -- the measured-fastest strategy for household batches);
-    ProjectIdBSV is joined from the batch registry; Meenemen inclusion comes
-    from batch_index at read time (the stage-2 filter's sharded replacement).
+    ProjectIdBSV is joined from the registry index; Meenemen inclusion comes
+    from the registry at read time (the stage-2 filter's sharded replacement).
 
     Inputs read from ``aggregate_folder_path``: avg_diffs.parquet and
     household_diff_max_bounds.parquet (same artifacts the legacy shell uses --
@@ -779,7 +779,7 @@ def impute_mapped_households_sharded(
 
     # Function-level import: load_data imports from aggregate at module level.
     from etdtransform.load_data import included_household_ids, read_mapped_households
-    from etdmap.index_helpers import read_batch_index
+    from etdmap.index_helpers import read_index
 
     if mapped_folder_path is None:
         mapped_folder_path = etdtransform.options.mapped_folder_path
@@ -791,8 +791,8 @@ def impute_mapped_households_sharded(
             "directory before writing)."
         )
 
-    if huis_ids is not None:
-        all_ids = sorted(int(x) for x in huis_ids)
+    if household_ids is not None:
+        all_ids = sorted(int(x) for x in household_ids)
     else:
         all_ids = included_household_ids(mapped_folder_path)
     chunks = [all_ids[i:i + chunk_size] for i in range(0, len(all_ids), chunk_size)]
@@ -813,10 +813,16 @@ def impute_mapped_households_sharded(
         dtype_backend="numpy_nullable",
     )
 
-    batch_index_df, _ = read_batch_index(mapped_folder_path)
+    index_df, _ = read_index(mapped_folder_path)
+    if "HuisBatchIdBSV" not in index_df.columns:
+        raise ValueError(
+            "The registry index.parquet has no HuisBatchIdBSV column; "
+            "re-run the registry save to add the household-batch columns."
+        )
+    registry = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
     project_by_batch = dict(zip(
-        (int(x) for x in batch_index_df["HuisBatchIdBSV"]),
-        (int(x) for x in batch_index_df["ProjectIdBSV"]),
+        (int(x) for x in registry["HuisBatchIdBSV"]),
+        (int(x) for x in registry["ProjectIdBSV"]),
     ))
 
     out_root = os.path.join(str(aggregate_folder_path), "sharded", "household_imputed")
@@ -884,7 +890,7 @@ def impute_hh_data_5min_chunked(
     source_path,
     chunk_size: int = 50,
     cum_cols=cumulative_columns,
-    huis_ids=None,
+    household_ids=None,
 ):
     """
     Chunked variant of impute_hh_data_5min.
@@ -905,7 +911,7 @@ def impute_hh_data_5min_chunked(
         Number of households per batch.  Default 50.
     cum_cols : list
         Cumulative columns to impute.
-    huis_ids : list | None
+    household_ids : list | None
         If provided, restrict processing to this subset of HuisIdBSV values.
         Used by sample/filter steps to avoid writing a temp parquet.
     """
@@ -928,8 +934,8 @@ def impute_hh_data_5min_chunked(
     )
 
     # Step 1: resolve the household ID set — column-only read, tiny
-    if huis_ids is not None:
-        all_ids = sorted(int(x) for x in huis_ids)
+    if household_ids is not None:
+        all_ids = sorted(int(x) for x in household_ids)
     else:
         all_ids = sorted(
             int(x) for x in
@@ -1206,12 +1212,12 @@ def add_calculated_columns_to_hh_data_ibis(
     # Build schema groups: frozenset(available_cols) -> list[int HuisIdBSV]
     schema_groups: dict = {}
     for _, row in availability_df.iterrows():
-        huis_id = int(row["HuisIdBSV"])
+        household_id = int(row["HuisIdBSV"])
         avail = frozenset(
             col for col in analysis_cols
             if not pd.isna(row.get(col, float("nan"))) and row[col] >= completeness_threshold
         )
-        schema_groups.setdefault(avail, []).append(huis_id)
+        schema_groups.setdefault(avail, []).append(household_id)
 
     logging.info(
         f"[calc ibis] {len(schema_groups)} unique schema groups "

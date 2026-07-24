@@ -29,27 +29,27 @@ ROWS_PER_HH = 20
 DIFF_COL = "ElektriciteitNetgebruikLaagDiff"
 
 
-def _make_index(huis_ids: list, project_ids: list, meenemen: list | None = None) -> pd.DataFrame:
+def _make_index(household_ids: list, project_ids: list, include: list | None = None) -> pd.DataFrame:
     """Return a minimal index DataFrame matching what update_meenemen returns."""
-    if meenemen is None:
-        meenemen = [True] * len(huis_ids)
+    if include is None:
+        include = [True] * len(household_ids)
     return pd.DataFrame({
-        "HuisIdBSV":    pd.array(huis_ids, dtype="Int64"),
+        "HuisIdBSV":    pd.array(household_ids, dtype="Int64"),
         "ProjectIdBSV": pd.array(project_ids, dtype="Int64"),
-        "Meenemen":     meenemen,
+        "Meenemen":     include,
     })
 
 
-def _write_hh_files(mapped_dir: str, huis_ids: list) -> None:
+def _write_hh_files(mapped_dir: str, household_ids: list) -> None:
     """Write one synthetic parquet per household into mapped_dir."""
     rng = np.random.default_rng(42)
     dates = pd.date_range("2023-01-01", periods=ROWS_PER_HH, freq="5min").astype("datetime64[us]")
-    for huis_id in huis_ids:
+    for household_id in household_ids:
         df = pd.DataFrame({
             "ReadingDate": dates,
             DIFF_COL: rng.uniform(0.5, 10.0, ROWS_PER_HH),
         })
-        df.to_parquet(os.path.join(mapped_dir, f"household_{huis_id}_table.parquet"), engine="pyarrow")
+        df.to_parquet(os.path.join(mapped_dir, f"household_{household_id}_table.parquet"), engine="pyarrow")
 
 
 @pytest.fixture()
@@ -77,10 +77,10 @@ def dirs(tmp_path):
 
 def test_basic_output_correctness(dirs, monkeypatch):
     """All households appear in the output with correct row counts and columns."""
-    huis_ids    = list(range(1, 8))   # 7 households
+    household_ids    = list(range(1, 8))   # 7 households
     project_ids = [1, 1, 1, 2, 2, 2, 2]
-    index_df = _make_index(huis_ids, project_ids)
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids)
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -88,8 +88,8 @@ def test_basic_output_correctness(dirs, monkeypatch):
 
     out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
 
-    assert len(out) == len(huis_ids) * ROWS_PER_HH
-    assert set(out["HuisIdBSV"].unique()) == set(huis_ids)
+    assert len(out) == len(household_ids) * ROWS_PER_HH
+    assert set(out["HuisIdBSV"].unique()) == set(household_ids)
     assert set(out["ProjectIdBSV"].unique()) == {1, 2}
     assert "ReadingDate" in out.columns
     assert DIFF_COL in out.columns
@@ -97,10 +97,10 @@ def test_basic_output_correctness(dirs, monkeypatch):
 
 def test_batching_produces_same_result_as_single_batch(dirs, monkeypatch):
     """Output is identical whether batching splits the work or not."""
-    huis_ids    = list(range(1, 13))  # 12 households
+    household_ids    = list(range(1, 13))  # 12 households
     project_ids = [1] * 6 + [2] * 6
-    index_df = _make_index(huis_ids, project_ids)
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids)
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -117,10 +117,10 @@ def test_batching_produces_same_result_as_single_batch(dirs, monkeypatch):
 
 def test_batch_size_larger_than_n_files(dirs, monkeypatch):
     """batch_size > number of files should not cause errors."""
-    huis_ids    = [10, 11]
+    household_ids    = [10, 11]
     project_ids = [1, 1]
-    index_df = _make_index(huis_ids, project_ids)
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids)
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -132,20 +132,20 @@ def test_batch_size_larger_than_n_files(dirs, monkeypatch):
 
 def test_stratified_sampling(dirs, monkeypatch):
     """sample_ratio keeps representation from each project."""
-    huis_ids    = list(range(1, 21))           # 20 households
+    household_ids    = list(range(1, 21))           # 20 households
     project_ids = [1] * 10 + [2] * 10
-    index_df = _make_index(huis_ids, project_ids)
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids)
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
     aggregate_hh_data_5min_ibis(sample_ratio=0.5, batch_size=4)
 
     out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
-    sampled_huis = out["HuisIdBSV"].unique()
+    sampled_household = out["HuisIdBSV"].unique()
 
     # 50% of 20 = 10 households total; both projects must be represented
-    assert len(sampled_huis) == 10
+    assert len(sampled_household) == 10
     p1 = out[out["ProjectIdBSV"] == 1]["HuisIdBSV"].nunique()
     p2 = out[out["ProjectIdBSV"] == 2]["HuisIdBSV"].nunique()
     assert p1 > 0, "Project 1 not represented in sample"
@@ -155,21 +155,21 @@ def test_stratified_sampling(dirs, monkeypatch):
 
 def test_column_projection(dirs, monkeypatch):
     """When columns= is given, only id cols + requested cols appear in output."""
-    huis_ids    = [1, 2, 3]
+    household_ids    = [1, 2, 3]
     project_ids = [1, 1, 2]
-    index_df = _make_index(huis_ids, project_ids)
+    index_df = _make_index(household_ids, project_ids)
 
     # Write files with an extra column that should be dropped
     rng = np.random.default_rng(0)
     dates = pd.date_range("2023-01-01", periods=ROWS_PER_HH, freq="5min").astype("datetime64[us]")
-    for huis_id in huis_ids:
+    for household_id in household_ids:
         df = pd.DataFrame({
             "ReadingDate":          dates,
             DIFF_COL:               rng.uniform(0.5, 10.0, ROWS_PER_HH),
             "Zon-opwekTotaalDiff":  rng.uniform(0.1, 5.0, ROWS_PER_HH),
         })
         df.to_parquet(
-            os.path.join(dirs["mapped"], f"household_{huis_id}_table.parquet"),
+            os.path.join(dirs["mapped"], f"household_{household_id}_table.parquet"),
             engine="pyarrow",
         )
 
@@ -188,9 +188,9 @@ def test_column_projection(dirs, monkeypatch):
 
 def test_missing_household_files_skipped(dirs, monkeypatch):
     """Households listed in the index but with no parquet file are silently skipped."""
-    huis_ids    = [1, 2, 3, 4]
+    household_ids    = [1, 2, 3, 4]
     project_ids = [1, 1, 2, 2]
-    index_df = _make_index(huis_ids, project_ids)
+    index_df = _make_index(household_ids, project_ids)
     # Only write files for households 1 and 3; 2 and 4 are missing
     _write_hh_files(dirs["mapped"], [1, 3])
 
@@ -216,10 +216,10 @@ def test_all_files_missing_raises(dirs, monkeypatch):
 
 def test_meenemen_false_excluded(dirs, monkeypatch):
     """Households with Meenemen=False are excluded even if their files exist."""
-    huis_ids    = [1, 2, 3]
+    household_ids    = [1, 2, 3]
     project_ids = [1, 1, 1]
-    index_df = _make_index(huis_ids, project_ids, meenemen=[True, False, True])
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids, include=[True, False, True])
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -232,10 +232,10 @@ def test_meenemen_false_excluded(dirs, monkeypatch):
 
 def test_temp_dir_cleaned_up(dirs, monkeypatch, tmp_path):
     """No temp batch parquets should remain after the function returns."""
-    huis_ids    = list(range(1, 6))
+    household_ids    = list(range(1, 6))
     project_ids = [1] * 5
-    index_df = _make_index(huis_ids, project_ids)
-    _write_hh_files(dirs["mapped"], huis_ids)
+    index_df = _make_index(household_ids, project_ids)
+    _write_hh_files(dirs["mapped"], household_ids)
 
     monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -262,19 +262,19 @@ def _write_mixed_schema_files(mapped_dir: str) -> None:
     """
     Write files with deliberately different column sets to simulate mixed-supplier data.
 
-    Supplier A (huis 1-3): ReadingDate, COL_SHARED, COL_A_ONLY
-    Supplier B (huis 4-6): ReadingDate, COL_SHARED, COL_B_ONLY
+    Supplier A (household 1-3): ReadingDate, COL_SHARED, COL_A_ONLY
+    Supplier B (household 4-6): ReadingDate, COL_SHARED, COL_B_ONLY
     """
     rng = np.random.default_rng(7)
-    for huis_id in range(1, 7):
-        extra_col = COL_A_ONLY if huis_id <= 3 else COL_B_ONLY
+    for household_id in range(1, 7):
+        extra_col = COL_A_ONLY if household_id <= 3 else COL_B_ONLY
         df = pd.DataFrame({
             "ReadingDate": DATES,
             COL_SHARED:   pd.array(rng.uniform(0, 100, ROWS_PER_HH).tolist(), dtype="Float64"),
             extra_col:    pd.array(rng.uniform(0, 10, ROWS_PER_HH).tolist(), dtype="Float64"),
         })
         df.to_parquet(
-            os.path.join(mapped_dir, f"household_{huis_id}_table.parquet"),
+            os.path.join(mapped_dir, f"household_{household_id}_table.parquet"),
             engine="pyarrow",
         )
 
@@ -283,10 +283,10 @@ class TestAggregateDuckdb:
 
     def test_basic_output_correctness(self, dirs, monkeypatch):
         """All households appear in the output with correct row counts."""
-        huis_ids    = list(range(1, 6))
+        household_ids    = list(range(1, 6))
         project_ids = [1, 1, 2, 2, 2]
-        index_df = _make_index(huis_ids, project_ids)
-        _write_hh_files(dirs["mapped"], huis_ids)
+        index_df = _make_index(household_ids, project_ids)
+        _write_hh_files(dirs["mapped"], household_ids)
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
         aggregate_hh_data_duckdb()
@@ -295,25 +295,25 @@ class TestAggregateDuckdb:
             os.path.join(dirs["aggregate"], "household_default.parquet"),
             dtype_backend="numpy_nullable",
         )
-        assert len(out) == len(huis_ids) * ROWS_PER_HH
-        assert set(out["HuisIdBSV"].unique()) == set(huis_ids)
+        assert len(out) == len(household_ids) * ROWS_PER_HH
+        assert set(out["HuisIdBSV"].unique()) == set(household_ids)
         assert set(out["ProjectIdBSV"].unique()) == {1, 2}
 
     def test_ids_not_in_source_files(self, dirs, monkeypatch):
         """HuisIdBSV and ProjectIdBSV are injected from the index, not read from files."""
-        huis_ids    = [10, 20]
+        household_ids    = [10, 20]
         project_ids = [3, 7]
-        index_df = _make_index(huis_ids, project_ids)
+        index_df = _make_index(household_ids, project_ids)
 
         # Write files WITHOUT HuisIdBSV or ProjectIdBSV columns
         dates = pd.date_range("2023-01-01", periods=ROWS_PER_HH, freq="5min", tz="UTC")
-        for huis_id in huis_ids:
+        for household_id in household_ids:
             df = pd.DataFrame({
                 "ReadingDate": dates,
                 COL_SHARED:   pd.array([1.0] * ROWS_PER_HH, dtype="Float64"),
             })
             df.to_parquet(
-                os.path.join(dirs["mapped"], f"household_{huis_id}_table.parquet"),
+                os.path.join(dirs["mapped"], f"household_{household_id}_table.parquet"),
                 engine="pyarrow",
             )
 
@@ -331,9 +331,9 @@ class TestAggregateDuckdb:
 
     def test_mixed_schemas_union_by_name(self, dirs, monkeypatch):
         """Files with different column sets union cleanly; missing cols are NULL."""
-        huis_ids    = list(range(1, 7))
+        household_ids    = list(range(1, 7))
         project_ids = [1, 1, 1, 2, 2, 2]
-        index_df = _make_index(huis_ids, project_ids)
+        index_df = _make_index(household_ids, project_ids)
         _write_mixed_schema_files(dirs["mapped"])
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -343,7 +343,7 @@ class TestAggregateDuckdb:
             os.path.join(dirs["aggregate"], "household_default.parquet"),
             dtype_backend="numpy_nullable",
         )
-        assert len(out) == len(huis_ids) * ROWS_PER_HH
+        assert len(out) == len(household_ids) * ROWS_PER_HH
 
         # Supplier A rows: COL_A_ONLY present, COL_B_ONLY all-NA
         a_rows = out[out["HuisIdBSV"].isin([1, 2, 3])]
@@ -357,10 +357,10 @@ class TestAggregateDuckdb:
 
     def test_mixed_schemas_column_absent_from_all_files_ignored(self, dirs, monkeypatch):
         """Requesting a column that exists in no file produces no error — col is omitted."""
-        huis_ids    = [1, 2]
+        household_ids    = [1, 2]
         project_ids = [1, 1]
-        index_df = _make_index(huis_ids, project_ids)
-        _write_hh_files(dirs["mapped"], huis_ids)
+        index_df = _make_index(household_ids, project_ids)
+        _write_hh_files(dirs["mapped"], household_ids)
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
         aggregate_hh_data_duckdb(columns=["NonExistentColumn", DIFF_COL])
@@ -374,9 +374,9 @@ class TestAggregateDuckdb:
 
     def test_column_projection_excludes_unrequested(self, dirs, monkeypatch):
         """Columns not in the requested list are absent from the output."""
-        huis_ids    = [1, 2]
+        household_ids    = [1, 2]
         project_ids = [1, 1]
-        index_df = _make_index(huis_ids, project_ids)
+        index_df = _make_index(household_ids, project_ids)
         _write_mixed_schema_files(dirs["mapped"])
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -392,10 +392,10 @@ class TestAggregateDuckdb:
 
     def test_stratified_sampling(self, dirs, monkeypatch):
         """sample_ratio keeps representation from each project."""
-        huis_ids    = list(range(1, 21))
+        household_ids    = list(range(1, 21))
         project_ids = [1] * 10 + [2] * 10
-        index_df = _make_index(huis_ids, project_ids)
-        _write_hh_files(dirs["mapped"], huis_ids)
+        index_df = _make_index(household_ids, project_ids)
+        _write_hh_files(dirs["mapped"], household_ids)
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
         aggregate_hh_data_duckdb(sample_ratio=0.5)
@@ -410,9 +410,9 @@ class TestAggregateDuckdb:
 
     def test_missing_files_skipped(self, dirs, monkeypatch):
         """Households in the index with no parquet file are silently skipped."""
-        huis_ids    = [1, 2, 3, 4]
+        household_ids    = [1, 2, 3, 4]
         project_ids = [1, 1, 2, 2]
-        index_df = _make_index(huis_ids, project_ids)
+        index_df = _make_index(household_ids, project_ids)
         _write_hh_files(dirs["mapped"], [1, 3])
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -440,10 +440,10 @@ class TestAggregateDuckdb:
         This test guards against regressions where the two implementations diverge
         in row counts, ID assignment, or value accuracy.
         """
-        huis_ids    = list(range(1, 8))
+        household_ids    = list(range(1, 8))
         project_ids = [1, 1, 1, 2, 2, 2, 2]
-        index_df = _make_index(huis_ids, project_ids)
-        _write_hh_files(dirs["mapped"], huis_ids)
+        index_df = _make_index(household_ids, project_ids)
+        _write_hh_files(dirs["mapped"], household_ids)
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
         out_path = os.path.join(dirs["aggregate"], "household_default.parquet")
@@ -484,9 +484,9 @@ class TestAggregateDuckdb:
         This specifically exercises the union_by_name=True path that has no pandas
         equivalent beyond pd.concat's natural behaviour.
         """
-        huis_ids    = list(range(1, 7))
+        household_ids    = list(range(1, 7))
         project_ids = [1, 1, 1, 2, 2, 2]
-        index_df = _make_index(huis_ids, project_ids)
+        index_df = _make_index(household_ids, project_ids)
         _write_mixed_schema_files(dirs["mapped"])
         monkeypatch.setattr("etdtransform.aggregate.read_index", lambda: (index_df, None))
 
@@ -528,7 +528,7 @@ _IMPUTE_AVG_COL  = "ElektriciteitNetgebruikLaagDiff_avg"
 _IMPUTE_ROWS     = 20
 
 
-def _write_impute_source(agg_dir: str, huis_ids: list, project_id: int = 1) -> None:
+def _write_impute_source(agg_dir: str, household_ids: list, project_id: int = 1) -> None:
     """
     Write household_default.parquet with BOTH cumulative and Diff columns.
 
@@ -539,7 +539,7 @@ def _write_impute_source(agg_dir: str, huis_ids: list, project_id: int = 1) -> N
     rng   = np.random.default_rng(99)
     dates = pd.date_range("2023-01-01", periods=_IMPUTE_ROWS, freq="5min")
     frames = []
-    for hid in huis_ids:
+    for hid in household_ids:
         diff_vals = rng.uniform(0.1, 1.0, _IMPUTE_ROWS)
         frames.append(pd.DataFrame({
             "HuisIdBSV":      pd.array([hid]     * _IMPUTE_ROWS, dtype="Int64"),
@@ -576,9 +576,9 @@ class TestChunkedImpute:
         contained cumulative columns, so every column was skipped and
         impute_and_normalize raised RuntimeError('No columns were imputed').
         """
-        huis_ids = list(range(1, 6))  # 5 households, chunk_size=3 forces 2 chunks
+        household_ids = list(range(1, 6))  # 5 households, chunk_size=3 forces 2 chunks
         dates    = pd.date_range("2023-01-01", periods=_IMPUTE_ROWS, freq="5min")
-        _write_impute_source(dirs["aggregate"], huis_ids)
+        _write_impute_source(dirs["aggregate"], household_ids)
         _write_impute_artifacts(dirs["aggregate"], dates)
 
         # Must not raise
@@ -593,22 +593,22 @@ class TestChunkedImpute:
             dtype_backend="numpy_nullable",
         )
         assert _IMPUTE_DIFF_COL in out.columns, "Diff column missing from imputed output"
-        assert set(out["HuisIdBSV"].unique()) == set(huis_ids)
-        assert len(out) == len(huis_ids) * _IMPUTE_ROWS
+        assert set(out["HuisIdBSV"].unique()) == set(household_ids)
+        assert len(out) == len(household_ids) * _IMPUTE_ROWS
 
-    def test_huis_ids_filter_restricts_output(self, dirs):
-        """huis_ids parameter limits which households are imputed."""
-        huis_ids   = list(range(1, 7))   # 6 in source
+    def test_household_ids_filter_restricts_output(self, dirs):
+        """household_ids parameter limits which households are imputed."""
+        household_ids   = list(range(1, 7))   # 6 in source
         keep_ids   = [1, 3, 5]
         dates      = pd.date_range("2023-01-01", periods=_IMPUTE_ROWS, freq="5min")
-        _write_impute_source(dirs["aggregate"], huis_ids)
+        _write_impute_source(dirs["aggregate"], household_ids)
         _write_impute_artifacts(dirs["aggregate"], dates)
 
         impute_hh_data_5min_chunked(
             source_path=os.path.join(dirs["aggregate"], "household_default.parquet"),
             chunk_size=2,
             cum_cols=[_IMPUTE_CUM_COL],
-            huis_ids=keep_ids,
+            household_ids=keep_ids,
         )
 
         out = pd.read_parquet(
@@ -691,7 +691,7 @@ class TestAvgDiffsAlignment:
         max_bound = pd.DataFrame({
             "ProjectIdBSV":            pd.array([1], dtype="Int64"),
             "HuisIdBSV":               pd.array([1], dtype="Int64"),
-            f"{diff_col}_huis_max":    pd.array([1.0], dtype="Float64"),
+            f"{diff_col}_household_max":    pd.array([1.0], dtype="Float64"),
             f"{diff_col}_upper_bound": pd.array([2.0], dtype="Float64"),
         })
         result_df, _, _ = impute_and_normalize(df, [cum_col], "ProjectIdBSV", max_bound)

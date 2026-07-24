@@ -42,14 +42,14 @@ def _hh_df(hid: int, n: int = 6) -> pd.DataFrame:
     })
 
 
-def _write_flat(root: Path, huis_ids):
+def _write_flat(root: Path, household_ids):
     root.mkdir(parents=True, exist_ok=True)
-    for h in huis_ids:
+    for h in household_ids:
         _hh_df(h).to_parquet(root / f"household_{h}_table.parquet")
 
 
-def _write_sharded(root: Path, huis_ids):
-    for h in huis_ids:
+def _write_sharded(root: Path, household_ids):
+    for h in household_ids:
         d = root / "sharded" / f"HuisIdBSV={h}" / f"HuisBatchIdBSV={h}"
         d.mkdir(parents=True, exist_ok=True)
         _hh_df(h).to_parquet(d / "part.parquet")

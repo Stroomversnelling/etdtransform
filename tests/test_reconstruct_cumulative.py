@@ -40,16 +40,16 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 # Fixture
 # ---------------------------------------------------------------------------
 
-def _make_df(huis_ids: list, seed: int = 42) -> pd.DataFrame:
+def _make_df(household_ids: list, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2023-01-01", periods=ROWS, freq="5min").astype("datetime64[us]")
     rows = []
-    for huis_id in huis_ids:
+    for household_id in household_ids:
         diffs = rng.uniform(0.1, 5.0, (len(COLS), ROWS))
         cumulatives = [np.cumsum(d) + 100.0 for d in diffs]
         for i, dt in enumerate(dates):
             row = {
-                "HuisIdBSV": huis_id,
+                "HuisIdBSV": household_id,
                 "ProjectIdBSV": 1,
                 "ReadingDate": dt,
             }
@@ -109,7 +109,7 @@ def test_pandas_original_column_preserved(base_df):
 def test_pandas_cumsum_is_per_household(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for huis_id, grp in out.groupby("HuisIdBSV"):
+        for household_id, grp in out.groupby("HuisIdBSV"):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 

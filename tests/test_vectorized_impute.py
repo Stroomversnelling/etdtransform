@@ -104,7 +104,7 @@ def gap_stats_df():
     n_total = n_proj * n_hh * n_rows
 
     proj = np.repeat(np.arange(1, n_proj + 1), n_hh * n_rows)
-    huis = np.tile(np.repeat(np.arange(1, n_hh + 1), n_rows), n_proj) + (proj - 1) * 100
+    household = np.tile(np.repeat(np.arange(1, n_hh + 1), n_rows), n_proj) + (proj - 1) * 100
 
     diff_raw = rng.exponential(0.1, n_total)
     cum_vals = np.cumsum(diff_raw)
@@ -123,7 +123,7 @@ def gap_stats_df():
 
     return pd.DataFrame({
         "ProjectIdBSV": pd.array(proj, dtype="Int64"),
-        "HuisIdBSV": pd.array(huis, dtype="Int64"),
+        "HuisIdBSV": pd.array(household, dtype="Int64"),
         "Diff": pd.array(diff_arr, dtype="Float64"),
         "Cum": pd.array(cum_vals, dtype="Float64"),
         "gap_length": pd.array(gap_length_arr, dtype="Float64"),

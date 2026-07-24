@@ -22,6 +22,95 @@ from etdtransform.knmi import (
 )
 
 
+def _household_table(name: str, household_ids=None) -> ibis.Expr:
+    """Read the household artifact called ``name`` and join it with the index.
+
+    ``name`` is the artifact name without the ``household_`` prefix: a
+    resampled interval or a pipeline stage. Internal helper so the read+join
+    exists once; callers use get_household_table / get_household_tables.
+    """
+    from etdmap.storage import resolve_source_path
+
+    source = resolve_source_path(
+        etdtransform.options.aggregate_folder_path, f"household_{name}"
+    )
+    tbl = source_table(source, household_ids=household_ids)
+    if household_ids is not None:
+        # Applied for BOTH layouts so the result does not depend on how the
+        # data happens to be stored: a single-file source has no directories
+        # to select from.
+        tbl = tbl.filter(tbl["HuisIdBSV"].isin(sorted({int(h) for h in household_ids})))
+    return join_index_table(tbl)
+
+
+def households_in_projects(projects) -> list:
+    """
+    HuisIdBSV values belonging to the given ProjectIdBSV values.
+
+    Projects are a column inside the data, not a storage partition, so a
+    project filter cannot select files on its own. Resolving it to household
+    ids through the registry lets the reader open only the shards concerned.
+    """
+    from etdmap.index_helpers import read_index
+
+    wanted = {int(p) for p in projects}
+    index_df, _ = read_index(etdtransform.options.mapped_folder_path)
+    match = index_df.loc[index_df["ProjectIdBSV"].isin(wanted), "HuisIdBSV"]
+    return sorted(int(h) for h in match.dropna().unique())
+
+
+def get_household_table(
+    interval: str,
+    include_weather: bool = True,
+    household_ids=None,
+    projects=None,
+) -> ibis.Expr:
+    """
+    Read the household data for one interval, joined with the index.
+
+    Callers name the data they want, never a file path.
+
+    Restricting to households or projects is worth doing here rather than
+    filtering the returned table: the data is stored one directory per
+    household, so naming them up front lets the reader skip the other
+    directories entirely instead of opening every one to find out.
+
+    Parameters
+    ----------
+    interval : str
+        The resampled interval to read, e.g. ``"60min"`` or ``"24h"``. The
+        set of intervals the pipeline produces is declared in the metadata,
+        not fixed by this function.
+    include_weather : bool, optional
+        Join weather data as well (default True, matching
+        :func:`get_household_tables`). When loading several tables at once,
+        prefer that function: it reads the weather tables once and reuses
+        them instead of per table.
+    household_ids : iterable of int, optional
+        Restrict to these HuisIdBSV values. None reads every household.
+    projects : iterable of int, optional
+        Restrict to these ProjectIdBSV values, resolved to their households
+        through the registry. Combines with ``household_ids`` as an
+        intersection.
+
+    Returns
+    -------
+    ibis.Expr
+        Lazy table; the caller adds further filters and materialises when
+        needed.
+    """
+    if projects is not None:
+        in_projects = set(households_in_projects(projects))
+        household_ids = (
+            sorted(in_projects) if household_ids is None
+            else sorted(in_projects & {int(h) for h in household_ids})
+        )
+    tbl = _household_table(interval, household_ids=household_ids)
+    if include_weather:
+        tbl = join_weather_data(tbl)
+    return tbl
+
+
 def get_household_tables(include_weather: bool = True, include_preimputed_data: bool = True, include_calculated_data: bool = True) -> dict[str, ibis.Expr]:
     """
     Reads household data tables for different intervals and joins them with an index table.
@@ -48,42 +137,21 @@ def get_household_tables(include_weather: bool = True, include_preimputed_data: 
         household_tbls["weather"] = get_weather_data_table()
         weather_station_table = get_weather_station_table()
 
-    # Sources are format-detected: a stage stored as a shard directory or as
-    # a single parquet file loads through the same call.
-    from etdmap.storage import resolve_source_path as _resolve
-
     if include_preimputed_data:
-        household_source = _resolve(
-            etdtransform.options.aggregate_folder_path, "household_default"
+        # weather is joined once for all tables below, not per table
+        household_tbls["default"] = get_household_table(
+            "default", include_weather=False
         )
-        household_table = source_table(household_source)
-        if "HuisIdBSV" not in household_table.columns:
-            household_table = household_table.rename(HuisIdBSV="HuisCode")
-        hh_joined = join_index_table(household_table)
-        household_tbls["default"] = hh_joined
 
     if include_calculated_data:
-        household_source = _resolve(
-            etdtransform.options.aggregate_folder_path, "household_calculated"
+        household_tbls["calculated"] = get_household_table(
+            "calculated", include_weather=False
         )
-        household_table = source_table(household_source)
-        if "HuisIdBSV" not in household_table.columns:
-            household_table = household_table.rename(HuisIdBSV="HuisCode")
-        hh_joined = join_index_table(household_table)
-        household_tbls["calculated"] = hh_joined
 
     for interval in intervals:
-        household_source = _resolve(
-            etdtransform.options.aggregate_folder_path, f"household_{interval}"
+        household_tbls[interval] = get_household_table(
+            interval, include_weather=False
         )
-        household_table = source_table(household_source)
-
-        if "HuisIdBSV" not in household_table.columns:
-            household_table = household_table.rename(HuisIdBSV="HuisCode")
-
-        hh_joined = join_index_table(household_table)
-
-        household_tbls[interval] = hh_joined
 
     if include_weather:
         for key in household_tbls.keys():
@@ -112,7 +180,7 @@ def join_index_table(
     index_table : Optional[ibis.Expr], optional
         The index table. If None, reads from default parquet file (default is None).
     index_join_columns : List[str], optional
-        Columns to use for the join (default is ["HuisCode", "ProjectIdBSV"]).
+        Columns to use for the join (default is ["HuisIdBSV", "ProjectIdBSV"]).
 
     Returns
     -------
@@ -123,10 +191,6 @@ def join_index_table(
         index_table = ibis.read_parquet(
             os.path.join(etdtransform.options.mapped_folder_path, "index.parquet")
         )
-
-    # conversion for old (pre-package version) files:
-    if "HuisIdBSV" not in index_table.columns:
-        index_table = index_table.rename(HuisIdBSV="HuisCode")
 
     return tbl.left_join(index_table, index_join_columns)
 
@@ -566,17 +630,26 @@ from etdmap.storage import (  # noqa: F401  (re-exports)
 )
 
 
-def source_table(path) -> "ibis.Expr":
+def source_table(path, household_ids=None) -> "ibis.Expr":
     """
     Lazy ibis/DuckDB table over ANY stage source: a single parquet file or a
-    hive shard directory (union_by_name across per-supplier schemas; hive
-    partition ids as columns). The one engine-bound wrapper on top of
-    etdmap.storage's format detection.
+    hive shard directory (hive partition ids become columns). The one
+    engine-bound wrapper on top of etdmap.storage's format detection.
+
+    ``household_ids`` restricts a sharded source to those households' shard
+    directories, so the reader never opens the rest.
     """
+    from etdmap.storage import source_read_targets
+
     p = str(path)
     if source_is_sharded(p):
+        targets = source_read_targets(p, household_ids=household_ids)
+        targets = (
+            targets.replace("\\", "/") if isinstance(targets, str)
+            else [t.replace("\\", "/") for t in targets]
+        )
         return ibis.read_parquet(
-            shard_glob(p).replace("\\", "/"),
+            targets,
             hive_partitioning=True,
             union_by_name=True,
         )
@@ -610,20 +683,39 @@ def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
 
 def included_household_ids(mapped_folder_path=None) -> list:
     """
-    HuisIdBSV values with Meenemen == True, from the batch registry.
+    HuisIdBSV values whose household batch has Meenemen == True, from the
+    registry index.
 
-    This is the sharded path's replacement for the stage-2 Meenemen filter:
-    inclusion is resolved at READ time from batch_index (the reviewed
-    household-batch registry),
-    instead of being baked into a materialised default file. Loading goes
-    through etdmap's guarded reader (1:1 correspondence + required cadence).
+    Meenemen is defined per household within each batch (one registry row
+    per HuisBatchIdBSV). Collapsing the decision to household ids is valid
+    only while no household appears in more than one batch; this function
+    raises HuisBatchOverlapError otherwise.
+
+    Inclusion is resolved at read time from the registry instead of being
+    baked into a materialised default file.
     """
-    from etdmap.index_helpers import read_batch_index
+    from etdmap.index_helpers import HuisBatchOverlapError, read_index
 
     if mapped_folder_path is None:
         mapped_folder_path = etdtransform.options.mapped_folder_path
-    batch_index_df, _ = read_batch_index(mapped_folder_path)
-    included = batch_index_df.loc[
-        batch_index_df["Meenemen"] == True, "HuisIdBSV"  # noqa: E712
-    ]
-    return sorted(int(h) for h in included.dropna().unique())
+    index_path = os.path.join(str(mapped_folder_path), "index.parquet")
+    if not os.path.exists(index_path):
+        raise FileNotFoundError(
+            f"No registry index.parquet at {index_path}; cannot resolve the "
+            f"included households. Map the data first (the registry is written "
+            f"by save_index_to_parquet)."
+        )
+    index_df, _ = read_index(mapped_folder_path)
+    included = index_df.loc[
+        index_df["Meenemen"] == True, "HuisIdBSV"  # noqa: E712
+    ].dropna()
+    dup = included.duplicated()
+    if bool(dup.any()):
+        multi = sorted(int(h) for h in included[dup].unique())
+        raise HuisBatchOverlapError(
+            f"HuisIdBSV {multi} have more than one included batch in the "
+            f"registry; collapsing Meenemen to household ids is not valid. "
+            f"A household in more than one batch is valid in the data model "
+            f"but not yet supported."
+        )
+    return sorted(int(h) for h in included.unique())

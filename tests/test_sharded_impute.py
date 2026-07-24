@@ -10,9 +10,8 @@ sharded diffs function feeds the SAME prepare_diffs_for_impute_ibis; the
 sharded impute function calls the SAME _impute_chunk_core; summaries come from
 a shared finalizer extracted from the legacy shell.
 
-Batch-safety guards (computational, independent of the registry coexistence
-guard, which deliberately relaxes post-switch): the averaging/imputation chain
-must refuse
+Batch-safety guards (computational, at the compute entry points): the
+averaging/imputation chain must refuse
   (a) a household spanning MULTIPLE batches -- concatenating batches would let
       the large-gap project-average method impute across the BETWEEN-batch gap
       (real non-delivery; the cross-batch continuity invariant), and
@@ -34,18 +33,26 @@ from etdtransform.impute import prepare_diffs_sharded
 from etdtransform.load_data import included_household_ids
 
 
-def _write_batch_index(folder: Path, rows):
-    """rows: list of (HuisIdBSV, HuisBatchIdBSV, ProjectIdBSV, Meenemen)."""
+def _write_registry_index(folder: Path, rows):
+    """rows: list of (HuisIdBSV, HuisBatchIdBSV, ProjectIdBSV, Meenemen).
+
+    Writes the single registry file (index.parquet with the household-batch
+    columns) as save_index_to_parquet produces it."""
+    n = len(rows)
     df = pd.DataFrame({
+        "HuisIdLeverancier": pd.array([f"L{r[0]}" for r in rows], dtype="string"),
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([r[1] for r in rows], dtype="Int64"),
-        "BatchIdBSV": pd.array([1] * len(rows), dtype="Int64"),
-        "ProjectIdBSV": pd.array([r[2] for r in rows], dtype="Int64"),
         "Meenemen": pd.array([r[3] for r in rows], dtype="boolean"),
-        "Gegevensfrequentie": pd.array(["5-minute"] * len(rows), dtype="string"),
+        "ProjectIdLeverancier": pd.array(["P1"] * n, dtype="string"),
+        "ProjectIdBSV": pd.array([r[2] for r in rows], dtype="Int64"),
+        "Notities": pd.array([""] * n, dtype="string"),
+        "Dataleverancier": pd.array(["test"] * n, dtype="string"),
+        "HuisBatchIdBSV": pd.array([r[1] for r in rows], dtype="Int64"),
+        "BatchIdBSV": pd.array([1] * n, dtype="Int64"),
+        "Gegevensfrequentie": pd.array(["5min"] * n, dtype="string"),
     })
     folder.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(folder / "batch_index.parquet")
+    df.to_parquet(folder / "index.parquet")
 
 
 class TestExplicitOutputFolderRequired:
@@ -77,18 +84,23 @@ class TestExplicitOutputFolderRequired:
 
 class TestIncludedHouseholdIds:
     def test_meenemen_filter(self, tmp_path):
-        _write_batch_index(tmp_path, [(1, 1, 1, True), (2, 2, 1, False), (3, 3, 2, True)])
+        _write_registry_index(tmp_path, [(1, 1, 1, True), (2, 2, 1, False), (3, 3, 2, True)])
         assert included_household_ids(mapped_folder_path=tmp_path) == [1, 3]
 
-    def test_missing_batch_index_raises(self, tmp_path):
+    def test_missing_registry_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
+            included_household_ids(mapped_folder_path=tmp_path)
+
+    def test_household_with_two_included_batches_raises(self, tmp_path):
+        _write_registry_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
+        with pytest.raises(HuisBatchOverlapError):
             included_household_ids(mapped_folder_path=tmp_path)
 
 
 @pytest.fixture(scope="module")
 def sharded_fixture_mapped(tmp_path_factory, _meenemen_updated):
     """Sharded mapped copy of the CURRENT flat test fixture (10 HH), with the
-    fixture's batch_index (Meenemen-populated -- depends on _meenemen_updated,
+    fixture's registry index (Meenemen-populated -- depends on _meenemen_updated,
     which refreshes the registry). Built fresh so it cannot drift."""
     src = Path(etdtransform.options.mapped_folder_path)
     dst = tmp_path_factory.mktemp("sharded_mapped")
@@ -100,7 +112,7 @@ def sharded_fixture_mapped(tmp_path_factory, _meenemen_updated):
         shutil.copyfile(f, d / "part.parquet")
         n += 1
     assert n == 10, f"expected the 10-HH fixture, found {n}"
-    shutil.copyfile(src / "batch_index.parquet", dst / "batch_index.parquet")
+    shutil.copyfile(src / "index.parquet", dst / "index.parquet")
     return dst
 
 
@@ -222,36 +234,36 @@ class TestBatchSafetyGuards:
     def test_multi_batch_household_raises_in_impute(self, tmp_path, ibis_pipeline, _cum_cols):
         # household 1 delivered in two batches (disjoint periods): imputing the
         # concatenated series would fill the BETWEEN-batch gap -> refuse.
-        _write_batch_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
+        _write_registry_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2025-01-01")
         agg = self._agg_with_artifacts(tmp_path, ibis_pipeline)
         with pytest.raises(HuisBatchOverlapError):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,
-                cum_cols=_cum_cols, huis_ids=[1],
+                cum_cols=_cum_cols, household_ids=[1],
             )
 
     def test_duplicate_timestamps_raise_in_impute(self, tmp_path, ibis_pipeline, _cum_cols):
         # overlapping batch periods: duplicate (HuisIdBSV, ReadingDate).
-        _write_batch_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
+        _write_registry_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2024-01-01")  # same period redelivered
         agg = self._agg_with_artifacts(tmp_path, ibis_pipeline)
         with pytest.raises((HuisBatchOverlapError, ValueError)):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,
-                cum_cols=_cum_cols, huis_ids=[1],
+                cum_cols=_cum_cols, household_ids=[1],
             )
 
     def test_multi_batch_household_raises_in_diffs(self, tmp_path, _cum_cols):
         # project AVERAGES must also refuse: a household in two batches feeds
         # the estimation inputs the imputer relies on.
-        _write_batch_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
+        _write_registry_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2024-01-01")
         with pytest.raises((HuisBatchOverlapError, ValueError)):
             prepare_diffs_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=tmp_path / "agg",
-                cumulative_columns=_cum_cols, huis_ids=[1],
+                cumulative_columns=_cum_cols, household_ids=[1],
             )

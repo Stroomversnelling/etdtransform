@@ -1,16 +1,13 @@
 """
-TDD: legacy stage-2 aggregation reads through the shared read layer.
+Stage-2 aggregation reads through the shared format-detecting read layer.
 
-Design rule: a legacy function's computation and WRITE behaviour stay
-unchanged, but its READS of mapped household data go through the shared
-format-detecting read layer -- no function builds mapped file paths inline.
-This keeps the whole legacy pipeline runnable from a sharded-only mapped
-store, which is what makes a like-for-like comparison of the two pipelines
-possible on real data.
+The single-file aggregation's computation and write behaviour are unchanged;
+its reads of mapped household data go through the shared read layer, so it
+runs from either storage layout.
 
-Equivalence gate for the migration of aggregate_hh_data_duckdb: the same
-fixture households read from a FLAT-only folder and from a SHARDED-only
-folder must produce an identical household_default.parquet.
+Equivalence contract for aggregate_hh_data_duckdb: the same fixture
+households read from a FLAT-only folder and from a SHARDED-only folder must
+produce an identical household_default.parquet.
 
 Batch safety (guards live at compute entry points): the stage-2 aggregation
 assumes one file per household; a household spanning more than one HuisBatch
@@ -50,9 +47,23 @@ def _copy_flat(dst: Path) -> None:
 
 
 def _copy_sharded(dst: Path) -> None:
+    """Build the sharded layout FROM the flat fixture files.
+
+    Derived rather than copied from a checked-in sharded directory, so the two
+    layouts hold the same data by construction. A stored copy silently goes
+    stale whenever mapping changes which columns it writes, which turns this
+    equivalence test into a comparison of two different datasets.
+    """
     dst.mkdir(parents=True)
     _copy_index_reviewed(dst)
-    shutil.copytree(TESTDATA_MAPPED / "sharded", dst / "sharded")
+    for f in sorted(TESTDATA_MAPPED.glob("household_*_table.parquet")):
+        household_id = int(f.stem.split("_")[1])
+        shard_dir = (
+            dst / "sharded" / f"HuisIdBSV={household_id}"
+            / f"HuisBatchIdBSV={household_id}"
+        )
+        shard_dir.mkdir(parents=True)
+        shutil.copy2(f, shard_dir / "part.parquet")
 
 
 def _run_aggregate(mapped: Path, out: Path) -> pd.DataFrame:

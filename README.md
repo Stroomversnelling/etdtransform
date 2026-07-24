@@ -240,7 +240,7 @@ _While most users will not need to apply these transformations as the datasets w
 
 ## Combining individual building unit data
 
-This step will create a single dataset and remove households marked in the household metadata to not be used (‘Meenemen’). Households with poor data, including missing variables or large amounts of missing data or other data anomolies that cannot be automatically cleaned are marked 0 so they are not included. All other households are marked 1 to include in our transformations.
+This step will create a single dataset and remove household batches marked in the metadata to not be used (`Meenemen`). Note that `Meenemen` is recorded per delivered batch of household data, not per household. Batches with poor data, including missing variables or large amounts of missing data or other data anomalies that cannot be automatically cleaned, are marked 0 so they are not included. All others are marked 1 to include in our transformations.
 
 For nearly 300 househoulds, it requires over 25GB of RAM to run efficiently. This function will save `household_default.parquet`.
 

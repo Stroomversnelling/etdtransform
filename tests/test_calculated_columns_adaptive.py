@@ -50,12 +50,12 @@ def _sparse_col(n=100, frac=0.5, value=1.0):
     return pd.array(data, dtype="Float64")
 
 
-def _make_df(cols: dict, n=100, huis_id=1) -> pd.DataFrame:
+def _make_df(cols: dict, n=100, household_id=1) -> pd.DataFrame:
     """
     Build a DataFrame with HuisIdBSV and the given columns.
     Values in cols must already be array-like (use _full_col / _sparse_col).
     """
-    data = {"HuisIdBSV": pd.array([huis_id] * n, dtype="Int64")}
+    data = {"HuisIdBSV": pd.array([household_id] * n, dtype="Int64")}
     data.update(cols)
     return pd.DataFrame(data)
 
@@ -154,8 +154,8 @@ class TestAdaptiveDerivation:
         """Two households with identical available columns share one execution plan."""
         catalog = _make_catalog(("C", "A + B", ["A", "B"]))
         df = pd.concat([
-            _make_df({"A": _full_col(value=1.0), "B": _full_col(value=2.0)}, huis_id=1),
-            _make_df({"A": _full_col(value=3.0), "B": _full_col(value=4.0)}, huis_id=2),
+            _make_df({"A": _full_col(value=1.0), "B": _full_col(value=2.0)}, household_id=1),
+            _make_df({"A": _full_col(value=3.0), "B": _full_col(value=4.0)}, household_id=2),
         ], ignore_index=True)
         result = add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         assert "C" in result.columns
@@ -290,10 +290,10 @@ _DERIVED_COLS = [
 ]
 
 
-def _standard_raw_df(n=50, huis_id=1) -> pd.DataFrame:
+def _standard_raw_df(n=50, household_id=1) -> pd.DataFrame:
     """A DataFrame with all raw Diff cols set to 1.0 (Float64) for one household."""
     cols = {c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS}
-    return _make_df(cols, n=n, huis_id=huis_id)
+    return _make_df(cols, n=n, household_id=household_id)
 
 
 @pytest.fixture(scope="module")

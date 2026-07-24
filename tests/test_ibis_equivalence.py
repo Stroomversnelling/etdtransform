@@ -26,7 +26,7 @@ _P2_OUTLIER = 299
 DIFF_COLS = ["ElektriciteitNetgebruikLaagDiff", "Zon-opwekTotaalDiff"]
 
 # Rows whose measurement values are set to pd.NA to verify null handling.
-# We use (project_id, huis_id, timestamp_index) tuples to identify them.
+# We use (project_id, household_id, timestamp_index) tuples to identify them.
 _NULL_SLOTS = {(1, 105, 3), (1, 110, 7), (2, 207, 0), (2, 215, 12)}
 
 
@@ -40,12 +40,12 @@ def diff_fixture_df() -> pd.DataFrame:
         (1, _P1_NORMAL, _P1_OUTLIER),
         (2, _P2_NORMAL, _P2_OUTLIER),
     ]:
-        for huis_id in normal_ids:
+        for household_id in normal_ids:
             for t_idx, dt in enumerate(dates):
-                null_this = (project_id, huis_id, t_idx) in _NULL_SLOTS
+                null_this = (project_id, household_id, t_idx) in _NULL_SLOTS
                 rows.append({
                     "ProjectIdBSV": project_id,
-                    "HuisIdBSV": huis_id,
+                    "HuisIdBSV": household_id,
                     "ReadingDate": dt,
                     "ElektriciteitNetgebruikLaagDiff": pd.NA if null_this else float(rng.uniform(1.0, 10.0)),
                     "Zon-opwekTotaalDiff": pd.NA if null_this else float(rng.uniform(0.5, 5.0)),
@@ -131,15 +131,15 @@ def test_outlier_households_excluded(diff_fixture_df):
         outlier_rows = bounds[bounds["HuisIdBSV"].isin(outlier_ids)]
         assert not outlier_rows.empty, f"Outlier rows missing for {col}"
         assert (
-            outlier_rows[f"{col}_huis_max"] > outlier_rows[f"{col}_upper_bound"]
+            outlier_rows[f"{col}_household_max"] > outlier_rows[f"{col}_upper_bound"]
         ).all(), f"Outlier not above upper bound for {col}"
 
 
 def test_nulls_excluded_from_mean(diff_fixture_df):
     """Null Diff values must not affect the mean (both paths skip them)."""
     # Build a minimal frame: one project, two households, three timestamps.
-    # huis 1: readings [2.0, pd.NA, 4.0]  → mean = 3.0
-    # huis 2: readings [6.0, 6.0,  6.0]  → mean = 6.0
+    # household 1: readings [2.0, pd.NA, 4.0]  → mean = 3.0
+    # household 2: readings [6.0, 6.0,  6.0]  → mean = 6.0
     # project mean over both households = (3.0 + 6.0) / 2 = 4.5
     # (pandas and SQL both skip NULLs in mean, so average is over non-null pairs)
     dates = pd.date_range("2024-01-01", periods=3, freq="5min")
