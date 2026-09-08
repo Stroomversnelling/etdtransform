@@ -29,8 +29,8 @@ Computes per-project average `{col}Diff` values used as imputation priors.
 
 | Variant | Function | Input | Output |
 |---------|----------|-------|--------|
-| pandas | `prepare_diffs_for_impute(df, ...)` | pandas DataFrame | `avg_diffs.parquet`, `household_diff_max_bounds.parquet` |
-| ibis | `prepare_diffs_for_impute_ibis(tbl, ...)` | ibis Table | same files |
+| pandas | `prepare_diff_averages_for_impute(df, ...)` | pandas DataFrame | `avg_diffs.parquet`, `household_diff_max_bounds.parquet` |
+| ibis | `prepare_diff_averages_for_impute_ibis(tbl, ...)` | ibis Table | same files |
 
 Notes:
 - Both call `calculate_average_diff` / `calculate_average_diff_ibis`
@@ -113,7 +113,7 @@ storage layouts (see "Storage layouts and format detection" in the README):
   aggregation, diff averages, imputation, calculated columns, resampling,
   project aggregation and the wide-stage statistics.
 - **Writing** sharded output is an explicit choice. The imputation stage has
-  a sharded version (`prepare_diffs_sharded` +
+  a sharded version (`prepare_diff_averages_sharded` +
   `impute_mapped_households_sharded`, sharing the exact same computation
   core as the single-file shell); calculated columns and resampling take
   `partition_output=True`. Project-level outputs stay single files (they

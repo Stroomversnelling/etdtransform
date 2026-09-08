@@ -45,8 +45,8 @@ def _household_frame() -> pd.DataFrame:
 
 
 def _index_frame() -> pd.DataFrame:
-    """A well-formed registry: read_index requires the full metadata column
-    set, so a three-column stub is not enough."""
+    """A well-formed index: read_index requires the full metadata column
+    set."""
     n = len(_HOUSEHOLDS)
     return pd.DataFrame({
         "HuisIdLeverancier": pd.array([f"L{h}" for h in _HOUSEHOLDS], dtype="string"),
@@ -167,7 +167,7 @@ class TestHouseholdAndProjectFilters:
 
     def test_projects_resolve_to_their_households(self, aggregate_folder):
         """Projects are a column, not a partition, so they are resolved to
-        household ids through the registry before reading."""
+        household ids through the index before reading."""
         df = get_household_table("60min", include_weather=False, projects=[1]).execute()
         assert set(df["HuisIdBSV"]) == set(_HOUSEHOLDS)
 

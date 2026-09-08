@@ -80,7 +80,7 @@ def _sort(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Tests — pandas vectorised
+# Tests -- pandas vectorised
 # ---------------------------------------------------------------------------
 
 def test_pandas_matches_reference_single_household():
@@ -126,7 +126,7 @@ def test_pandas_check_column_is_diff_of_residual(base_df):
 
 
 def test_pandas_single_row_per_household():
-    """Edge case: one row per household — check should be NaN."""
+    """Edge case: one row per household -- check should be NaN."""
     df = _make_df([10, 11]).groupby("HuisIdBSV").head(1).reset_index(drop=True)
     out = reconstruct_cumulative_columns(df.copy(), COLS)
     for col in COLS:
@@ -134,7 +134,7 @@ def test_pandas_single_row_per_household():
 
 
 # ---------------------------------------------------------------------------
-# Tests — Ibis variant matches pandas
+# Tests -- Ibis variant matches pandas
 # ---------------------------------------------------------------------------
 
 def test_ibis_matches_pandas_multiple_households(base_df):

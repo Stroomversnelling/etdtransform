@@ -30,7 +30,7 @@ from etdtransform.aggregate import (
     impute_hh_data_5min_chunked,
     read_hh_data,
 )
-from etdtransform.impute import prepare_diffs_for_impute, prepare_diffs_for_impute_ibis
+from etdtransform.impute import prepare_diff_averages_for_impute, prepare_diff_averages_for_impute_ibis
 
 
 def pytest_configure(config):
@@ -109,7 +109,7 @@ def _require_etdmap_mapped_fixtures():
     requests it is collected -- e.g. test_index_helpers.py tests.
 
     Without that population, etdtransform tests fail in non-obvious ways:
-    `update_meenemen()` errors with "Household mismatch", or pipeline
+    `update_include()` errors with "Household mismatch", or pipeline
     functions silently process empty input. We fail loudly here with a
     clear instruction instead.
 
@@ -172,10 +172,10 @@ def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
     try:
         aggregate_hh_data_5min()
         df = read_hh_data(interval="default")
-        prepare_diffs_for_impute(
+        prepare_diff_averages_for_impute(
             df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
         )
-        # sorted=False: prepare_diffs_for_impute sorts a local copy internally and does
+        # sorted=False: prepare_diff_averages_for_impute sorts a local copy internally and does
         # not return it, so df is still unsorted here. Always sort before imputing.
         df_imputed = impute_hh_data_5min(
             df, cum_cols=cum_cols, sorted=False, diffs_calculated=True
@@ -192,7 +192,7 @@ def _run_ibis_pipeline(out_dir: Path, cum_cols: list) -> None:
     try:
         aggregate_hh_data_5min_ibis()
         tbl = ibis.read_parquet(str(out_dir / "household_default.parquet"))
-        prepare_diffs_for_impute_ibis(
+        prepare_diff_averages_for_impute_ibis(
             tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols
         )
         impute_hh_data_5min_chunked(
@@ -214,7 +214,7 @@ def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
     try:
         aggregate_hh_data_duckdb()
         df = read_hh_data(interval="default")
-        prepare_diffs_for_impute(
+        prepare_diff_averages_for_impute(
             df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
         )
         df_imputed = impute_hh_data_5min(
@@ -226,18 +226,18 @@ def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
 
 
 @pytest.fixture(scope="session")
-def _meenemen_updated():
+def _include_updated():
     """Populate Meenemen from bsv_metadata_file before any pipeline runs.
 
     aggregate_hh_data_5min (and ibis/duckdb variants) filter on Meenemen == 1.
     Without this call the index has no Meenemen == True rows and every pipeline
     exits early with no output.
 
-    update_meenemen saves through save_index_to_parquet, which writes the
-    single registry file (index.parquet including the household-batch
+    update_include saves through save_index_to_parquet, which writes the
+    index.parquet (including the household-batch
     columns). That requires the fixture HuisBatch sync CSV that etdmap's
     conftest writes next to the fixture BSV metadata -- checked here so a
-    missing prerequisite fails with a pointer instead of a skipped registry.
+    missing prerequisite fails with a pointer instead of a skipped index.
     """
     _sync_csv = Path(str(etdmap.options.bsv_metadata_file)).parent / "household_batch_sync.csv"
     etdmap.options.household_batch_csv_path = _sync_csv
@@ -246,7 +246,7 @@ def _meenemen_updated():
             f"Fixture HuisBatch sync CSV not found at {_sync_csv}. Run "
             f"etdmap's test suite first (its conftest writes it)."
         )
-    etdmap.index_helpers.update_meenemen()
+    etdmap.index_helpers.update_include()
 
 
 @pytest.fixture(scope="session")
@@ -255,21 +255,53 @@ def _cum_cols():
 
 
 @pytest.fixture(scope="session")
-def pandas_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
+def pandas_pipeline(tmp_path_factory, _cum_cols, _include_updated):
     out = tmp_path_factory.mktemp("pandas_pipeline")
     _run_pandas_pipeline(out, _cum_cols)
     return out
 
 
 @pytest.fixture(scope="session")
-def ibis_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
+def ibis_pipeline(tmp_path_factory, _cum_cols, _include_updated):
     out = tmp_path_factory.mktemp("ibis_pipeline")
     _run_ibis_pipeline(out, _cum_cols)
     return out
 
 
 @pytest.fixture(scope="session")
-def duckdb_pipeline(tmp_path_factory, _cum_cols, _meenemen_updated):
+def duckdb_pipeline(tmp_path_factory, _cum_cols, _include_updated):
     out = tmp_path_factory.mktemp("duckdb_pipeline")
     _run_duckdb_pipeline(out, _cum_cols)
     return out
+
+
+# ---------------------------------------------------------------------------
+# No skipped tests (ADR-007). A skip hides a missing prerequisite or an
+# unmet condition as "not run", which reads as green when it is not. This
+# hook turns ANY skip -- pytest.skip(), skip/skipif markers, importorskip --
+# into a hard failure at runtime.
+#
+# THE RULE: if a test is there, you may not write skipping in code. Make the
+# prerequisite available (build the fixture/artifact it needs), or let the
+# test fail so the gap is visible. Do not add pytest.skip.
+# ---------------------------------------------------------------------------
+import os as _os
+import pytest as _pytest
+
+
+@_pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    # Enforcement is OPT-IN via ETD_NO_SKIPS=1, for the FINAL/complete run.
+    # A quick run DURING development may skip; the final run sets the env
+    # var so any skip becomes a hard failure that must be resolved.
+    if report.skipped and _os.environ.get("ETD_NO_SKIPS"):
+        reason = report.longrepr
+        report.outcome = "failed"
+        report.longrepr = (
+            "SKIPS ARE NOT ALLOWED in a final run (ETD_NO_SKIPS=1, ADR-007). If a test is there, you may not "
+            "write skipping in code -- provide the prerequisite it needs or let "
+            "it fail, never skip. "
+            f"Attempted skip: {reason!r}"
+        )

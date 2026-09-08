@@ -18,8 +18,8 @@ Aggregation  : aggregate_hh_data_5min (pandas)
                aggregate_hh_data_duckdb (DuckDB union_by_name)
                -> household_default.parquet
 
-Diffs        : prepare_diffs_for_impute (pandas)
-               prepare_diffs_for_impute_ibis (ibis)
+Diffs        : prepare_diff_averages_for_impute (pandas)
+               prepare_diff_averages_for_impute_ibis (ibis)
                -> avg_diffs.parquet, household_diff_max_bounds.parquet
 
 Imputation   : impute_hh_data_5min (pandas)

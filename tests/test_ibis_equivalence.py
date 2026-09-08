@@ -1,6 +1,6 @@
 """
 Tests that Ibis-based functions produce the same outputs as their pandas
-equivalents.  All tests use a synthetic in-memory fixture — ibis.memtable()
+equivalents.  All tests use a synthetic in-memory fixture -- ibis.memtable()
 wraps the fixture DataFrame for the Ibis path.
 
 The fixture intentionally contains null (pd.NA) values in measurement columns
@@ -16,7 +16,7 @@ import ibis
 from etdtransform.impute import calculate_average_diff, calculate_average_diff_ibis
 
 # Two projects: 20 normal + 1 outlier per project.
-# Outlier values are ~15-20× larger than the normal range so the
+# Outlier values are ~15-20x larger than the normal range so the
 # 95th-percentile upper-bound logic clearly excludes them.
 _P1_NORMAL = list(range(101, 121))
 _P1_OUTLIER = 199
@@ -138,8 +138,8 @@ def test_outlier_households_excluded(diff_fixture_df):
 def test_nulls_excluded_from_mean(diff_fixture_df):
     """Null Diff values must not affect the mean (both paths skip them)."""
     # Build a minimal frame: one project, two households, three timestamps.
-    # household 1: readings [2.0, pd.NA, 4.0]  → mean = 3.0
-    # household 2: readings [6.0, 6.0,  6.0]  → mean = 6.0
+    # household 1: readings [2.0, pd.NA, 4.0]  -> mean = 3.0
+    # household 2: readings [6.0, 6.0,  6.0]  -> mean = 6.0
     # project mean over both households = (3.0 + 6.0) / 2 = 4.5
     # (pandas and SQL both skip NULLs in mean, so average is over non-null pairs)
     dates = pd.date_range("2024-01-01", periods=3, freq="5min")
@@ -167,11 +167,11 @@ def test_empty_project_edge_cases():
 
     Three degenerate situations that must not crash and must return consistent
     structures across both paths:
-      A) All diff values are zero (filtered out by the > 1e-8 guard) →
+      A) All diff values are zero (filtered out by the > 1e-8 guard) ->
          upper_bound is null, avg_diff is empty.
-      B) All diff values are pd.NA →
+      B) All diff values are pd.NA ->
          same outcome as (A): no household max qualifies.
-      C) One 'normal' project alongside a zero-only project →
+      C) One 'normal' project alongside a zero-only project ->
          normal project processes correctly; zero project gets null upper_bound.
     """
     dates = pd.date_range("2024-06-01", periods=3, freq="5min")

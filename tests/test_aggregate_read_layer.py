@@ -11,7 +11,7 @@ produce an identical household_default.parquet.
 
 Batch safety (guards live at compute entry points): the stage-2 aggregation
 assumes one file per household; a household spanning more than one HuisBatch
-must raise HuisBatchOverlapError, never silently combine two batches into
+must raise HouseBatchOverlapError, never silently combine two batches into
 the single output file.
 """
 
@@ -23,7 +23,7 @@ import pytest
 
 import etdmap
 import etdtransform
-from etdmap.index_helpers import HuisBatchOverlapError
+from etdmap.index_helpers import HouseBatchOverlapError
 from etdtransform.aggregate import aggregate_hh_data_duckdb
 
 TESTDATA_MAPPED = Path(etdtransform.options.mapped_folder_path)
@@ -113,5 +113,5 @@ class TestStage2ReadLayer:
         dup = shard_dir / "sharded" / "HuisIdBSV=1" / "HuisBatchIdBSV=999"
         shutil.copytree(src, dup)
 
-        with pytest.raises(HuisBatchOverlapError):
+        with pytest.raises(HouseBatchOverlapError):
             _run_aggregate(shard_dir, tmp_path / "out")

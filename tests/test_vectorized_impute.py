@@ -16,7 +16,7 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Re-implementations of the three approaches (self-contained, no etdtransform
-# import needed — we are testing the algorithm, not the module integration)
+# import needed -- we are testing the algorithm, not the module integration)
 # ---------------------------------------------------------------------------
 
 def _gap_stats_apply(df, project_col, cum_col, diff_col, impute_type_col):

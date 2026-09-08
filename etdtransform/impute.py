@@ -141,7 +141,7 @@ def calculate_average_diff_ibis(
 
     Accepts an ibis.Table and performs all aggregations as SQL so the full
     dataset never materialises in Python memory.  Only the small result tables
-    (one row per project × date) are returned as pandas DataFrames.
+    (one row per project x date) are returned as pandas DataFrames.
 
     Returns the same dict structure as calculate_average_diff so that callers
     can substitute either function without downstream changes.
@@ -185,9 +185,9 @@ def calculate_average_diff_ibis(
         logging.info(f"Handling column (Ibis): {col}")
         max_col = f"{col}_household_max"
 
-        # 95th percentile of per-household max (near-zero excluded), doubled → upper bound.
+        # 95th percentile of per-household max (near-zero excluded), doubled -> upper bound.
         # All projects appear in ub_tbl; projects with no qualifying households get NULL so
-        # that the return dict matches the pandas version's safe_quantile(→ pd.NA) behaviour.
+        # that the return dict matches the pandas version's safe_quantile(-> pd.NA) behaviour.
         filtered_max = household_max.filter(household_max[max_col] > 1e-8)
         ub_inner = filtered_max.group_by(project_id_column).aggregate(
             **{f"{col}_upper_bound": filtered_max[max_col].quantile(0.95) * 2}
@@ -252,7 +252,7 @@ def calculate_average_diff_ibis(
                 f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
-        # household_max is a measurement column — promote to Float64 to match the explicit
+        # household_max is a measurement column -- promote to Float64 to match the explicit
         # .astype("Float64") in the pandas path (lines 72-74 of calculate_average_diff).
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
@@ -564,7 +564,7 @@ def get_diff_columns(cumulative_columns: list):
     """
     return [col + "Diff" for col in cumulative_columns]
 
-def prepare_diffs_for_impute(
+def prepare_diff_averages_for_impute(
     df: pd.DataFrame,
     project_id_column: str,
     cumulative_columns: list,
@@ -612,7 +612,7 @@ def prepare_diffs_for_impute(
 
     diff_columns = get_diff_columns(cumulative_columns)
 
-    logging.info("Starting to prepare diffs.")
+    logging.info("Starting to prepare diff averages.")
     avg_diff_dict = calculate_average_diff(df, project_id_column, diff_columns)
     logging.info("Combining average diff columns.")
     diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
@@ -635,17 +635,17 @@ def prepare_diffs_for_impute(
     return diff_columns, diffs, max_bound
 
 
-def prepare_diffs_for_impute_ibis(
+def prepare_diff_averages_for_impute_ibis(
     tbl,
     project_id_column: str,
     cumulative_columns: list,
 ):
     """
-    Ibis variant of prepare_diffs_for_impute.
+    Ibis variant of prepare_diff_averages_for_impute.
 
     Accepts an ibis.Table (e.g. from ibis.read_parquet) instead of a pandas
     DataFrame.  All heavy aggregations run as SQL inside DuckDB; only the small
-    result tables (one row per project or per project×date) are materialised and
+    result tables (one row per project or per project x date) are materialised and
     saved as parquet artefacts.  The input table is never executed in full.
 
     Parameters
@@ -660,11 +660,12 @@ def prepare_diffs_for_impute_ibis(
     Returns
     -------
     tuple
-        (diff_columns, diffs, max_bound) — same structure as prepare_diffs_for_impute.
+        (diff_columns, diffs, max_bound) -- same structure as
+        prepare_diff_averages_for_impute.
     """
     diff_columns = get_diff_columns(cumulative_columns)
 
-    logging.info("Starting to prepare diffs (Ibis).")
+    logging.info("Starting to prepare diff averages (Ibis).")
     avg_diff_dict = calculate_average_diff_ibis(tbl, project_id_column, diff_columns)
 
     logging.info("Combining average diff columns.")
@@ -785,7 +786,7 @@ def process_and_impute(
             dtype_backend="numpy_nullable",
         )
     else:
-        diff_columns, diffs, max_bound = prepare_diffs_for_impute(
+        diff_columns, diffs, max_bound = prepare_diff_averages_for_impute(
             df=df,
             project_id_column=project_id_column,
             cumulative_columns=cumulative_columns,
@@ -925,27 +926,28 @@ def process_and_impute(
 
 def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
     """
-    Computational batch-safety guard for the averaging/imputation chain.
+    Reject imputation input that cannot be imputed correctly.
 
-    Independent of the registry coexistence guard (which deliberately relaxes
-    once index.parquet is retired): even in the post-switch era, this chain
-    must refuse input it cannot impute correctly --
+    Expects one row per (HuisIdBSV, ReadingDate), and at most one
+    HuisBatchIdBSV per HuisIdBSV. Call before averaging or imputing.
 
-    - a household spanning MORE THAN ONE batch: concatenating batches would let
-      the large-gap project-average method impute across the BETWEEN-batch gap,
-      which is real non-delivery (the cross-batch continuity invariant).
-      Batch-aware imputation is native-resolution-phase work; until it exists,
-      stop loudly (HuisBatchOverlapError).
-    - duplicate (HuisIdBSV, ReadingDate) rows: overlapping batch periods
-      double-weight project averages and break the sort/diff math (ValueError).
+    Raises
+    ------
+    HouseBatchOverlapError
+        A household has rows in more than one batch. Imputing the
+        concatenated series would fill the between-batch gap, which is real
+        non-delivery rather than missing data.
+    ValueError
+        Duplicate (HuisIdBSV, ReadingDate) rows. These double-weight the
+        project averages and break the diff and sort order.
     """
-    from etdmap.index_helpers import HuisBatchOverlapError
+    from etdmap.index_helpers import HouseBatchOverlapError
 
     if "HuisBatchIdBSV" in df.columns:
         counts = df.groupby("HuisIdBSV")["HuisBatchIdBSV"].nunique()
         multi = sorted(int(h) for h, n in counts.items() if n > 1)
         if multi:
-            raise HuisBatchOverlapError(
+            raise HouseBatchOverlapError(
                 f"[imputation] Household(s) {multi} span more than one batch. "
                 f"Imputing a concatenated multi-batch series would fill the "
                 f"between-batch gap (real non-delivery). Batch-aware imputation "
@@ -964,7 +966,7 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
 def _assert_batch_safe_ibis(tbl) -> None:
     """Engine-side variant of assert_imputation_input_batch_safe for lazy tables
     (cheap aggregates; the table is never materialised in full)."""
-    from etdmap.index_helpers import HuisBatchOverlapError
+    from etdmap.index_helpers import HouseBatchOverlapError
 
     if "HuisBatchIdBSV" in tbl.columns:
         per_hh = (
@@ -973,8 +975,8 @@ def _assert_batch_safe_ibis(tbl) -> None:
         )
         multi = per_hh.filter(per_hh.n_batches > 1)["HuisIdBSV"].execute()
         if len(multi):
-            raise HuisBatchOverlapError(
-                f"[prepare_diffs] Household(s) {sorted(int(h) for h in multi)} span "
+            raise HouseBatchOverlapError(
+                f"[prepare_diff_averages] Household(s) {sorted(int(h) for h in multi)} span "
                 f"more than one batch; project averages would mix batches. "
                 f"Batch-aware averaging is not implemented yet."
             )
@@ -982,13 +984,13 @@ def _assert_batch_safe_ibis(tbl) -> None:
     n_keys = int(tbl[["HuisIdBSV", "ReadingDate"]].distinct().count().execute())
     if n_rows != n_keys:
         raise ValueError(
-            f"[prepare_diffs] {n_rows - n_keys} duplicate (HuisIdBSV, ReadingDate) "
+            f"[prepare_diff_averages] {n_rows - n_keys} duplicate (HuisIdBSV, ReadingDate) "
             f"row(s) -- overlapping batch periods would double-weight the project "
             f"averages. Resolve the batch overlap first."
         )
 
 
-def prepare_diffs_sharded(
+def prepare_diff_averages_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cumulative_columns: list = None,
@@ -999,10 +1001,10 @@ def prepare_diffs_sharded(
     inputs (avg_diffs.parquet + household_diff_max_bounds.parquet) directly
     from the SHARDED mapped data.
 
-    I/O shell only -- the computation is the SAME prepare_diffs_for_impute_ibis
+    I/O shell only -- the computation is the SAME prepare_diff_averages_for_impute_ibis
     the legacy path uses, fed a lazy table built from mapped_household_table
-    (DuckDB hive-glob, per the measured perf decision) with ProjectIdBSV joined
-    from the registry index and Meenemen inclusion applied at read time.
+    (DuckDB hive-glob, per the measured perf decision) with `ProjectIdBSV` joined
+    from the index and `Meenemen` inclusion applied at read time.
 
     Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
     pipeline's artifact area), keeping legacy artifacts untouched.
@@ -1020,7 +1022,7 @@ def prepare_diffs_sharded(
         mapped_folder_path = etdtransform.options.mapped_folder_path
     if aggregate_folder_path is None:
         raise ValueError(
-            "prepare_diffs_sharded: aggregate_folder_path is required and has "
+            "prepare_diff_averages_sharded: aggregate_folder_path is required and has "
             "no default (the config value points at the promoted production "
             "area)."
         )
@@ -1033,14 +1035,22 @@ def prepare_diffs_sharded(
     index_df, _ = read_index(mapped_folder_path)
     if "HuisBatchIdBSV" not in index_df.columns:
         raise ValueError(
-            "The registry index.parquet has no HuisBatchIdBSV column; "
-            "re-run the registry save to add the household-batch columns."
+            "index.parquet has no HuisBatchIdBSV column; "
+            "re-run the index save to add the household-batch columns."
         )
-    registry = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
+    # Keyed on the household batch, NOT the household: a household's project assignment is
+    # constant WITHIN a batch but may differ BETWEEN batches (project
+    # definitions change over time; the household does not). So
+    # HuisIdBSV -> ProjectIdBSV is not a function over time, while
+    # HuisBatchIdBSV -> ProjectIdBSV is. HuisBatchIdBSV is also the primary key
+    # of index.parquet (one row per household batch), so keying on HuisIdBSV
+    # would additionally keep whichever batch row happened to come last.
+
+    household_batch_projects = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
     project_map = _ibis.memtable(
         pd.DataFrame({
-            "HuisBatchIdBSV": registry["HuisBatchIdBSV"].astype("int64"),
-            "ProjectIdBSV": registry["ProjectIdBSV"].astype("int64"),
+            "HuisBatchIdBSV": household_batch_projects["HuisBatchIdBSV"].astype("int64"),
+            "ProjectIdBSV": household_batch_projects["ProjectIdBSV"].astype("int64"),
         })
     )
 
@@ -1053,12 +1063,12 @@ def prepare_diffs_sharded(
     out_dir = os.path.join(str(aggregate_folder_path), "sharded")
     os.makedirs(out_dir, exist_ok=True)
 
-    # prepare_diffs_for_impute_ibis writes via options.aggregate_folder_path;
+    # prepare_diff_averages_for_impute_ibis writes via options.aggregate_folder_path;
     # scope it to the sharded artifact area for this call.
     previous = etdtransform.options.aggregate_folder_path
     etdtransform.options.aggregate_folder_path = out_dir
     try:
-        return prepare_diffs_for_impute_ibis(
+        return prepare_diff_averages_for_impute_ibis(
             tbl,
             project_id_column="ProjectIdBSV",
             cumulative_columns=cumulative_columns,

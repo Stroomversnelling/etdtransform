@@ -281,7 +281,7 @@ For this step, the data is read from the `household_default.parquet` in the path
 ```python
 import etdtransform
 from etdtransform.aggregate import read_hh_data
-from etdtransform.impute import sort_for_impute, prepare_diffs_for_impute, impute_hh_data_5min
+from etdtransform.impute import sort_for_impute, prepare_diff_averages_for_impute, impute_hh_data_5min
 
 etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
 
@@ -293,7 +293,7 @@ df = read_hh_data(interval = 'default')
 
 We prepare the imputation by first calculating the differences between the consecutive values in cumulative columns to get the change every 5 minutes. These `diff` columns will be added to the dataframe.
 
-The average `diff` per 5 minutes in a project is used to impute values.  The average difference between timesteps for all cumulative variables is saved in a series of files by `prepare_diffs_for_impute()`.
+The average `diff` per 5 minutes in a project is used to impute values.  The average difference between timesteps for all cumulative variables is saved in a series of files by `prepare_diff_averages_for_impute()`.
 
 ```python
 # pre-sort rows to speed up the process
@@ -302,7 +302,7 @@ df = sort_for_impute(df, project_id_column='ProjectIdBSV')
 # Optional: limit the operation to only a few columns of interest - otherwise leave the `cumulative_columns` parameter out
 cum_cols_list = ['Zon-opwekTotaal', 'ElektriciteitsgebruikWarmtepomp']
 
-prepare_diffs_for_impute(df, project_id_column='ProjectIdBSV', cumulative_columns=cum_cols_list, sorted = True)
+prepare_diff_averages_for_impute(df, project_id_column='ProjectIdBSV', cumulative_columns=cum_cols_list, sorted = True)
 ```
 
 Additional files saved to the aggregate folder are:

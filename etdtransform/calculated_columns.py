@@ -240,7 +240,7 @@ def add_calculated_columns_adaptive(
     # Plan cache keyed on (frozenset(available), frozenset(targets)).
     # Households with identical column-availability patterns share a plan.
     # plan_stats tracks per-plan: derived cols, not_derivable cols, and which
-    # (project, household) pairs used it — for structured end-of-run logging.
+    # (project, household) pairs used it -- for structured end-of-run logging.
     _plan_cache: dict = {}
     _plan_stats: dict = {}  # cache_key -> {derived, not_derivable, households}
 
@@ -290,7 +290,7 @@ def add_calculated_columns_adaptive(
 
     result = df
 
-    # Required columns check — data quality error per ADR-003.
+    # Required columns check -- data quality error per ADR-003.
     from etdmap.data_model import required_performance_data_columns
     missing_required = set(required_performance_data_columns) - set(result.columns)
     if missing_required:
@@ -299,7 +299,7 @@ def add_calculated_columns_adaptive(
             f"{sorted(missing_required)}"
         )
 
-    # Rule variable coverage — informational.
+    # Rule variable coverage -- informational.
     from etdmap.catalog import rule_all_variables
     missing_rule_vars = rule_all_variables - set(result.columns)
     if missing_rule_vars:
@@ -315,7 +315,7 @@ def _log_adaptive_summary(plan_stats: dict, has_project_col: bool) -> None:
     Emit a structured per-project (per-provider-schema) derivation summary.
 
     Groups plans by the set of projects whose households use them.  Plans shared
-    across projects (rare — would indicate two providers with the same column set)
+    across projects (rare -- would indicate two providers with the same column set)
     are listed together.  Any household that diverges from its project's majority
     plan is flagged individually.
     """
@@ -369,7 +369,7 @@ def _log_adaptive_summary(plan_stats: dict, has_project_col: bool) -> None:
 
         # Flag outlier households in this project whose outcome differs from the majority.
         # Two plans with the same derived+not_derivable sets but different available sets
-        # produce identical output — no need to warn about those.
+        # produce identical output -- no need to warn about those.
         majority_outcome = (
             plan_stats[majority_key]["derived"],
             plan_stats[majority_key]["not_derivable"],
@@ -380,7 +380,7 @@ def _log_adaptive_summary(plan_stats: dict, has_project_col: bool) -> None:
             ms = plan_stats[minority_key]
             minority_outcome = (ms["derived"], ms["not_derivable"])
             if minority_outcome == majority_outcome:
-                continue  # same result, different available set — not a meaningful outlier
+                continue  # same result, different available set -- not a meaningful outlier
             outliers = [(p, h) for p, h in ms["households"] if p == proj_id]
             if not outliers:
                 continue

@@ -49,7 +49,7 @@ def households_in_projects(projects) -> list:
 
     Projects are a column inside the data, not a storage partition, so a
     project filter cannot select files on its own. Resolving it to household
-    ids through the registry lets the reader open only the shards concerned.
+    ids through the index lets the reader open only the shards concerned.
     """
     from etdmap.index_helpers import read_index
 
@@ -90,7 +90,7 @@ def get_household_table(
         Restrict to these HuisIdBSV values. None reads every household.
     projects : iterable of int, optional
         Restrict to these ProjectIdBSV values, resolved to their households
-        through the registry. Combines with ``household_ids`` as an
+        through the index. Combines with ``household_ids`` as an
         intersection.
 
     Returns
@@ -683,26 +683,26 @@ def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
 
 def included_household_ids(mapped_folder_path=None) -> list:
     """
-    HuisIdBSV values whose household batch has Meenemen == True, from the
-    registry index.
+    HuisIdBSV values whose household batch has `Meenemen` == True, from the
+    index.
 
-    Meenemen is defined per household within each batch (one registry row
+    `Meenemen` is defined per household within each batch (one index row
     per HuisBatchIdBSV). Collapsing the decision to household ids is valid
     only while no household appears in more than one batch; this function
-    raises HuisBatchOverlapError otherwise.
+    raises HouseBatchOverlapError otherwise.
 
-    Inclusion is resolved at read time from the registry instead of being
+    Inclusion is resolved at read time from the index instead of being
     baked into a materialised default file.
     """
-    from etdmap.index_helpers import HuisBatchOverlapError, read_index
+    from etdmap.index_helpers import HouseBatchOverlapError, read_index
 
     if mapped_folder_path is None:
         mapped_folder_path = etdtransform.options.mapped_folder_path
     index_path = os.path.join(str(mapped_folder_path), "index.parquet")
     if not os.path.exists(index_path):
         raise FileNotFoundError(
-            f"No registry index.parquet at {index_path}; cannot resolve the "
-            f"included households. Map the data first (the registry is written "
+            f"No index.parquet at {index_path}; cannot resolve the "
+            f"included households. Map the data first (the index is written "
             f"by save_index_to_parquet)."
         )
     index_df, _ = read_index(mapped_folder_path)
@@ -712,9 +712,9 @@ def included_household_ids(mapped_folder_path=None) -> list:
     dup = included.duplicated()
     if bool(dup.any()):
         multi = sorted(int(h) for h in included[dup].unique())
-        raise HuisBatchOverlapError(
+        raise HouseBatchOverlapError(
             f"HuisIdBSV {multi} have more than one included batch in the "
-            f"registry; collapsing Meenemen to household ids is not valid. "
+            f"index; collapsing `Meenemen` to household ids is not valid. "
             f"A household in more than one batch is valid in the data model "
             f"but not yet supported."
         )

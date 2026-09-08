@@ -29,20 +29,20 @@ from etdtransform.aggregate import (
     resample_hh_data,
 )
 from etdmap.data_model import test_aggregation_columns
-from etdtransform.impute import prepare_diffs_for_impute
+from etdtransform.impute import prepare_diff_averages_for_impute
 
 
 @pytest.fixture(scope="session")
 def index_df():
     # update with the manual steps from bsv metadata
-    return etdmap.index_helpers.update_meenemen()
+    return etdmap.index_helpers.update_include()
 
 @pytest.fixture(scope="session")
 def cum_cols_list():
     # 10 columns
     return etdmap.data_model.cumulative_columns[0:10]
 
-def test_meenemen(index_df):
+def test_include(index_df):
     # test if indeed ProjectBSVId and column Meenemen are present
     assert 'Meenemen' in index_df.columns, 'column "Meenmen" not in index_df'
     # Since this is a manual check, ensure that all values have been given either
@@ -82,7 +82,7 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
 
     logging.info("Preparing diffs.")
     # # "prepare and save diff averages",
-    prepare_diffs_for_impute(
+    prepare_diff_averages_for_impute(
         df,
         project_id_column="ProjectIdBSV",
         cumulative_columns=cum_cols_list,

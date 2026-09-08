@@ -4,7 +4,7 @@ Tests for add_calculated_columns_adaptive() and DatasetAdapter.available_columns
 All fixtures use pandas nullable types (Float64 / Int64 / pd.NA) throughout,
 matching the project convention that missingness is represented by pd.NA, not NaN.
 
-Inline catalog DataFrames are used for unit tests — no real parquet files needed.
+Inline catalog DataFrames are used for unit tests -- no real parquet files needed.
 Tests that require the built catalog.parquet are skipped when it is absent.
 """
 
@@ -86,7 +86,7 @@ class TestAvailableColumns:
     def test_pdna_counted_as_missing(self):
         """pd.NA values must be counted as missing (not as 0 or some other value)."""
         n = 100
-        # 60 present, 40 pd.NA → fraction 0.60 < 0.95
+        # 60 present, 40 pd.NA -> fraction 0.60 < 0.95
         data = [1.0] * 60 + [pd.NA] * 40
         df = _make_df({"A": pd.array(data, dtype="Float64")}, n=n)
         adapter = DatasetAdapter(_make_catalog(), completeness_threshold=0.95)
@@ -94,7 +94,7 @@ class TestAvailableColumns:
 
 
 # ---------------------------------------------------------------------------
-# add_calculated_columns_adaptive — derivation correctness
+# add_calculated_columns_adaptive -- derivation correctness
 # ---------------------------------------------------------------------------
 
 class TestAdaptiveDerivation:
@@ -145,7 +145,7 @@ class TestAdaptiveDerivation:
         })
         result = add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         assert "C" in result.columns
-        # Last row: A=0 (fillna), B=1 → C=1
+        # Last row: A=0 (fillna), B=1 -> C=1
         assert float(result["C"].iloc[-1]) == pytest.approx(1.0), (
             "pd.NA in A should be treated as 0 when fillna=True"
         )
@@ -177,7 +177,7 @@ class TestPrestatiedataBerekendInTargets:
         try:
             catalog_df = load_catalog()
         except FileNotFoundError:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         from etdmap.data_model import model_column_order
         catalog_lhs = set(catalog_df["lhs"].dropna().unique())
@@ -196,7 +196,7 @@ class TestCompletenessReporting:
     def test_not_derivable_logs_error(self, caplog):
         """A column that cannot be derived due to missing inputs logs an error."""
         catalog = _make_catalog(("C", "A + B", ["A", "B"]))
-        # df has A but not B — C cannot be derived
+        # df has A but not B -- C cannot be derived
         df = _make_df({"A": _full_col(value=1.0)})
         with caplog.at_level(logging.ERROR, logger="root"):
             add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
@@ -231,7 +231,7 @@ class TestCompletenessReporting:
 
 
 # ---------------------------------------------------------------------------
-# Execution plan completeness — no model columns silently skipped
+# Execution plan completeness -- no model columns silently skipped
 # ---------------------------------------------------------------------------
 
 class TestNoSilentlySkippedColumns:
@@ -241,7 +241,7 @@ class TestNoSilentlySkippedColumns:
         try:
             catalog_df = load_catalog()
         except FileNotFoundError:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         seed_col = "ElektriciteitsgebruikTotaalNetto"
         expected_derived = "ElektriciteitNetgebruikDiff"
@@ -259,7 +259,7 @@ class TestNoSilentlySkippedColumns:
 
 
 # ---------------------------------------------------------------------------
-# Standard path — adaptive matches old (non-adaptive) approach
+# Standard path -- adaptive matches old (non-adaptive) approach
 # ---------------------------------------------------------------------------
 
 # Raw Diff columns that feed the old add_calculated_columns_imputed_data approach.
@@ -308,7 +308,7 @@ def real_catalog():
 class TestStandardPathMatchesOldApproach:
     def test_derived_columns_present(self, real_catalog):
         if real_catalog is None:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         df = _standard_raw_df()
         result = add_calculated_columns_adaptive(df, real_catalog)
@@ -318,7 +318,7 @@ class TestStandardPathMatchesOldApproach:
     def test_derived_values_match_old_approach(self, real_catalog):
         """Adaptive on full raw data must produce the same numeric values as the old approach."""
         if real_catalog is None:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         df_adaptive = _standard_raw_df()
         result_adaptive = add_calculated_columns_adaptive(df_adaptive, real_catalog)
@@ -326,7 +326,7 @@ class TestStandardPathMatchesOldApproach:
         # Old approach requires Zon-opwekTotaalDiff (it renames internally to ZonopwekBruto).
         # Build an equivalent df using the old column name.
         df_old = _standard_raw_df().rename(columns={"ZonopwekBruto": "Zon-opwekTotaalDiff"})
-        # Drop HuisIdBSV — old approach doesn't need it
+        # Drop HuisIdBSV -- old approach doesn't need it
         df_old = df_old.drop(columns=["HuisIdBSV"])
         result_old = add_calculated_columns_imputed_data(df_old, fillna=True)
 
@@ -343,7 +343,7 @@ class TestStandardPathMatchesOldApproach:
 
 
 # ---------------------------------------------------------------------------
-# Occlusion tests — back-calculation via catalog rules
+# Occlusion tests -- back-calculation via catalog rules
 # ---------------------------------------------------------------------------
 
 class TestOcclusionBackCalculation:
@@ -446,7 +446,7 @@ class TestOcclusionBackCalculation:
         The catalog must find a rule that derives LaagDiff from available columns.
         """
         if real_catalog is None:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         n = 50
         df = _make_df(
@@ -472,7 +472,7 @@ class TestOcclusionBackCalculation:
     def test_occluded_column_enables_downstream_derivation(self, real_catalog):
         """After back-calculating LaagDiff, downstream summary columns must be present."""
         if real_catalog is None:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         n = 50
         df = _make_df(
@@ -496,13 +496,13 @@ class TestOcclusionBackCalculation:
         """
         Full-loop test:
         1. Build df with all raw diff cols at value 1.0.
-        2. Run old approach → get all derived cols (incl. TerugleveringTotaalNetto = 2.0).
+        2. Run old approach -> get all derived cols (incl. TerugleveringTotaalNetto = 2.0).
         3. Occlude ElektriciteitTerugleveringLaagDiff (set to all pd.NA).
-        4. Run adaptive — it now has TerugleveringTotaalNetto=2.0, HoogDiff=1.0 available.
+        4. Run adaptive -- it now has TerugleveringTotaalNetto=2.0, HoogDiff=1.0 available.
         5. Verify derived LaagDiff == 1.0 (the original value: 2.0 - 1.0 = 1.0).
         """
         if real_catalog is None:
-            pytest.skip("catalog.parquet not built — run sync_data_model.py")
+            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
 
         n = 50
         # Step 1+2: build full df with old approach
@@ -525,7 +525,7 @@ class TestOcclusionBackCalculation:
         # Step 4: run adaptive
         result = add_calculated_columns_adaptive(df_occluded, real_catalog)
 
-        # Step 5: verify recovery — TerugleveringTotaalNetto=2.0, HoogDiff=1.0 → Laag=1.0
+        # Step 5: verify recovery -- TerugleveringTotaalNetto=2.0, HoogDiff=1.0 -> Laag=1.0
         assert "ElektriciteitTerugleveringLaagDiff" in result.columns
         recovered = result["ElektriciteitTerugleveringLaagDiff"].dropna().astype(float)
         assert recovered.tolist() == pytest.approx([1.0] * n, rel=1e-6), (

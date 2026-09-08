@@ -2,7 +2,7 @@
 Tests for aggregate_hh_data_5min_ibis and aggregate_hh_data_duckdb.
 
 All tests are self-contained: synthetic household parquet files are written to
-tmp_path, etdtransform.options paths are redirected there, and update_meenemen
+tmp_path, etdtransform.options paths are redirected there, and update_include()
 is patched to return a controlled index DataFrame.  No real data is read.
 """
 import os
@@ -30,7 +30,7 @@ DIFF_COL = "ElektriciteitNetgebruikLaagDiff"
 
 
 def _make_index(household_ids: list, project_ids: list, include: list | None = None) -> pd.DataFrame:
-    """Return a minimal index DataFrame matching what update_meenemen returns."""
+    """Return a minimal index DataFrame matching what update_include() returns."""
     if include is None:
         include = [True] * len(household_ids)
     return pd.DataFrame({
@@ -214,7 +214,7 @@ def test_all_files_missing_raises(dirs, monkeypatch):
         aggregate_hh_data_5min_ibis()
 
 
-def test_meenemen_false_excluded(dirs, monkeypatch):
+def test_include_false_excluded(dirs, monkeypatch):
     """Households with Meenemen=False are excluded even if their files exist."""
     household_ids    = [1, 2, 3]
     project_ids = [1, 1, 1]
@@ -356,7 +356,7 @@ class TestAggregateDuckdb:
         assert b_rows[COL_A_ONLY].isna().all(), "COL_A_ONLY should be all-NA for supplier B"
 
     def test_mixed_schemas_column_absent_from_all_files_ignored(self, dirs, monkeypatch):
-        """Requesting a column that exists in no file produces no error — col is omitted."""
+        """Requesting a column that exists in no file produces no error -- col is omitted."""
         household_ids    = [1, 2]
         project_ids = [1, 1]
         index_df = _make_index(household_ids, project_ids)

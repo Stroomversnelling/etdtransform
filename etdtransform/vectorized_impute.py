@@ -287,7 +287,7 @@ def impute_and_normalize(
     if not imputation_gap_stats:
         raise RuntimeError(
             "No columns were imputed -- all Diff columns were absent from this chunk. "
-            "Check that prepare_diffs_for_impute has run and that cum_cols matches the source data."
+            "Check that prepare_diff_averages_for_impute has run and that cum_cols matches the source data."
         )
     imputation_gap_stats_df = pd.concat(imputation_gap_stats, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(

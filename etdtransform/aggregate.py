@@ -169,7 +169,7 @@ def aggregate_hh_data_5min_ibis(
     Household files are processed in batches of batch_size to keep each Ibis
     expression small and safe for sqlglot's code generator.  Each batch is
     written to a private temp parquet file, then all batch parquets are
-    combined with ibis.read_parquet(list) — a native DuckDB multi-file scan
+    combined with ibis.read_parquet(list) -- a native DuckDB multi-file scan
     that requires no Ibis expression tree regardless of the number of batches.
     This approach scales to any number of files.
 
@@ -286,7 +286,7 @@ def aggregate_hh_data_duckdb(
     Aggregate mapped household parquets into household_default.parquet using DuckDB.
 
     Uses read_parquet with union_by_name=True so supplier-specific extra columns
-    are handled natively — no schema alignment, no pandas accumulation in memory.
+    are handled natively -- no schema alignment, no pandas accumulation in memory.
     HuisIdBSV and ProjectIdBSV are injected via a JOIN on a filename->ID mapping
     table registered from the index (DuckDB filename=True feature).
 
@@ -318,7 +318,7 @@ def aggregate_hh_data_duckdb(
     # Reads go through the shared format-detecting resolver: this function
     # works unchanged on flat or sharded mapped data and keeps writing the
     # same household_default.parquet.
-    from etdmap.index_helpers import HuisBatchOverlapError
+    from etdmap.index_helpers import HouseBatchOverlapError
     from etdtransform.load_data import mapped_household_files
 
     folder = etdtransform.options.mapped_folder_path
@@ -336,13 +336,13 @@ def aggregate_hh_data_duckdb(
             # Batch-safety guard at this compute entry point: the default
             # stage assumes ONE file per household; unioning two batches
             # here would silently double rows in the monolith.
-            raise HuisBatchOverlapError(
+            raise HouseBatchOverlapError(
                 f"HuisIdBSV {int(row.HuisIdBSV)} has data in multiple "
                 f"HuisBatches ({[hbid for _, hbid in files]}); the stage-2 "
                 f"default aggregation expects one file per household."
             )
         path, _hbid = files[0]
-        # Use forward slashes — DuckDB on Windows handles both but forward is safer in SQL
+        # Use forward slashes -- DuckDB on Windows handles both but forward is safer in SQL
         fwd = str(path).replace("\\", "/")
         mapping_rows.append((fwd, int(row.HuisIdBSV), int(row.ProjectIdBSV)))
         file_paths.append(fwd)
@@ -426,7 +426,7 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
     """
     Ibis/DuckDB variant of reconstruct_cumulative_columns.
 
-    Builds lazy window expressions — nothing is executed until the caller
+    Builds lazy window expressions -- nothing is executed until the caller
     calls .to_parquet() or .execute().  All three derived columns per col
     (Original, rebuilt cumsum, Check) are added as Ibis mutations.
 
@@ -441,7 +441,7 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
     win_lag = ibis.window(group_by="HuisIdBSV", order_by="ReadingDate")
 
     # Pass 1: all orig_col saves + cumsum rewrites in one mutate().
-    # Batching avoids building a 2*len(cols)-deep nested subquery chain —
+    # Batching avoids building a 2*len(cols)-deep nested subquery chain --
     # each loop iteration would otherwise wrap tbl in another subquery level,
     # causing DuckDB query-planning time to grow quadratically with col count.
     # All cols are independent of each other so a single mutate is correct.
@@ -490,7 +490,7 @@ def impute_hh_data_5min(
         Whether to reconstruct cumulative columns (*Original, cumsum, *Check) in
         pandas before writing to parquet.  Set to False when the caller will do
         the reconstruction via reconstruct_cumulative_columns_ibis() on the saved
-        parquet — avoids materialising the enlarged DataFrame in pandas RAM.
+        parquet -- avoids materialising the enlarged DataFrame in pandas RAM.
         Default True preserves the original behaviour.
 
     Returns
@@ -630,7 +630,7 @@ def _finalize_impute_outputs(
         raise RuntimeError(
             f"{log_prefix} No gap stats produced across any chunk. "
             "This means no Diff columns were present after merging diffs. "
-            "Ensure prepare_diffs_for_impute has been run before imputation."
+            "Ensure prepare_diff_averages_for_impute has been run before imputation."
         )
     imputation_gap_stats_df = pd.concat(non_empty, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
@@ -757,8 +757,8 @@ def impute_mapped_households_sharded(
     I/O shell only -- the imputation math is the shared _impute_chunk_core.
     Chunks are materialised with read_mapped_households (direct per-shard
     reads -- the measured-fastest strategy for household batches);
-    ProjectIdBSV is joined from the registry index; Meenemen inclusion comes
-    from the registry at read time (the stage-2 filter's sharded replacement).
+    ProjectIdBSV is joined from the index; Meenemen inclusion comes
+    from the index at read time (the stage-2 filter's sharded replacement).
 
     Inputs read from ``aggregate_folder_path``: avg_diffs.parquet and
     household_diff_max_bounds.parquet (same artifacts the legacy shell uses --
@@ -801,7 +801,7 @@ def impute_mapped_households_sharded(
     )
 
     # Estimation inputs from the SHARDED pipeline's artifact area (produced by
-    # prepare_diffs_sharded) -- the sharded chain is self-contained under
+    # prepare_diff_averages_sharded) -- the sharded chain is self-contained under
     # <aggregate>/sharded/.
     sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
     diffs = pd.read_parquet(
@@ -816,13 +816,20 @@ def impute_mapped_households_sharded(
     index_df, _ = read_index(mapped_folder_path)
     if "HuisBatchIdBSV" not in index_df.columns:
         raise ValueError(
-            "The registry index.parquet has no HuisBatchIdBSV column; "
-            "re-run the registry save to add the household-batch columns."
+            "index.parquet has no HuisBatchIdBSV column; "
+            "re-run the index save to add the household-batch columns."
         )
-    registry = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
-    project_by_batch = dict(zip(
-        (int(x) for x in registry["HuisBatchIdBSV"]),
-        (int(x) for x in registry["ProjectIdBSV"]),
+    # Keyed on the household batch, NOT the household: a household's project assignment is
+    # constant WITHIN a batch but may differ BETWEEN batches (project
+    # definitions change over time; the household does not). So
+    # HuisIdBSV -> ProjectIdBSV is not a function over time, while
+    # HuisBatchIdBSV -> ProjectIdBSV is. HuisBatchIdBSV is also the primary key
+    # of index.parquet (one row per household batch), so keying on HuisIdBSV
+    # would additionally keep whichever batch row happened to come last.
+    household_batch_projects = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
+    project_by_household_batch = dict(zip(
+        (int(x) for x in household_batch_projects["HuisBatchIdBSV"]),
+        (int(x) for x in household_batch_projects["ProjectIdBSV"]),
     ))
 
     out_root = os.path.join(str(aggregate_folder_path), "sharded", "household_imputed")
@@ -835,14 +842,14 @@ def impute_mapped_households_sharded(
         logging.info(f"[sharded impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
         chunk_df = read_mapped_households(chunk_ids, mapped_folder_path=mapped_folder_path)
 
-        # Computational batch-safety guard (independent of the registry
+        # Computational batch-safety guard (independent of the index
         # coexistence guard): multi-batch households / overlapping periods
         # cannot be imputed correctly yet -- loud stop, never silent blending.
         from etdtransform.impute import assert_imputation_input_batch_safe
         assert_imputation_input_batch_safe(chunk_df)
 
         chunk_df["ProjectIdBSV"] = pd.array(
-            [project_by_batch.get(int(b)) for b in chunk_df["HuisBatchIdBSV"]],
+            [project_by_household_batch.get(int(b)) for b in chunk_df["HuisBatchIdBSV"]],
             dtype="Int64",
         )
 
@@ -901,7 +908,7 @@ def impute_hh_data_5min_chunked(
     bounded by chunk_size rather than the full dataset.
 
     Requires avg_diffs.parquet and household_diff_max_bounds.parquet to already
-    exist -- run prepare_diffs_for_impute / prepare_diffs_for_impute_ibis first.
+    exist -- run prepare_diff_averages_for_impute / prepare_diff_averages_for_impute_ibis first.
 
     Parameters
     ----------
@@ -933,7 +940,7 @@ def impute_hh_data_5min_chunked(
         if c in _schema_cols
     )
 
-    # Step 1: resolve the household ID set — column-only read, tiny
+    # Step 1: resolve the household ID set -- column-only read, tiny
     if household_ids is not None:
         all_ids = sorted(int(x) for x in household_ids)
     else:
@@ -963,7 +970,7 @@ def impute_hh_data_5min_chunked(
     for i, chunk_ids in enumerate(chunks):
         logging.info(f"[chunked impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
 
-        # Read ALL source columns — pass-through columns are preserved unchanged so
+        # Read ALL source columns -- pass-through columns are preserved unchanged so
         # household_imputed.parquet has the same schema as household_default.parquet.
         chunk_df = pd.read_parquet(
             source_path,
