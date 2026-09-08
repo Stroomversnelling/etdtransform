@@ -5,7 +5,8 @@ All fixtures use pandas nullable types (Float64 / Int64 / pd.NA) throughout,
 matching the project convention that missingness is represented by pd.NA, not NaN.
 
 Inline catalog DataFrames are used for unit tests -- no real parquet files needed.
-Tests that require the built catalog.parquet are skipped when it is absent.
+Tests that need the real catalog use the `real_catalog` fixture, which fails
+when catalog.parquet is absent. The catalog ships inside etdmap.
 """
 
 import logging
@@ -174,10 +175,7 @@ class TestPrestatiedataBerekendInTargets:
         from etdmap.data_model import all_performance_data_columns
         from etdmap.catalog import load_catalog
 
-        try:
-            catalog_df = load_catalog()
-        except FileNotFoundError:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
+        catalog_df = load_catalog()
 
         from etdmap.data_model import model_column_order
         catalog_lhs = set(catalog_df["lhs"].dropna().unique())
@@ -207,8 +205,14 @@ class TestCompletenessReporting:
     def test_missing_required_logs_error(self, caplog):
         """If a Vereist=ja column is absent after derivation, an error is logged."""
         from etdmap.data_model import required_performance_data_columns
-        if not required_performance_data_columns:
-            pytest.skip("No required_performance_data_columns defined in etdmodel.csv")
+        # An empty required-column set is a data-model defect, not a reason to
+        # stand this test down: with nothing required, the error path under
+        # test cannot fire and a skip would hide both problems at once.
+        assert required_performance_data_columns, (
+            "etdmodel.csv defines no Vereist=ja performance data columns. "
+            "Fix the data model (sync from Grist) -- this test cannot verify "
+            "the missing-required-column error path without them."
+        )
 
         catalog = _make_catalog()
         df = _make_df({"SomeIrrelevantCol": _full_col()})
@@ -238,10 +242,7 @@ class TestNoSilentlySkippedColumns:
     def test_berekend_columns_targeted_and_derived_from_available_seed(self):
         from etdmap.catalog import load_catalog
 
-        try:
-            catalog_df = load_catalog()
-        except FileNotFoundError:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
+        catalog_df = load_catalog()
 
         seed_col = "ElektriciteitsgebruikTotaalNetto"
         expected_derived = "ElektriciteitNetgebruikDiff"
@@ -298,18 +299,26 @@ def _standard_raw_df(n=50, household_id=1) -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def real_catalog():
+    """
+    The real derivation catalog. Missing it is a hard failure.
+
+    catalog.parquet is committed to etdmap and ships as package data
+    (etdmap/data/catalog.parquet). If load_catalog() cannot find it, etdmap is
+    broken or mis-installed.
+    """
     from etdmap.catalog import load_catalog
     try:
         return load_catalog()
-    except FileNotFoundError:
-        return None
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "etdmap is installed without its bundled catalog.parquet. "
+            "Reinstall it (pip install ../etdmap) -- do not skip this test. "
+            "Original error: %s" % exc
+        ) from exc
 
 
 class TestStandardPathMatchesOldApproach:
     def test_derived_columns_present(self, real_catalog):
-        if real_catalog is None:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
-
         df = _standard_raw_df()
         result = add_calculated_columns_adaptive(df, real_catalog)
         for col in _DERIVED_COLS:
@@ -317,9 +326,6 @@ class TestStandardPathMatchesOldApproach:
 
     def test_derived_values_match_old_approach(self, real_catalog):
         """Adaptive on full raw data must produce the same numeric values as the old approach."""
-        if real_catalog is None:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
-
         df_adaptive = _standard_raw_df()
         result_adaptive = add_calculated_columns_adaptive(df_adaptive, real_catalog)
 
@@ -445,9 +451,6 @@ class TestOcclusionBackCalculation:
         and provide TerugleveringTotaalNetto as direct input.
         The catalog must find a rule that derives LaagDiff from available columns.
         """
-        if real_catalog is None:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
-
         n = 50
         df = _make_df(
             {
@@ -471,9 +474,6 @@ class TestOcclusionBackCalculation:
 
     def test_occluded_column_enables_downstream_derivation(self, real_catalog):
         """After back-calculating LaagDiff, downstream summary columns must be present."""
-        if real_catalog is None:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
-
         n = 50
         df = _make_df(
             {
@@ -501,9 +501,6 @@ class TestOcclusionBackCalculation:
         4. Run adaptive -- it now has TerugleveringTotaalNetto=2.0, HoogDiff=1.0 available.
         5. Verify derived LaagDiff == 1.0 (the original value: 2.0 - 1.0 = 1.0).
         """
-        if real_catalog is None:
-            pytest.skip("catalog.parquet not built -- run sync_data_model.py")
-
         n = 50
         # Step 1+2: build full df with old approach
         df_old = _standard_raw_df(n=n).rename(

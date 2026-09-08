@@ -285,23 +285,64 @@ def duckdb_pipeline(tmp_path_factory, _cum_cols, _include_updated):
 # prerequisite available (build the fixture/artifact it needs), or let the
 # test fail so the gap is visible. Do not add pytest.skip.
 # ---------------------------------------------------------------------------
-import os as _os
 import pytest as _pytest
+
+# Only these classes of skip may exist. A skip is allowed when its reason
+# begins with "<TOKEN>: " and TOKEN is a key below.
+#
+# The allowlist is EMPTY on purpose. No skip in this code base has yet been
+# shown to be legitimate -- every one examined turned out to be a missing
+# prerequisite that should fail loudly instead. Empty means every skip is a
+# hard failure until someone argues a class onto the list IN REVIEW. Adding a
+# key is a deliberate, visible decision; deciding in the moment is not.
+ALLOWED_SKIP_CLASSES = {
+    # "PLATFORM": "behaviour genuinely differs by OS and is covered elsewhere",
+    # "OPTIONAL_DEP": "an optional third-party package is not installed",
+}
+
+
+def _skip_reason(report):
+    """
+    The reason text of a skip.
+
+    report.longrepr for a skip is the tuple (path, lineno, "Skipped: <reason>")
+    for both a skipif marker and an in-body pytest.skip(). Verified against
+    pytest directly rather than assumed.
+    """
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple) and len(longrepr) >= 3:
+        text = str(longrepr[2])
+    else:
+        text = str(longrepr)
+    prefix = "Skipped: "
+    return text[len(prefix):] if text.startswith(prefix) else text
 
 
 @_pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    # Enforcement is OPT-IN via ETD_NO_SKIPS=1, for the FINAL/complete run.
-    # A quick run DURING development may skip; the final run sets the env
-    # var so any skip becomes a hard failure that must be resolved.
-    if report.skipped and _os.environ.get("ETD_NO_SKIPS"):
-        reason = report.longrepr
-        report.outcome = "failed"
-        report.longrepr = (
-            "SKIPS ARE NOT ALLOWED in a final run (ETD_NO_SKIPS=1, ADR-007). If a test is there, you may not "
-            "write skipping in code -- provide the prerequisite it needs or let "
-            "it fail, never skip. "
-            f"Attempted skip: {reason!r}"
-        )
+    if not report.skipped:
+        return
+    reason = _skip_reason(report)
+    token = reason.split(":", 1)[0].strip() if ":" in reason else ""
+    if token in ALLOWED_SKIP_CLASSES:
+        return
+    allowed = sorted(ALLOWED_SKIP_CLASSES) or ["(none -- the allowlist is empty)"]
+    report.outcome = "failed"
+    report.longrepr = (
+        "SKIP NOT ALLOWED (ADR-007).
+"
+        "  reason given: %r
+"
+        "  skip class  : %r
+"
+        "  allowed     : %s
+"
+        "If a test is there, it must run. Provide the prerequisite it needs, or
+"
+        "let it fail so the gap is visible. If a skip is genuinely warranted,
+"
+        "add its class to ALLOWED_SKIP_CLASSES in review -- never silently."
+        % (reason, token, allowed)
+    )

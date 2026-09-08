@@ -207,8 +207,14 @@ class TestAggregateProjectDuckdb:
         prj = _load(str(out_dir / "project_5min.parquet"), SORT_COLS_PRJ)
 
         col = "ElektriciteitNetgebruikHoogDiff"
-        if col not in hh.columns or col not in prj.columns:
-            pytest.skip(f"{col} not in test data")
+        assert col in hh.columns, (
+            f"{col} missing from household_5min.parquet -- the resample "
+            f"fixture no longer produces it; fix the fixture or the test."
+        )
+        assert col in prj.columns, (
+            f"{col} missing from project_5min.parquet -- project aggregation "
+            f"dropped a column the household frame still has."
+        )
 
         manual_avg = (
             hh.groupby(["ProjectIdBSV", "ReadingDate"])[col]
