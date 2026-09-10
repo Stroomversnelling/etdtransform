@@ -331,18 +331,12 @@ def pytest_runtest_makereport(item, call):
     allowed = sorted(ALLOWED_SKIP_CLASSES) or ["(none -- the allowlist is empty)"]
     report.outcome = "failed"
     report.longrepr = (
-        "SKIP NOT ALLOWED (ADR-007).
-"
-        "  reason given: %r
-"
-        "  skip class  : %r
-"
-        "  allowed     : %s
-"
-        "If a test is there, it must run. Provide the prerequisite it needs, or
-"
-        "let it fail so the gap is visible. If a skip is genuinely warranted,
-"
+        "SKIP NOT ALLOWED (ADR-007).\n"
+        "  reason given: %r\n"
+        "  skip class  : %r\n"
+        "  allowed     : %s\n"
+        "If a test is there, it must run. Provide the prerequisite it needs, or\n"
+        "let it fail so the gap is visible. If a skip is genuinely warranted,\n"
         "add its class to ALLOWED_SKIP_CLASSES in review -- never silently."
         % (reason, token, allowed)
     )
