@@ -61,7 +61,7 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
     aggregate_hh_data_5min()
     # Check if columns were added and if length of file is correct
     file_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_default.parquet")
-    default_df = pd.read_parquet(file_path)
+    default_df = pd.read_parquet(file_path, dtype_backend="numpy_nullable")
     assert "ProjectIdBSV" in default_df.columns, 'No column ProjectIdBSV in aggregated household_df'
     assert "HuisIdBSV" in default_df.columns, 'No column HuisIdBSV in aggregated household_df'
 
@@ -71,7 +71,7 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
     household_id = index_df.loc[0, "HuisIdBSV"]
     file_name = f"household_{household_id}_table.parquet"
     file_path_hh = os.path.join(etdtransform.options.mapped_folder_path, file_name)
-    household_df = pd.read_parquet(file_path_hh)
+    household_df = pd.read_parquet(file_path_hh, dtype_backend="numpy_nullable")
     len_per_hh = len(household_df)
     assert len(default_df) == len_per_hh * nmbr_householdids, 'aggregated hh file (default) does not have the right length'  
 
@@ -136,7 +136,7 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
         "Zelfgebruik",
         "ElektriciteitsgebruikTotaalBruto"
     ]
-    df_hh_calc = pd.read_parquet(hh_calculated_path)
+    df_hh_calc = pd.read_parquet(hh_calculated_path, dtype_backend="numpy_nullable")
     assert all([col in df_hh_calc.columns for col in calc_cols])
 
     logging.info("Resampling HH data to 5 minutes.")
@@ -323,8 +323,8 @@ def test_files_values_equal_expected():
         shared = sorted(set(fix_subset_cols) & set(gen_subset_cols))
         if not shared:
             continue  # subset doesn't apply to this file
-        fix_sub = pd.read_parquet(fixture_path, columns=shared)
-        gen_full_sub = pd.read_parquet(generated_path, columns=shared)
+        fix_sub = pd.read_parquet(fixture_path, columns=shared, dtype_backend="numpy_nullable")
+        gen_full_sub = pd.read_parquet(generated_path, columns=shared, dtype_backend="numpy_nullable")
         sample_size = min(100, len(gen_full_sub))
         gen_sub = gen_full_sub.sample(n=sample_size, random_state=42)
         differing: list[str] = []

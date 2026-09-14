@@ -67,7 +67,7 @@ def store_sample_from_valid_run(path_to_file, save_name):
     Args:
         path_to_file (str): Path to parquet file with data
     """
-    df = pd.read_parquet(path_to_file)
+    df = pd.read_parquet(path_to_file, dtype_backend="numpy_nullable")
     sample_size = min(100, len(df))
     sample_df = df.sample(n=sample_size, random_state=42)
 

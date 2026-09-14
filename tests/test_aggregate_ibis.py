@@ -86,7 +86,7 @@ def test_basic_output_correctness(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(batch_size=4)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
 
     assert len(out) == len(household_ids) * ROWS_PER_HH
     assert set(out["HuisIdBSV"].unique()) == set(household_ids)
@@ -107,10 +107,10 @@ def test_batching_produces_same_result_as_single_batch(dirs, monkeypatch):
     out_path = os.path.join(dirs["aggregate"], "household_default.parquet")
 
     aggregate_hh_data_5min_ibis(batch_size=3)   # forces 4 batches of 3
-    out_small = pd.read_parquet(out_path).sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True)
+    out_small = pd.read_parquet(out_path, dtype_backend="numpy_nullable").sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True)
 
     aggregate_hh_data_5min_ibis(batch_size=100)  # all in one batch
-    out_big   = pd.read_parquet(out_path).sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True)
+    out_big   = pd.read_parquet(out_path, dtype_backend="numpy_nullable").sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True)
 
     pd.testing.assert_frame_equal(out_small, out_big, check_like=True)
 
@@ -126,7 +126,7 @@ def test_batch_size_larger_than_n_files(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(batch_size=500)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
     assert len(out) == 2 * ROWS_PER_HH
 
 
@@ -141,7 +141,7 @@ def test_stratified_sampling(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(sample_ratio=0.5, batch_size=4)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
     sampled_household = out["HuisIdBSV"].unique()
 
     # 50% of 20 = 10 households total; both projects must be represented
@@ -177,7 +177,7 @@ def test_column_projection(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(columns=[DIFF_COL], batch_size=2)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
 
     assert DIFF_COL in out.columns
     assert "Zon-opwekTotaalDiff" not in out.columns, "Extra column should have been projected away"
@@ -198,7 +198,7 @@ def test_missing_household_files_skipped(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(batch_size=10)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
     assert set(out["HuisIdBSV"].unique()) == {1, 3}
     assert len(out) == 2 * ROWS_PER_HH
 
@@ -225,7 +225,7 @@ def test_include_false_excluded(dirs, monkeypatch):
 
     aggregate_hh_data_5min_ibis(batch_size=10)
 
-    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"))
+    out = pd.read_parquet(os.path.join(dirs["aggregate"], "household_default.parquet"), dtype_backend="numpy_nullable")
     assert set(out["HuisIdBSV"].unique()) == {1, 3}
     assert 2 not in out["HuisIdBSV"].values
 

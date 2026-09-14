@@ -138,7 +138,7 @@ def aggregate_hh_data_5min(sample_ratio=1.0):
         if not os.path.exists(file_path):
             continue
 
-        household_df = pd.read_parquet(file_path)
+        household_df = pd.read_parquet(file_path, dtype_backend="numpy_nullable")
         household_df["ProjectIdBSV"] = project_code
         household_df["HuisIdBSV"] = household_id
         data_frames.append(household_df)

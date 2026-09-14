@@ -123,7 +123,7 @@ class TestValueParityExactPrecision:
     def test_exact_quantile_matches_kernel_for_single_hh(self, fixture_parquet):
         """For HH=1, column=kWh, annual: get_data_stats(exact) row
         values match compute_numeric_column_stats on the same series."""
-        df = pd.read_parquet(fixture_parquet, columns=["HuisIdBSV", "kWh"])
+        df = pd.read_parquet(fixture_parquet, columns=["HuisIdBSV", "kWh"], dtype_backend="numpy_nullable")
         sub = df[df["HuisIdBSV"] == 1]["kWh"].dropna()
         sub_nullable = pd.array(sub.tolist(), dtype="Float64")
         kernel = compute_numeric_column_stats(pd.Series(sub_nullable))
