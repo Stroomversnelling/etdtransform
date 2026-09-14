@@ -35,10 +35,10 @@ def methods_to_bitwise(methods_column):
 
     Notes
     -----
-    The function assumes that method numbers start from 1 and correspond to
-    bit positions (method 1 = bit 0, method 2 = bit 1, etc.).
+    The values in ``methods_column`` are ``ImputeType`` members, which is an
+    ``IntFlag`` built with ``auto()``. Combining them is therefore a
+    plain OR of the values.
 
-    This vectorized version is optimized for performance with NumPy.
     """
 
     bitwise_values = np.zeros(len(methods_column), dtype=np.int64)
@@ -47,9 +47,7 @@ def methods_to_bitwise(methods_column):
         bitwise_value = 0
         for method in methods:
             if method > 0:
-                bitwise_value |= 1 << (
-                    method - 1
-                )  # Same logic as before, but faster with NumPy
+                bitwise_value |= int(method)
         bitwise_values[i] = bitwise_value
 
     return bitwise_values
