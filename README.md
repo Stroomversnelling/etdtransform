@@ -26,15 +26,138 @@ pip install .
 
 # Developing and contributing
 
-If you would like to contribute to the package code, we would create an environment and install it in editable mode:
+If you would like to contribute to the package code, create an environment and
+install the package into it:
 
 ```bash	
 git clone https://github.com/Stroomversnelling/etdtransform.git
 cd etdtransform
 python -m venv .venv
 source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
-pip install -e .
+pip install .
 ```
+
+Install normally -- never `pip install -e`. Editable installs are not used
+anywhere in this project. Each environment holds its own private copy of its
+dependencies, which is what allows different folders to run different
+development versions at the same time. That is the intended arrangement, not a
+workaround: after changing a dependency's source, reinstall it into whichever
+environment should pick the change up, and leave the others as they are.
+
+## Running the tests
+
+Run everything from the repo root, using this repo's own virtual environment.
+On Linux/macOS use `.venv/bin/python` in place of `.venv/Scripts/python`.
+
+```bash
+# The whole suite -- slow, see below
+.venv/Scripts/python -m pytest
+
+# A single file
+.venv/Scripts/python -m pytest tests/test_total_imputation_workflow.py
+
+# A single test (a class, when a file has one, uses file.py::Class::test)
+.venv/Scripts/python -m pytest tests/test_total_imputation_workflow.py::test_files_schema_equal_expected
+
+# Everything whose name matches an expression, across all files
+.venv/Scripts/python -m pytest -k "sharded and not resample"
+```
+
+The suite reads `config_test.yaml` from the repo root. Copy
+`config_test_template.yaml` and fill in the local fixture paths before the
+first run. If it is missing, `tests/conftest.py` raises a `FileNotFoundError`
+while pytest is collecting, so the run stops immediately instead of quietly
+skipping the tests that needed it (ADR-003).
+
+### Narrowing a run is fine; skipping is not
+
+Selecting a subset of tests -- by path, by node ID, by `-k`, or by marker
+deselection (`-m "not slow"`) -- is normal and encouraged while developing.
+Those tests are simply not selected for this run.
+
+Skipping is a different mechanism and is not allowed. A skipped test was
+selected, then declined to run, and pytest reports it in a way that reads as
+green. `tests/conftest.py` contains a `pytest_runtest_makereport` hook that
+turns **any** skip -- `pytest.skip()`, `skip`/`skipif` markers,
+`importorskip` -- into a hard failure (`SKIP NOT ALLOWED (ADR-007)`). The
+`ALLOWED_SKIP_CLASSES` allowlist in that file is **empty on purpose**; a class
+is added to it in review, never in the moment.
+
+If a test exists, make the prerequisite available, or let it fail so the gap is
+visible. Do not reach for `pytest.skip`.
+
+### A complicated suite -- work inward
+
+This suite is the most involved in the project: it executes the real
+imputation, calculated-column, resampling and aggregation stages over the
+synthetic dataset, so a full run takes a while. That is inherent to what it
+covers, not a defect. Individual tests and files run perfectly well on their
+own and give near-instant feedback, so there is no need to sit through the full
+run while iterating.
+
+Work inward:
+
+1. **Start with the test you are actually changing**, by node ID
+   (`file.py::Class::test`). Near-instant feedback.
+2. **Widen to the file** once that passes.
+3. **Widen to a keyword slice** across files, e.g. `-k imputation`, to catch
+   siblings that share the helper you touched.
+4. **Run the whole suite last**, before the change leaves your machine.
+
+Flags that matter here:
+
+| Flag | What it does |
+|---|---|
+| `--lf` | Re-run only what failed last time -- the single biggest time saver |
+| `--ff` | Run last-failed first, then everything else |
+| `-x` | Stop at the first failure, instead of grinding through the rest |
+| `--durations=15` | Show the slowest tests, so you know what you are paying for |
+| `-k EXPR` | Select by name; supports `and`, `or`, `not` |
+| `-q` | One character per test instead of one line |
+
+`--lf -x` is the loop to live in while a test is red. Reach for the full run
+deliberately, not reflexively.
+
+### When to run what
+
+Per ADR-006 and ADR-007 in `DECISIONS.md`:
+
+- **Record a baseline before you start.** Run the suite before your first edit
+  so you know what was already green. Anything failing afterwards is a
+  regression from your change until proven otherwise.
+- **Run the whole suite before any commit that leaves your machine** - a push,
+  a pull request, or a release. The length of the run is not a reason to skip
+  it; it is a reason to do it once, at the end, rather than continuously.
+- **During a development iteration**, small local commits may run only the
+  focused tests for the area you are touching.
+- **Never leave an unexpected failure uninvestigated.** Every red test is
+  either a bug in the code, a stale fixture, or a wrong test -- and you do not
+  know which until you look. "Pre-existing" is not an explanation; it is a
+  thing to check.
+- **A red test may be legitimate, but only when it is known and understood.**
+  A test written ahead of the feature it describes starts red by design. That
+  is acceptable when the reason is understood and stated. What is never
+  acceptable is a failure nobody has looked at, or making a suite look green by
+  removing, skipping, or deselecting the test that exposed the gap.
+
+- **Do not sit watching a long run.** Start it, keep writing code, and come
+  back to it. Block only when the next thing you want to do depends on the
+  result, or when something is genuinely broken. This suite in particular is
+  one to leave running in another terminal.
+
+Prefer accuracy over speed. When the two conflict - anything touching
+imputation, aggregation, or a shared helper - slow down and run everything.
+
+This package depends on `etdmap` (ADR-004), which is installed into this repo's
+environment as its own private copy rather than linked to the sibling source
+tree. A change you just made to `etdmap`'s source is therefore not under test
+here until you reinstall it (`pip install .` from the `etdmap` repo, into this
+environment). The test run reports the version and location of each ETD package
+it loaded in its header, so you can confirm what you are actually testing.
+
+For guidance on writing a new test - fixture dtypes, the `pd.NA` sentinel, how
+to compare nullable Series - see the corresponding section of `etdmap`'s
+README. The conventions are project-wide and are not repeated here.
 
 ## Test fixtures
 

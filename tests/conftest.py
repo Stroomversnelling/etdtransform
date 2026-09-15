@@ -340,3 +340,17 @@ def pytest_runtest_makereport(item, call):
         "add its class to ALLOWED_SKIP_CLASSES in review -- never silently."
         % (reason, token, allowed)
     )
+
+
+def pytest_report_header(config):
+    """Report the installed etd packages this run is testing against."""
+    import importlib.metadata as metadata
+
+    found = {}
+    for dist in metadata.distributions():
+        name = dist.metadata["Name"]
+        if name and name.startswith("etd"):
+            found[name] = "  %s %s -- %s" % (name, dist.version, dist.locate_file(""))
+    if not found:
+        return []
+    return ["etd packages:"] + [found[name] for name in sorted(found)]
