@@ -3,6 +3,7 @@ from enum import IntFlag, auto
 
 import numpy as np
 import pandas as pd
+from etdmap.flags import MappingFlag, bound_flags
 from etdmap.record_validators import thresholds_dict
 
 __all__ = [
@@ -97,9 +98,10 @@ def apply_thresholds(
     Values outside the thresholds are replaced with average values and marked
     as imputed.
     """
-    mask = ((df[diff_col] < lower_bound) | (df[diff_col] > upper_bound)) & df[
-        diff_col
-    ].notna()
+    mask = (
+        bound_flags(df[diff_col], lower_bound, upper_bound)
+        != MappingFlag.NONE.value
+    )
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
     df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE.value) | ImputeType.THRESHOLD_ADJUSTED.value
