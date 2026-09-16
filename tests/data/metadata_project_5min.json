@@ -20,105 +20,105 @@
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurWarmTapwater": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurWoonkamer": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurWoonkamerSetpoint": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurBinnenWTW": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurBuitenWTW": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurBuitenWarmtepomp": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurAfgifteAanvoer": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurAfgifteRetour": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurTapwaterAanvoer": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurTapwaterRetour": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
-        "Zon-opwekMomentaan": {
+        "ZonopwekMomentaan": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "CO2": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "Luchtvochtigheid": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "DebietVentilatieAanvoer": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitNetgebruikHoogDiff": {
@@ -152,7 +152,7 @@
         "GasgebruikDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.7980813339400001",
+                "max": "0.7980813339399999",
                 "null_count": 0
             }
         },
@@ -166,7 +166,7 @@
         "ElektriciteitsgebruikWarmtepompDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.76082480128",
+                "max": "0.7608248012800001",
                 "null_count": 2
             }
         },
@@ -180,7 +180,7 @@
         "ElektriciteitsgebruikBoilervatDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.31123206908",
+                "max": "0.31123206908000006",
                 "null_count": 0
             }
         },
@@ -236,35 +236,35 @@
         "ZonopwekBruto": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.91667640236",
+                "max": "0.8918597295399999",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-2.3877736113399997",
-                "max": "1.1017551210599998",
+                "min": "-2.43138173896",
+                "max": "1.1967187465200002",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-2.3895610275",
-                "max": "0.20605188733999996",
+                "min": "-2.32974050124",
+                "max": "0.25627071108",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "-1.2246055013",
-                "max": "2.24979253168",
+                "min": "-1.2682136289200001",
+                "max": "2.1899669240799997",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikRadiatorDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.30502639198",
+                "max": "0.30502639198000003",
                 "null_count": 0
             }
         },
@@ -286,105 +286,105 @@
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "VOC": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurLuchtRetour": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenWTW": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenBooster": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenBoilervat": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenWarmtepomp": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurBoilervatSetpoint": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "WatergebruikRuimteverwarmingInst": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "WatergebruikWarmTapwaterInst": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenOverigGG": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenTeruglevering": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitVermogenNetgebruik": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurWarmtepompAanvoer": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "TemperatuurWarmtepompRetour": {
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "ElektriciteitsgebruikOverigGGDiff": {
@@ -415,10 +415,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruikDiff": {
+        "ZonopwekVerbruikDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.9698368693799999",
+                "max": "0.9395318404799999",
                 "null_count": 0
             }
         },
@@ -426,7 +426,7 @@
             "statistics": {
                 "min": null,
                 "max": null,
-                "null_count": 124088
+                "null_count": 124016
             }
         },
         "WarmteproductieWarmTapwaterDiff": {
@@ -439,7 +439,7 @@
         "ElektriciteitsgebruikWarmtepompInternDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "1.87610859228",
+                "max": "1.8761085922800003",
                 "null_count": 0
             }
         },
@@ -467,7 +467,7 @@
         "ElektriciteitTerugleveringLaag": {
             "statistics": {
                 "min": "0.0",
-                "max": "78877.79324075855",
+                "max": "78877.79324075856",
                 "null_count": 0
             }
         },
@@ -558,7 +558,7 @@
         "WatergebruikRuimteverwarming": {
             "statistics": {
                 "min": "0.0",
-                "max": "52567.12008702806",
+                "max": "52567.120087028066",
                 "null_count": 0
             }
         },
@@ -569,10 +569,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruik": {
+        "ZonopwekVerbruik": {
             "statistics": {
                 "min": "0.0",
-                "max": "52579.56404830729",
+                "max": "52537.89968234176",
                 "null_count": 0
             }
         },

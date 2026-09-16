@@ -4,15 +4,36 @@ from math import floor, isclose, log10
 
 import numpy as np
 import pandas as pd
+from etdmap.data_model import thresholds_dict
+
+from etdmap.flags import MappingFlag, flag_column
+
+from etdtransform.bounds import (
+    cadence_minutes_by_household,
+    column_bound,
+    column_bound_by_household,
+    dataset_grid_minutes,
+    load_column_cadence,
+    scale_shape_to_level,
+    shape_and_level_average,
+)
 
 import etdtransform
 from etdtransform.vectorized_impute import impute_and_normalize
+
+#: Findings that disqualify a value from shaping a project average: it was
+#: written by the pipeline rather than measured, or it was measured over a
+#: window rather than at the interval it sits on.
+_NOT_MEASURED_HERE = MappingFlag.INVENTED.value | MappingFlag.CATCHUP.value
 
 
 def calculate_average_diff(
     df: pd.DataFrame,
     project_id_column: str,
     diff_columns: list[str],
+    bounds: dict | None = None,
+    cadence: pd.DataFrame | None = None,
+    grid_minutes: float | None = None,
 ) -> pd.DataFrame:
     """
     Calculate average differences for specified columns grouped by project and reading date.
@@ -29,6 +50,17 @@ def calculate_average_diff(
         The name of the column containing project IDs.
     diff_columns : list[str]
         A list of column names for which to calculate average differences.
+    bounds : dict, optional
+        Column -> upper threshold. A value above its threshold is discarded
+        before averaging. Defaults to the Max declared for the variable in the
+        thresholds table; pass ``{}`` to disable, or a mapping to override.
+    cadence : pd.DataFrame, optional
+        The per-column cadence table. Households reporting coarser than the grid
+        contribute to the level but not to the shape. Defaults to the sidecar
+        written at mapping; an empty frame makes this the arithmetic mean.
+    grid_minutes : float, optional
+        The grid the data sits on. Resolved from the household batches'
+        declared Gegevensfrequentie when not given.
 
     Returns
     -------
@@ -37,6 +69,11 @@ def calculate_average_diff(
         - 'avg_diff': DataFrame with average differences
         - 'upper_bounds': DataFrame with upper bounds for outlier exclusion
         - 'household_max_with_bounds': DataFrame with household maximum values and bounds
+        - 'n_discarded': how many values were discarded for exceeding the
+          column threshold
+        - 'n_flagged': how many values were excluded as invented or mistimed
+        - 'shape_level': how many households contributed to the shape and to the
+          level, from :func:`etdtransform.bounds.shape_and_level_average`
 
     Notes
     -----
@@ -51,6 +88,17 @@ def calculate_average_diff(
 
     """
     logging.info("Calculating Diff column averages.")
+
+    if bounds is None:
+        bounds = {
+            col: thresholds_dict[col]["Max"]
+            for col in diff_columns
+            if col in thresholds_dict
+        }
+    if cadence is None:
+        cadence = load_column_cadence()
+    if grid_minutes is None:
+        grid_minutes = dataset_grid_minutes()
 
     def safe_quantile(group, col_name):
         filtered_group = group[group[col_name] > 1e-8]
@@ -100,20 +148,80 @@ def calculate_average_diff(
         households_to_include = household_max_with_bounds.loc[include_mask, "HuisIdBSV"]
 
         logging.info(f"Filtering the dataframe for {col}.")
-        df_filtered = df[["HuisIdBSV", project_id_column, "ReadingDate", col]][
-            df["HuisIdBSV"].isin(households_to_include)
-        ][[project_id_column, "ReadingDate", col]]
+        wanted = ["HuisIdBSV", project_id_column, "ReadingDate", col]
+        if flag_column(col) in df.columns:
+            wanted.append(flag_column(col))
+        df_filtered = df[wanted][df["HuisIdBSV"].isin(households_to_include)]
 
         logging.info(f"Checking for negative Diff values in {col}.")
         if (df_filtered[col] < 0).any():
             raise ValueError("Negative Diff values found")
         # df_filtered[df_filtered[col]<0][col] = pd.NA
 
+        df_filtered = df_filtered.copy()
+
+        # An average states what households consumed at a time of day, so only
+        # values measured at that time may shape it. Two kinds are excluded:
+        #
+        #   invented  -- filled down, filled to zero, or redistributed across a
+        #                frozen span. Nothing was measured at this slot.
+        #   mistimed  -- a catch-up. It was measured, but over a window rather
+        #                than at this slot.
+        #
+        # Neither is excluded by a threshold. Redistribution places its values
+        # inside the bounds, and a catch-up is plausible at the column's own
+        # cadence, so the flags are what identifies them.
+        n_flagged = 0
+        findings = flag_column(col)
+        if findings in df_filtered.columns:
+            not_measured_here = (
+                df_filtered[findings].fillna(0) & _NOT_MEASURED_HERE
+            ) != 0
+            n_flagged = int(not_measured_here.sum())
+            if n_flagged:
+                df_filtered.loc[not_measured_here, col] = pd.NA
+                logging.info(
+                    f"Excluded {n_flagged} value(s) from the {col} average: "
+                    f"invented or recorded for a different window."
+                )
+
+        # A value above the variable's threshold is implausible rather than
+        # merely large, so it is discarded instead of clipped: clipping would
+        # leave a fabricated number in the pool, while discarding leaves the
+        # average to the households that reported plausible values.
+        #
+        # The threshold used is the column threshold, scaled to how often each
+        # household reports, so a delivered hourly reading is judged against
+        # what an hour may hold rather than what five minutes may hold.
+        n_discarded = 0
+        bound = (bounds or {}).get(col, pd.NA)
+        if bound is None or (not isinstance(bound, pd.Series) and pd.isna(bound)):
+            bound = pd.NA
+        else:
+            bound = column_bound(df_filtered, col, cadence)
+        if not (isinstance(bound, pd.Series) or pd.isna(bound)):
+            bound = pd.Series(bound, index=df_filtered.index)
+        if isinstance(bound, pd.Series):
+            out_of_bounds = (df_filtered[col] > bound).fillna(False)
+            n_discarded = int(out_of_bounds.sum())
+            if n_discarded:
+                df_filtered.loc[out_of_bounds, col] = pd.NA
+                logging.info(
+                    f"Discarded {n_discarded} value(s) above the column bound "
+                    f"for {col} before averaging."
+                )
+
         logging.info(f"Calculating the average differences for {col}.")
-        avg_diff = (
-            df_filtered.groupby([project_id_column, "ReadingDate"])[col]
-            .mean()
-            .reset_index()
+        # A household reporting coarser than the grid records how much was
+        # consumed but not when within its reporting interval, so averaging its
+        # readings in directly would place several grid intervals of consumption
+        # in one slot. shape_and_level_average takes the distribution across the
+        # day from the households reporting at the grid cadence and the level
+        # from all of them. Where every household reports at the grid cadence
+        # the result is the arithmetic mean.
+        avg_diff, shape_level = shape_and_level_average(
+            df_filtered, col, project_id_column, cadence,
+            grid_minutes=grid_minutes,
         )
         avg_diff.columns = [project_id_column, "ReadingDate", f"{col}_avg"]
         impute_na = avg_diff[col + "_avg"].isna().sum()
@@ -126,6 +234,9 @@ def calculate_average_diff(
             "avg_diff": avg_diff,
             "upper_bounds": upper_bounds,
             "household_max_with_bounds": household_max_with_bounds,
+            "n_discarded": n_discarded,
+            "n_flagged": n_flagged,
+            "shape_level": shape_level,
         }
 
     return avg_diff_dict
@@ -135,13 +246,17 @@ def calculate_average_diff_ibis(
     tbl,
     project_id_column: str,
     diff_columns: list[str],
+    bounds: dict | None = None,
+    cadence: pd.DataFrame | None = None,
+    grid_minutes: float | None = None,
 ) -> dict:
     """
     Ibis/DuckDB variant of calculate_average_diff.
 
     Accepts an ibis.Table and performs all aggregations as SQL so the full
     dataset never materialises in Python memory.  Only the small result tables
-    (one row per project x date) are returned as pandas DataFrames.
+    (one row per project, or one row per project x date) are executed, and the
+    scaling step they feed is the one the pandas path uses.
 
     Returns the same dict structure as calculate_average_diff so that callers
     can substitute either function without downstream changes.
@@ -154,27 +269,28 @@ def calculate_average_diff_ibis(
         Name of the project ID column.
     diff_columns : list[str]
         Diff column names to process.
+    bounds : dict, optional
+        Column -> upper threshold, as in calculate_average_diff.
+    cadence : pd.DataFrame, optional
+        The per-column cadence table, as in calculate_average_diff.
+    grid_minutes : float, optional
+        The grid the data sits on, as in calculate_average_diff.
     """
     import ibis
     import ibis.selectors as s
 
-    def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.DataFrame:
-        """Cast numpy int dtypes to Int64 and nominated float cols to Float64.
-
-        int32/int64 cannot hold pd.NA so they are always promoted to Int64.
-        float64 supports NaN but is promoted to Float64 only for explicitly
-        nominated measurement columns, keeping non-measurement floats (e.g.
-        upper_bound, which safe_quantile returns as plain float) unchanged so
-        that dtypes match the pandas path exactly.
-        """
-        for c in df.select_dtypes(include=["int32", "int64"]).columns:
-            df[c] = df[c].astype("Int64")
-        for c in float_cols or []:
-            if c in df.columns:
-                df[c] = df[c].astype("Float64")
-        return df
-
     logging.info("Calculating Diff column averages (Ibis).")
+
+    if bounds is None:
+        bounds = {
+            col: thresholds_dict[col]["Max"]
+            for col in diff_columns
+            if col in thresholds_dict
+        }
+    if cadence is None:
+        cadence = load_column_cadence()
+    if grid_minutes is None:
+        grid_minutes = dataset_grid_minutes()
 
     hh_max_agg = {f"{col}_household_max": tbl[col].cast("Float64").max() for col in diff_columns}
     household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
@@ -184,6 +300,9 @@ def calculate_average_diff_ibis(
     for col in diff_columns:
         logging.info(f"Handling column (Ibis): {col}")
         max_col = f"{col}_household_max"
+        n_discarded = 0
+        n_flagged = 0
+        shape_level = {"shape_households": 0, "level_households": 0, "fallback": False}
 
         # 95th percentile of per-household max (near-zero excluded), doubled -> upper bound.
         # All projects appear in ub_tbl; projects with no qualifying households get NULL so
@@ -237,13 +356,67 @@ def calculate_average_diff_ibis(
             if has_negative > 0:
                 raise ValueError("Negative Diff values found")
 
-            avg_diff = _to_nullable(
-                tbl
-                .filter(tbl["HuisIdBSV"].isin(included_ids))
-                .group_by([project_id_column, "ReadingDate"])
-                .aggregate(**{f"{col}_avg": tbl[col].cast("Float64").mean()})
-                .execute(),
-                float_cols=[f"{col}_avg"],
+            included = tbl.filter(tbl["HuisIdBSV"].isin(included_ids))
+            value = included[col].cast("float64")
+
+            # The interval each household's reading covers. Households absent
+            # from the cadence table report at the grid cadence.
+            minutes = _per_household(
+                included["HuisIdBSV"],
+                cadence_minutes_by_household(col, cadence),
+                grid_minutes,
+            )
+
+            # Exclude values that were not measured at this slot: written by the
+            # pipeline, or recorded for a window rather than for this interval.
+            # See calculate_average_diff for why a threshold cannot identify
+            # them. Mapped data produced before flags existed has no findings
+            # column, in which case nothing is excluded here.
+            findings = flag_column(col)
+            if findings in included.columns:
+                not_measured_here = (
+                    included[findings].fill_null(0) & _NOT_MEASURED_HERE
+                ) != 0
+                n_flagged = int(included.filter(not_measured_here).count().execute())
+                if n_flagged:
+                    logging.info(
+                        f"Excluded {n_flagged} value(s) from the {col} average: "
+                        f"invented or recorded for a different window."
+                    )
+                    value = not_measured_here.ifelse(
+                        ibis.null().cast("float64"), value
+                    )
+
+            # A value above the variable's threshold is implausible rather than
+            # merely large, so it is discarded instead of clipped. The threshold
+            # is scaled to each household's cadence, as in the pandas path.
+            bound = (bounds or {}).get(col, pd.NA)
+            if pd.notna(bound):
+                scaled_bound = _per_household(
+                    included["HuisIdBSV"],
+                    column_bound_by_household(col, cadence),
+                    bound,
+                )
+                over = value > scaled_bound
+                n_discarded = int(included.filter(over).count().execute())
+                if n_discarded:
+                    logging.info(
+                        f"Discarded {n_discarded} value(s) above the column "
+                        f"bound for {col} before averaging."
+                    )
+                # NULL the value rather than filtering the row out. Filtering
+                # would drop a (project, timestamp) group entirely when every
+                # value in it is discarded, while the pandas path keeps the
+                # group with an NA average.
+                value = over.ifelse(ibis.null().cast("float64"), value)
+
+            prepared = included.mutate(_value=value, _minutes=minutes)
+            prepared = prepared.mutate(
+                _rate=prepared["_value"] / (prepared["_minutes"] / grid_minutes),
+                _at_grid=prepared["_minutes"] == float(grid_minutes),
+            )
+            avg_diff, shape_level = _shape_and_level_average_ibis(
+                prepared, col, project_id_column
             )
 
         impute_na = avg_diff[f"{col}_avg"].isna().sum()
@@ -252,17 +425,142 @@ def calculate_average_diff_ibis(
                 f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
-        # household_max is a measurement column -- promote to Float64 to match the explicit
-        # .astype("Float64") in the pandas path (lines 72-74 of calculate_average_diff).
+        # household_max is a measurement column, so it is promoted to Float64 to
+        # match the explicit cast the pandas path applies to the same column.
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
             "upper_bounds": _to_nullable(ub_tbl.execute()),
             "household_max_with_bounds": _to_nullable(
                 joined.execute(), float_cols=[max_col]
             ),
+            "n_discarded": n_discarded,
+            "n_flagged": n_flagged,
+            "shape_level": shape_level,
         }
 
     return avg_diff_dict
+
+
+def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.DataFrame:
+    """Cast numpy int dtypes to Int64 and nominated float cols to Float64.
+
+    int32/int64 cannot hold pd.NA so they are always promoted to Int64.
+    float64 supports NaN but is promoted to Float64 only for explicitly
+    nominated measurement columns, keeping non-measurement floats (e.g.
+    upper_bound, which safe_quantile returns as plain float) unchanged so
+    that dtypes match the pandas path exactly.
+    """
+    for c in df.select_dtypes(include=["int32", "int64"]).columns:
+        df[c] = df[c].astype("Int64")
+    for c in float_cols or []:
+        if c in df.columns:
+            df[c] = df[c].astype("Float64")
+    return df
+
+
+def _per_household(household_column, by_household, default):
+    """
+    A per-household number as an ibis expression, defaulting where unknown.
+
+    An empty mapping means nothing is known per household, which is the state
+    when no cadence sidecar exists, so every row takes *default*.
+    """
+    import ibis
+
+    known = {
+        int(household): float(value)
+        for household, value in by_household.items()
+        if pd.notna(value)
+    }
+    if not known:
+        return ibis.literal(float(default)).cast("float64")
+    return household_column.substitute(known, else_=float(default)).cast("float64")
+
+
+def _shape_and_level_average_ibis(prepared, diff_col, project_id_column):
+    """
+    The project average of *diff_col*, across households reporting at different
+    cadences, computed in SQL.
+
+    The counterpart of :func:`etdtransform.bounds.shape_and_level_average`: the
+    distribution across the day comes from the households reporting at the grid
+    cadence, the level from all of them, and the two are combined by the same
+    scaling function the pandas path uses.
+
+    Only the aggregates are executed -- one row per (project, ReadingDate) for
+    the shape and one row per project for the levels.
+
+    Parameters
+    ----------
+    prepared : ibis.Table
+        Carrying ``_value`` (the value after exclusions), ``_rate`` (that value
+        per grid interval) and ``_at_grid``.
+    diff_col : str
+        Interval column being averaged.
+    project_id_column : str
+        Column identifying the project.
+
+    Returns
+    -------
+    tuple of (pd.DataFrame, dict)
+        As :func:`etdtransform.bounds.shape_and_level_average` returns.
+    """
+    import ibis
+
+    levels = _to_nullable(
+        prepared.group_by(project_id_column)
+        .aggregate(
+            level_all=prepared["_rate"].mean(),
+            level_grid=prepared["_at_grid"]
+            .ifelse(prepared["_rate"], ibis.null().cast("float64"))
+            .mean(),
+            shape_households=prepared["_at_grid"]
+            .ifelse(prepared["HuisIdBSV"], ibis.null())
+            .nunique(),
+            level_households=prepared["HuisIdBSV"].nunique(),
+        )
+        .execute(),
+        float_cols=["level_all", "level_grid"],
+    )
+
+    at_grid = prepared.filter(prepared["_at_grid"])
+    shape = _to_nullable(
+        at_grid.group_by([project_id_column, "ReadingDate"])
+        .aggregate(shape=at_grid["_value"].mean())
+        .execute(),
+        float_cols=["shape"],
+    )
+
+    # A project with no grid-cadence household has no shape to scale, and must
+    # not simply drop out of the result. Its average is the mean of the
+    # per-grid-interval rates instead.
+    without_shape = set(levels.loc[levels["shape_households"] == 0, project_id_column])
+    fallback = None
+    if without_shape:
+        rows = prepared.filter(
+            prepared[project_id_column].isin(sorted(without_shape))
+        )
+        fallback = _to_nullable(
+            rows.group_by([project_id_column, "ReadingDate"])
+            .aggregate(**{f"{diff_col}_avg": rows["_rate"].mean()})
+            .execute(),
+            float_cols=[f"{diff_col}_avg"],
+        )
+
+    indexed = levels.set_index(project_id_column)
+    avg = scale_shape_to_level(
+        shape,
+        indexed["level_all"],
+        indexed["level_grid"],
+        project_id_column,
+        diff_col,
+        fallback=fallback,
+    )
+    return avg, {
+        "shape_households": int(levels["shape_households"].sum()),
+        "level_households": int(levels["level_households"].sum()),
+        "fallback": bool(without_shape),
+    }
 
 
 def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):

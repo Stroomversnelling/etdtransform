@@ -18,15 +18,15 @@
         },
         "bitwise_methods": {
             "statistics": {
-                "min": "-9223372036854775680",
-                "max": "128",
+                "min": "0",
+                "max": "328",
                 "null_count": 0
             }
         },
         "element": {
             "statistics": {
                 "min": "4",
-                "max": "136",
+                "max": "264",
                 "null_count": 14
             }
         },

@@ -93,7 +93,7 @@
                 "null_count": 730
             }
         },
-        "Zon-opwekMomentaan": {
+        "ZonopwekMomentaan": {
             "statistics": {
                 "min": null,
                 "max": null,
@@ -235,29 +235,29 @@
         },
         "ZonopwekBruto": {
             "statistics": {
-                "min": "132.1077209053",
-                "max": "144.82651451691999",
+                "min": "130.01570339996002",
+                "max": "145.1548286816",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-205.02299047806",
-                "max": "-162.15800283588504",
+                "min": "-210.79105276083996",
+                "max": "-164.94081491722",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-310.1660345298201",
-                "max": "-279.63031500176004",
+                "min": "-310.7268768453001",
+                "max": "-274.42659022594",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "120.24482346238005",
-                "max": "162.42530240145996",
+                "min": "115.69777128773998",
+                "max": "160.08010450660004",
                 "null_count": 0
             }
         },
@@ -415,10 +415,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruikDiff": {
+        "ZonopwekVerbruikDiff": {
             "statistics": {
-                "min": "138.07024068509998",
-                "max": "150.28531323618003",
+                "min": "137.93333890922",
+                "max": "150.07571463882",
                 "null_count": 0
             }
         },
@@ -569,10 +569,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruik": {
+        "ZonopwekVerbruik": {
             "statistics": {
-                "min": "143.65110298077997",
-                "max": "52579.564048307286",
+                "min": "140.61152801007998",
+                "max": "52584.955185112565",
                 "null_count": 0
             }
         },

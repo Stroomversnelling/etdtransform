@@ -1,6 +1,6 @@
 {
     "num_rows": 1051200,
-    "num_columns": 85,
+    "num_columns": 86,
     "column_details": {
         "HuisIdBSV": {
             "statistics": {
@@ -100,7 +100,7 @@
                 "null_count": 122880
             }
         },
-        "Zon-opwekMomentaan": {
+        "ZonopwekMomentaan": {
             "statistics": {
                 "min": null,
                 "max": null,
@@ -243,28 +243,28 @@
         "ZonopwekBruto": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.9599821724",
+                "max": "0.9599958111",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-4.0541483295",
-                "max": "2.7664345278999996",
+                "min": "-4.022718794399999",
+                "max": "2.8303962727",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-2.9708987739",
-                "max": "0.9026652122",
+                "min": "-2.9245199476000003",
+                "max": "0.9188383903",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "-2.6977248384",
-                "max": "3.7401757729",
+                "min": "-2.6901983541",
+                "max": "3.6194586081999995",
                 "null_count": 0
             }
         },
@@ -422,10 +422,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruikDiff": {
+        "ZonopwekVerbruikDiff": {
             "statistics": {
                 "min": "0.0",
-                "max": "0.9999974988",
+                "max": "0.9999965405",
                 "null_count": 0
             }
         },
@@ -527,6 +527,13 @@
                 "null_count": 0
             }
         },
+        "ZonopwekTotaal": {
+            "statistics": {
+                "min": "0.0",
+                "max": "50542.493582683",
+                "null_count": 0
+            }
+        },
         "ElektriciteitsgebruikRadiator": {
             "statistics": {
                 "min": "0.0",
@@ -576,10 +583,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruik": {
+        "ZonopwekVerbruik": {
             "statistics": {
                 "min": "0.0",
-                "max": "52599.5135293964",
+                "max": "52487.6310825837",
                 "null_count": 0
             }
         },

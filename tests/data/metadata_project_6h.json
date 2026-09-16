@@ -93,7 +93,7 @@
                 "null_count": 2920
             }
         },
-        "Zon-opwekMomentaan": {
+        "ZonopwekMomentaan": {
             "statistics": {
                 "min": null,
                 "max": null,
@@ -235,29 +235,29 @@
         },
         "ZonopwekBruto": {
             "statistics": {
-                "min": "30.796923572419995",
-                "max": "38.080438708180004",
+                "min": "30.85482206562",
+                "max": "38.20049907317999",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-60.890037111740014",
-                "max": "-32.81785877136",
+                "min": "-61.52181514996499",
+                "max": "-33.97775976449999",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-83.20279450524",
-                "max": "-63.72893353886",
+                "min": "-81.58046159264",
+                "max": "-64.8694085256",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "23.431451997160003",
-                "max": "46.59267210848001",
+                "min": "22.647534792980004",
+                "max": "46.55725029436",
                 "null_count": 0
             }
         },
@@ -415,10 +415,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruikDiff": {
+        "ZonopwekVerbruikDiff": {
             "statistics": {
-                "min": "32.54781901712",
-                "max": "39.852126672340006",
+                "min": "32.37516975754",
+                "max": "40.00608013334001",
                 "null_count": 0
             }
         },
@@ -569,10 +569,10 @@
                 "null_count": 0
             }
         },
-        "Zon-opwekVerbruik": {
+        "ZonopwekVerbruik": {
             "statistics": {
-                "min": "35.77438852520001",
-                "max": "52579.56404830731",
+                "min": "33.595987675900005",
+                "max": "52584.95518511257",
                 "null_count": 0
             }
         },

@@ -229,6 +229,46 @@ def test_empty_project_edge_cases():
     )
 
 
+def test_flagged_values_excluded_in_both_paths():
+    """Values the mapping stage flagged as not measured at their slot are kept
+    out of the average by both paths.
+
+    Household 2's readings are flagged FROZEN_SPAN, so the average must be
+    household 1's level alone. The values are well inside any threshold, which
+    is why the flag is what excludes them.
+    """
+    from etdmap.flags import MappingFlag, flag_column
+
+    dates = pd.date_range("2024-06-01", periods=3, freq="5min")
+    mini = pd.DataFrame({
+        "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
+        "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
+        "ReadingDate": list(dates) * 2,
+        "TestDiff": pd.array([3.0, 3.0, 3.0, 9.0, 9.0, 9.0], dtype="Float64"),
+        flag_column("TestDiff"): pd.array(
+            [0, 0, 0] + [MappingFlag.FROZEN_SPAN.value] * 3, dtype="Int64"
+        ),
+    })
+    mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
+
+    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["TestDiff"])
+    result_ibis = calculate_average_diff_ibis(
+        ibis.memtable(mini), "ProjectIdBSV", ["TestDiff"]
+    )
+
+    for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
+        assert result["TestDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
+        avg = result["TestDiff"]["avg_diff"]["TestDiff_avg"].astype(float)
+        assert (avg == 3.0).all(), f"{label}: flagged values shaped the average"
+
+    sort_avg = ["ProjectIdBSV", "ReadingDate"]
+    pd.testing.assert_frame_equal(
+        result_pd["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        result_ibis["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        check_like=True, rtol=1e-5,
+    )
+
+
 def test_all_null_diffs_edge_case():
     """When all diff values for a project are pd.NA, behaviour mirrors all-zeros."""
     dates = pd.date_range("2024-06-01", periods=2, freq="5min")

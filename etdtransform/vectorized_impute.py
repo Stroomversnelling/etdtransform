@@ -1,10 +1,22 @@
 import logging
+import os
 from enum import IntFlag, auto
 
 import numpy as np
 import pandas as pd
-from etdmap.flags import MappingFlag, bound_flags
+from etdmap.flags import (
+    MappingFlag,
+    bound_flags,
+    frozen_spans,
+    scale_bound_to_cadence,
+)
 from etdmap.record_validators import thresholds_dict
+
+from etdtransform.bounds import (
+    column_bound,
+    fill_bound,
+    load_column_cadence,
+)
 
 __all__ = [
     'ImputeType',
@@ -62,6 +74,7 @@ def apply_thresholds(
     avg_col,
     impute_type_col,
     is_imputed_col,
+    detection_bound=None,
 ):
     """
     Apply thresholds to difference column and update imputation flags.
@@ -86,6 +99,12 @@ def apply_thresholds(
         The name of the column indicating the imputation type.
     is_imputed_col : str
         The name of the column indicating whether a value is imputed.
+    detection_bound : float, pandas.Series or None, optional
+        The threshold used to decide whether a value is implausible, when it
+        differs from *upper_bound*. A filled value is judged against the grid
+        threshold while a delivered value is judged against the column
+        threshold, so the two differ wherever a column does not report at the
+        grid cadence. Defaults to *upper_bound*.
 
     Returns
     -------
@@ -98,15 +117,67 @@ def apply_thresholds(
     Values outside the thresholds are replaced with average values and marked
     as imputed.
     """
+    # Physical outliers are judged at the column threshold: a delivered reading
+    # is implausible only relative to the interval it covers.
     mask = (
-        bound_flags(df[diff_col], lower_bound, upper_bound)
+        bound_flags(
+            df[diff_col],
+            lower_bound,
+            upper_bound if detection_bound is None else detection_bound,
+        )
         != MappingFlag.NONE.value
     )
+
+    # A catch-up is consumption that accumulated over the preceding frozen span
+    # and arrived in one reading. The cumulative variable accounts for it, so
+    # replacing it with the project average would discard that volume. Its
+    # timing is corrected at the mapping stage, where span treatment spreads it
+    # across the freeze and leaves an ordinary gap for the redistribution below.
+    catchup = _catchup_positions(
+        df, diff_col, upper_bound if detection_bound is None else detection_bound
+    )
+    if catchup.any():
+        logging.info(
+            f"Keeping {int(catchup.sum())} catch-up value(s) in {diff_col}: "
+            f"above the bound, but the cumulative variable accounts for them."
+        )
+        mask = mask & ~catchup
+
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
     df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE.value) | ImputeType.THRESHOLD_ADJUSTED.value
 
     return df
+
+
+def _catchup_positions(df, diff_col, upper_bound) -> pd.Series:
+    """
+    Rows where an over-bound value is the catch-up of a frozen span.
+
+    Uses the mapping-stage detector rather than a second implementation of it:
+    a value is only spared if a flat run of non-advancing readings sits directly
+    before it, which is what distinguishes accumulation arriving late from a
+    reading that is simply wrong.
+
+    Detection runs per household, since a span is a property of one household's
+    own history.
+    """
+    found = pd.Series(False, index=df.index)
+    if pd.isna(upper_bound) or df.empty:
+        return found
+
+    group_column = "HuisIdBSV" if "HuisIdBSV" in df.columns else None
+    groups = (
+        df.groupby(group_column, sort=False) if group_column else [(None, df)]
+    )
+    for _, group in groups:
+        spans = frozen_spans(
+            group[diff_col].reset_index(drop=True), upper_bound=upper_bound
+        )
+        if not spans.empty:
+            found.loc[group.index[spans["catchup_position"].astype(int)]] = True
+
+    return found
 
 
 def impute_and_normalize(
@@ -164,6 +235,9 @@ def impute_and_normalize(
     """
 
     logging.info("Starting to impute cumulative column diffs (vectorized).")
+
+    # Read once per call: the bound for every column is scaled from this.
+    _cadence = load_column_cadence()
 
     def calculate_imputation_gap_stats(group, cum_col, diff_col, impute_type_col):
         diff_column_total = group[diff_col].sum()
@@ -224,7 +298,10 @@ def impute_and_normalize(
             df = apply_thresholds(
                 df,
                 lower_bound=thresholds_dict[diff_col]["Min"],
-                upper_bound=thresholds_dict[diff_col]["Max"],
+                upper_bound=fill_bound(
+                    df, diff_col, _cadence, is_imputed_col=is_imputed_col
+                ),
+                detection_bound=column_bound(df, diff_col, _cadence),
                 diff_col=diff_col,
                 avg_col=avg_col,
                 impute_type_col=impute_type_col,
@@ -247,6 +324,7 @@ def impute_and_normalize(
                 avg_col=avg_col,
                 impute_type_col=impute_type_col,
                 is_imputed_col=is_imputed_col,
+                cadence=_cadence,
             )
 
             remaining_na = (df[diff_col].isna() & df[avg_col].notna()).sum()
@@ -459,6 +537,7 @@ def process_imputation_vectorized(
     avg_col,
     impute_type_col,
     is_imputed_col,
+    cadence=None,
 ):
     """
     Perform vectorized imputation on the DataFrame.
@@ -480,6 +559,11 @@ def process_imputation_vectorized(
         The name of the column to store imputation type.
     is_imputed_col : str
         The name of the column to indicate whether a value is imputed.
+    cadence : pandas.DataFrame, optional
+        The per-column cadence table from
+        :func:`etdtransform.bounds.load_column_cadence`, used to judge a
+        delivered value against the interval it covers. Without it every value
+        is judged against the grid threshold.
 
     Returns
     -------
@@ -723,12 +807,47 @@ def process_imputation_vectorized(
             wo_gap_jump_mask & df["end_cum_value"].isna() & df["prev_cum_value"].isna()
         )
         if nogpjump_no_start_no_end_value_mask.any():
-            logging.error(f"No next value or last value for a gap. Whole column empty?")
             house_no_diff_values = (
                 df.groupby("HuisIdBSV")[diff_col].transform("count") == 0
             )
 
-            # raise Exception(f'No next value or last value for a gap.')
+            # Neither end of the gap has a cumulative value. Whether that is a
+            # fault depends on whether the interval column has anything either.
+            #
+            # Nothing in either: the variable is absent for this household and
+            # there is nothing to impute from.
+            #
+            # Intervals but no cumulative values: the variable is delivered as
+            # intervals only, which is a supported case rather than an error.
+            # The project average fills the gap directly, since there is no
+            # cumulative reading to scale it against -- which is also why the
+            # gap-jump paths above cannot reach this case.
+            _interval_only = (
+                nogpjump_no_start_no_end_value_mask
+                & ~house_no_diff_values
+                & df["impute_values"].notna()
+            )
+            if _interval_only.any():
+                logging.info(
+                    f"{diff_col}: filling {int(_interval_only.sum())} interval(s) "
+                    f"from the project average -- the variable is delivered as "
+                    f"intervals only for this household."
+                )
+                df.loc[_interval_only, is_imputed_col] = True
+                df.loc[_interval_only, diff_col] = df.loc[
+                    _interval_only, "impute_values"
+                ]
+                df.loc[_interval_only, impute_type_col] = (
+                    ImputeType.NO_CUMULATIVE_VALUE.value
+                )
+
+            _truly_empty = nogpjump_no_start_no_end_value_mask & house_no_diff_values
+            if _truly_empty.any():
+                logging.error(
+                    f"{diff_col}: no cumulative and no interval values for "
+                    f"{int(df.loc[_truly_empty, 'HuisIdBSV'].nunique())} household(s). "
+                    f"Nothing to impute from."
+                )
 
         ### has end value but no start value for gap
         nogpjump_has_end_value_mask = (
@@ -784,7 +903,10 @@ def process_imputation_vectorized(
     df = apply_thresholds(
         df,
         lower_bound=thresholds_dict[diff_col]["Min"],
-        upper_bound=thresholds_dict[diff_col]["Max"],
+        upper_bound=fill_bound(
+            df, diff_col, cadence, is_imputed_col=is_imputed_col
+        ),
+        detection_bound=column_bound(df, diff_col, cadence),
         diff_col=diff_col,
         avg_col=avg_col,
         impute_type_col=impute_type_col,
@@ -833,6 +955,10 @@ class ImputeType(IntFlag):
         Represents imputation when end value is positive but there is no start value. Fills with averages.
     NO_END_VALUE : int
         Represents imputation when there is no end value. Fills with averages.
+    NO_CUMULATIVE_VALUE : int
+        Represents imputation of a variable delivered as intervals only, where
+        neither end of the gap has a cumulative value to scale against. Fills
+        with averages.
     THRESHOLD_ADJUSTED : int
         Represents values adjusted due to threshold violations. This happens after imputation and could be triggered by imputed values.
 
@@ -851,4 +977,5 @@ class ImputeType(IntFlag):
     ZERO_END_VALUE = auto()
     POSITIVE_END_VALUE = auto()
     NO_END_VALUE = auto()
+    NO_CUMULATIVE_VALUE = auto()
     THRESHOLD_ADJUSTED = auto()

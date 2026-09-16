@@ -6,7 +6,12 @@ from typing import Optional
 import ibis
 import numpy as np
 import pandas as pd
-from etdmap.data_model import cumulative_columns, get_aggregation_config
+from etdmap.data_model import (
+    cumulative_column,
+    cumulative_columns,
+    get_aggregation_config,
+    interval_column,
+)
 from etdmap.index_helpers import read_index
 
 import etdtransform
@@ -407,15 +412,20 @@ def reconstruct_cumulative_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame
 
     For each col in cols:
       - col + "Original"  = original cumulative value (saved for audit)
-      - col               = cumsum of col + "Diff" per household (rebuilt)
+      - col               = cumsum of its interval column per household (rebuilt)
       - col + "Check"     = per-household diff of (rebuilt - original)
+
+    The interval column is the one the data model links to the cumulative
+    variable, which is not always its name plus "Diff".
 
     Data must be sorted by HuisIdBSV then ReadingDate before calling this.
     Mutates df in-place and returns it.
     """
     for col in cols:
         df[col + "Original"] = df[col]
-        df[col] = df.groupby("HuisIdBSV", sort=False)[col + "Diff"].cumsum()
+        df[col] = (
+            df.groupby("HuisIdBSV", sort=False)[interval_column(col)].cumsum()
+        )
         df[col + "Check"] = (
             (df[col] - df[col + "Original"]).groupby(df["HuisIdBSV"]).diff()
         )
@@ -448,7 +458,7 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
     first_pass = {}
     for col in cols:
         first_pass[col + "Original"] = tbl[col]
-        first_pass[col] = tbl[col + "Diff"].sum().over(win_cum)
+        first_pass[col] = tbl[interval_column(col)].sum().over(win_cum)
     tbl = tbl.mutate(**first_pass)
 
     # Pass 2: all check_col computations in one mutate().
@@ -534,7 +544,10 @@ def impute_hh_data_5min(
         optimized=optimized,
     )
 
-    diff_columns = [col + "Diff" for col in cum_cols if col + "Diff" in df.columns]
+    diff_columns = [
+        interval_column(col) for col in cum_cols
+        if interval_column(col) in df.columns
+    ]
 
     logging.info("Averaging all diffs by project and reading date.")
 
@@ -697,7 +710,7 @@ def _finalize_impute_outputs(
 
     # Aggregated diff via DuckDB on the finished output -- no pandas RAM
     diff_cols_present = [
-        c for c in [f"{col}Diff" for col in cum_cols]
+        c for c in [interval_column(col) for col in cum_cols]
         if c in imputed_schema_names
     ]
     if diff_cols_present:
@@ -739,7 +752,9 @@ def _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound):
 
     # Rebuild cumulative columns from imputed Diff columns per household.
     # chunk_df is already sorted by sort_for_impute, so cumsum is correct.
-    cols_to_reconstruct = [c for c in cum_cols if f"{c}Diff" in chunk_df.columns]
+    cols_to_reconstruct = [
+        c for c in cum_cols if interval_column(c) in chunk_df.columns
+    ]
     chunk_df = reconstruct_cumulative_columns(chunk_df, cols_to_reconstruct)
     return chunk_df, gap_stats_chunk
 
@@ -934,7 +949,7 @@ def impute_hh_data_5min_chunked(
     # household_imputed.parquet so downstream steps (e.g. add_calculated_columns) see
     # the same full column set as the pandas full-load path.
     _schema_cols = set(pq.read_schema(source_path).names)
-    diff_cols = [f"{col}Diff" for col in cum_cols]
+    diff_cols = [interval_column(col) for col in cum_cols]
     impute_cols = set(
         c for c in ["HuisIdBSV", "ProjectIdBSV", "ReadingDate"] + list(cum_cols) + diff_cols
         if c in _schema_cols
@@ -1863,8 +1878,8 @@ def resample_hh_data_duckdb(
         )
 
     # Diff columns whose cumulative counterpart should be rebuilt.
-    diff_cols = [col for col in active_config if col.endswith("Diff")]
-    cumul_cols = [col[:-4] for col in diff_cols]  # strip "Diff" suffix
+    diff_cols = [col for col in active_config if cumulative_column(col)]
+    cumul_cols = [cumulative_column(col) for col in diff_cols]
 
     # The batch id rides along when the source carries it (hive shards);
     # grouping by it does not change the grain while households are 1:1.
@@ -2344,7 +2359,7 @@ def aggregate_diff_cumsum(df, column, group_column, size, combined_results=None)
     -----
     This function calculates the cumulative sum of differences for the specified column.
     """
-    diff_column = column + "Diff"
+    diff_column = interval_column(column)
     logging.info(
         f"Aggregate cumsum of diff column: {group_column} / {column} / {diff_column}",
     )
