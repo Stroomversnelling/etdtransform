@@ -43,8 +43,13 @@ import logging
 import os
 
 import pandas as pd
-from etdmap.data_model import cumulative_column, thresholds_dict
-from etdmap.flags import scale_bound_to_cadence
+from etdmap.data_model import (
+    cadence_lookup_names,
+    cumulative_column,
+    scale_bounds,
+    thresholds_dict,
+)
+from etdmap.flags import MappingFlag, flag_column
 from etdmap.index_helpers import DEFAULT_GRID_MINUTES, frequency_to_minutes
 
 
@@ -129,18 +134,6 @@ def dataset_grid_minutes(mapped_folder_path=None, default=DEFAULT_GRID_MINUTES):
     return float(minutes[0])
 
 
-def _cadence_names(diff_col):
-    """The names to look *diff_col* up under in the cadence table.
-
-    Cadence is measured on the columns as delivered. An interval column derived
-    during the pipeline is not there under its own name, so its cumulative
-    variable is used instead. A delivered interval column is found under its own
-    name and has no cumulative counterpart to fall back to.
-    """
-    cumulative = cumulative_column(diff_col)
-    return [diff_col] if cumulative is None else [diff_col, cumulative]
-
-
 def cadence_minutes_by_household(diff_col, cadence) -> dict:
     """
     The interval each household's reading of *diff_col* covers, in minutes.
@@ -151,7 +144,7 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
     if cadence is None or cadence.empty:
         return {}
 
-    rows = cadence[cadence["column"].isin(_cadence_names(diff_col))]
+    rows = cadence[cadence["column"].isin(cadence_lookup_names(diff_col))]
     return {
         int(r.HuisIdBSV): float(r.cadence_minutes)
         for r in rows.itertuples()
@@ -177,14 +170,12 @@ def column_bound_by_household(diff_col, cadence, bound_key="Max") -> dict:
     threshold, which :func:`grid_bound` returns.
     """
     declared = thresholds_dict.get(diff_col, {})
-    bound = declared.get(bound_key, pd.NA)
-    if pd.isna(bound):
+    index = 0 if bound_key == "Min" else 1
+    if pd.isna(scale_bounds(declared)[index]):
         return {}
 
     return {
-        household: scale_bound_to_cadence(
-            bound, declared.get("ThresholdType"), cadence_minutes
-        )
+        household: scale_bounds(declared, cadence_minutes)[index]
         for household, cadence_minutes in cadence_minutes_by_household(
             diff_col, cadence
         ).items()
@@ -274,174 +265,155 @@ def fill_bound(df, diff_col, cadence, is_imputed_col=None, bound_key="Max"):
         return scaled.mask(df[is_imputed_col].fillna(False).astype(bool), declared)
     return scaled
 
-
-def shape_and_level_average(
-    df,
-    diff_col,
-    project_id_column,
-    cadence,
-    grid_minutes=5,
-):
+def usable_readings(df, column):
     """
-    Compute a project average across households reporting at different cadences.
+    Rows where *column* holds a measurement.
 
-    The average is derived in two parts:
+    A value is a measurement when it is present and carries no finding that
+    disqualifies it: written rather than read, read for a different interval,
+    condemned by a cumulative fault, or outside what the variable may hold.
+    ``MappingFlag.NOT_A_MEASUREMENT`` is that one test.
 
-    Shape
-        The distribution of consumption across the day, taken from households
-        reporting at the grid cadence. A household reporting hourly records
-        twelve grid intervals in one reading and cannot distinguish between
-        them, so it carries no information about shape.
+    A column with no findings column has nothing recorded against it, so every
+    present value counts.
+    """
+    if column is None or column not in df.columns:
+        return pd.Series(False, index=df.index)
 
-    Level
-        Mean consumption per grid interval, taken from all households. Each
-        reading is divided by the number of grid intervals it covers. For a
-        cumulative variable this conversion is exact, since the reading is the
-        total over its interval.
+    usable = df[column].notna()
+    findings = flag_column(column)
+    if findings in df.columns:
+        clean = (
+            df[findings].fillna(0) & MappingFlag.NOT_A_MEASUREMENT.value
+        ) == 0
+        usable = usable & clean
+    return usable
 
-    The shape is then rescaled by the ratio of the level across all households
-    to the level across the grid-cadence households alone. Where every household
-    reports at the grid cadence the two levels are equal and the result is the
-    arithmetic mean.
 
-    A project with no grid-cadence household has no shape to scale. Its rows
-    come from the mean of the per-grid-interval rates instead, per project, so
-    that it still receives an average while the other projects keep their shape.
+def resample_to_grid(df, diff_col, cadence, grid_minutes=DEFAULT_GRID_MINUTES):
+    """
+    Spread each household's readings of *diff_col* evenly over the grid.
+
+    Two consecutive usable readings bound a window. Its volume is the
+    consumption delivered over it, and its length in grid slots is the number of
+    rows between them -- ``ensure_intervals`` gives one row per slot, so the row
+    count is the slot count. The volume is divided by that length and written to
+    each of the window's slots, ending at the later reading: an interval value at
+    ``T`` covers ``(T_prev, T]``, so a fifteen-minute reading at 00:15 fills
+    00:05, 00:10 and 00:15.
+
+    A household reporting at the grid cadence has one-slot windows, so its
+    output is its interval column unchanged.
+
+    The cumulative column supplies the volume wherever it holds usable readings,
+    since it is the authoritative form; the interval column supplies it only
+    where the cumulative does not. A window longer than one reporting interval
+    is a meter outage rather than a reading interval and contributes nothing --
+    distributing measured consumption across a gap is imputation's work, not the
+    average's.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Household readings. Must contain ``HuisIdBSV``, ``ReadingDate``,
-        *project_id_column* and *diff_col*.
+        Household readings, sorted by household then ReadingDate. Must contain
+        ``HuisIdBSV`` and *diff_col*.
     diff_col : str
-        Interval column to average.
-    project_id_column : str
-        Column identifying the project.
+        Interval column to resample.
     cadence : pd.DataFrame
         Cadence table from :func:`load_column_cadence`.
-    grid_minutes : int
+    grid_minutes : float
         Grid interval in minutes.
 
     Returns
     -------
-    tuple of (pd.DataFrame, dict)
-        The average, with columns *project_id_column*, ``ReadingDate`` and
-        ``<diff_col>_avg``; and a dict reporting how many households
-        contributed to each part. ``fallback`` is True when at least one
-        project had no grid-cadence household.
+    pd.Series
+        Float64, aligned to *df*, holding the resampled value at every slot a
+        window covers and pd.NA elsewhere.
     """
-    minutes = _cadence_minutes_per_row(df, diff_col, cadence, grid_minutes)
+    households = df["HuisIdBSV"]
+    position = df.groupby(households).cumcount()
 
-    at_grid = minutes == grid_minutes
-    intervals = minutes / grid_minutes
+    # The cumulative variable is authoritative, so it is the source wherever it
+    # has anything to say. Deciding per household rather than per row keeps a
+    # single column behind every window.
+    cumulative = cumulative_column(diff_col)
+    from_cumulative = usable_readings(df, cumulative)
+    cumulative_households = set(households[from_cumulative].unique())
+    on_cumulative = households.isin(cumulative_households)
 
-    # Level: every household, converted to a per-grid-interval rate.
-    rate = df[diff_col] / intervals
-    level_all = rate.groupby(df[project_id_column]).mean()
+    usable = from_cumulative.where(on_cumulative, usable_readings(df, diff_col))
+    if not usable.any():
+        return pd.Series(pd.NA, index=df.index, dtype="Float64")
 
-    # Shape: grid-cadence households only.
-    shape = (
-        df[at_grid]
-        .groupby([project_id_column, "ReadingDate"])[diff_col]
-        .mean()
-        .rename("shape")
-        .reset_index()
-    )
-    level_grid = (
-        rate[at_grid].groupby(df.loc[at_grid, project_id_column]).mean()
-    )
+    if cumulative and cumulative in df.columns:
+        source = df[cumulative].where(on_cumulative, df[diff_col])
+    else:
+        source = df[diff_col]
 
-    # A project with no grid-cadence household has no shape to scale, and must
-    # not simply drop out of the result. Its average is the mean of the
-    # per-grid-interval rates instead.
-    without_shape = set(df[project_id_column].dropna().unique()) - set(
-        shape[project_id_column]
-    )
-    fallback = None
-    if without_shape:
-        rows = df[df[project_id_column].isin(without_shape)]
-        fallback = (
-            rows.assign(_rate=rate[rows.index])
-            .groupby([project_id_column, "ReadingDate"])["_rate"]
-            .mean()
-            .rename(f"{diff_col}_avg")
-            .reset_index()
-        )
+    readings = pd.DataFrame({
+        "household": households[usable],
+        "position": position[usable],
+        "value": source[usable].astype("Float64"),
+        "cumulative": on_cumulative[usable],
+    })
+    by_household = readings.groupby("household", sort=False)
 
-    avg = scale_shape_to_level(
-        shape, level_all, level_grid, project_id_column, diff_col, fallback=fallback
-    )
-    return avg, {
-        "shape_households": int(df.loc[at_grid, "HuisIdBSV"].nunique()),
-        "level_households": int(df["HuisIdBSV"].nunique()),
-        "fallback": bool(without_shape),
-    }
+    minutes = cadence_minutes_by_household(diff_col, cadence)
+    slots = (
+        readings["household"].map(minutes).astype("Float64") / float(grid_minutes)
+    ).fillna(1.0)
+
+    # A cumulative reading states a running total, so a window's volume is the
+    # rise since the previous reading and its length is the distance back to it.
+    # A delivered interval value already is the volume for its own window, and
+    # that window is its cadence however long ago the last reading arrived -- so
+    # it needs no predecessor, and the first reading of such a column counts.
+    rise = by_household["value"].diff()
+    gap = by_household["position"].diff().astype("Float64")
+
+    on_cum = readings["cumulative"]
+    volume = rise.where(on_cum, readings["value"])
+    length = gap.where(on_cum, slots)
+
+    # A cumulative window longer than one reporting interval spans a meter
+    # outage. An interval-sourced window is its cadence by construction and
+    # cannot span one.
+    usable_window = (length.notna() & (length > 0)).fillna(False)
+    usable_window &= (~on_cum | (gap <= slots)).fillna(False)
+
+    per_slot = (volume / length).where(usable_window)
+
+    # Each window is written onto the slots it covers, counting back from the
+    # reading that ends it. Expanding rather than carrying backwards keeps
+    # windows that do not touch -- an interval-sourced column's windows are its
+    # cadence and may leave slots uncovered between them.
+    placed = pd.Series(pd.NA, index=df.index, dtype="Float64")
+    keep = per_slot.notna()
+    if not keep.any():
+        return placed
+
+    spans = length[keep].astype("Int64").astype(int)
+    row = pd.Series(range(len(df)), index=df.index)
+    ends = row[readings.index][keep]
+
+    covered = ends.repeat(spans).to_numpy() - _offsets_within(spans)
+    values = per_slot[keep].repeat(spans).to_numpy()
+
+    inside = covered >= 0
+    placed.iloc[covered[inside]] = values[inside]
+    return placed
 
 
-def scale_shape_to_level(
-    shape, level_all, level_grid, project_id_column, diff_col, fallback=None
-):
+def _offsets_within(spans):
+    """0, 1, ... n-1 for each span in *spans*, concatenated.
+
+    Index arithmetic rather than a data operation, so numpy is the right tool:
+    the values it produces are row offsets, never measurements.
     """
-    Rescale a grid-cadence shape to the level measured across all households.
+    import numpy as np
 
-    Both levels are mean consumption per grid interval, computed the same way,
-    so they are equal when every household reports at the grid cadence and the
-    scale is then exactly 1.
+    lengths = spans.to_numpy()
+    total = int(lengths.sum())
+    starts = np.repeat(np.cumsum(lengths) - lengths, lengths)
+    return np.arange(total) - starts
 
-    Comparing the shape's own mean against the level instead would also rescale
-    for panel imbalance: a household with a gap contributes to some slots and
-    not others, which shifts the mean of the per-slot means independently of
-    cadence.
-
-    Parameters
-    ----------
-    shape : pd.DataFrame
-        One row per (project, ReadingDate), with the mean over grid-cadence
-        households in a column named ``shape``.
-    level_all : pd.Series
-        Mean per-grid-interval consumption per project, over all households.
-    level_grid : pd.Series
-        The same over grid-cadence households only. Indexed by project, as
-        *level_all* is.
-    project_id_column : str
-        Column identifying the project.
-    diff_col : str
-        Interval column being averaged.
-    fallback : pd.DataFrame, optional
-        Averages for the projects that have no shape, already in the result's
-        columns. Appended as they are.
-
-    Returns
-    -------
-    pd.DataFrame
-        Columns *project_id_column*, ``ReadingDate`` and ``<diff_col>_avg``.
-    """
-    scale_by_project = (level_all / level_grid).where(level_grid > 0, 1.0)
-    scale = shape[project_id_column].map(scale_by_project).fillna(1.0)
-
-    out = shape.copy()
-    out[f"{diff_col}_avg"] = out["shape"] * scale
-    out = out[[project_id_column, "ReadingDate", f"{diff_col}_avg"]]
-
-    if fallback is None or fallback.empty:
-        return out
-    if out.empty:
-        return fallback.reset_index(drop=True)
-    return pd.concat([out, fallback], ignore_index=True).sort_values(
-        [project_id_column, "ReadingDate"]
-    ).reset_index(drop=True)
-
-
-def _cadence_minutes_per_row(df, diff_col, cadence, grid_minutes):
-    """Return the interval each row's reading covers, in minutes, per household.
-
-    Households absent from the cadence table are assumed to report at the grid
-    cadence.
-    """
-    if cadence is None or cadence.empty or "HuisIdBSV" not in df.columns:
-        return pd.Series(float(grid_minutes), index=df.index)
-
-    per_household = cadence_minutes_by_household(diff_col, cadence)
-    return (
-        df["HuisIdBSV"].map(per_household).astype("Float64").fillna(float(grid_minutes))
-    )

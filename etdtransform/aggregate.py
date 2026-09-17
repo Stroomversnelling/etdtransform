@@ -2250,7 +2250,7 @@ def aggregate_by_columns(df, group_column, size):
         if (
             method == "diff_cumsum"
             and not first
-            and var + "Diff" in combined_results.columns
+            and interval_column(var) in combined_results.columns
         ):
             result = aggregate_diff_cumsum(
                 df,
@@ -2311,7 +2311,7 @@ def aggregate_variable(df_grouped, var, config, group_column, size):
     columns_to_select = ["ReadingDate", *group_column, var]
 
     if method == "diff_cumsum":
-        columns_to_select = [*columns_to_select, var + "Diff"]
+        columns_to_select = [*columns_to_select, interval_column(var)]
 
     # if validator_column:
     #     columns_to_copy.append(validator_column)

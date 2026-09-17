@@ -10,6 +10,7 @@ from etdmap.flags import (
     frozen_spans,
     scale_bound_to_cadence,
 )
+from etdmap.data_model import interval_column
 from etdmap.record_validators import thresholds_dict
 
 from etdtransform.bounds import (
@@ -268,7 +269,7 @@ def impute_and_normalize(
 
         temp_cols = ["gap_length", "cumulative_value_group"]
 
-        diff_col = f"{cum_col}Diff"
+        diff_col = interval_column(cum_col)
         old_diff_col = f"{cum_col}OldDiff"
         is_imputed_col = f"{diff_col}_is_imputed"
         impute_type_col = f"{diff_col}_impute_type"
@@ -327,11 +328,22 @@ def impute_and_normalize(
                 cadence=_cadence,
             )
 
-            remaining_na = (df[diff_col].isna() & df[avg_col].notna()).sum()
+            # Every cell inside a gap should carry a value once imputation has
+            # run. Testing only the cells that had an average made the guard
+            # blind to the ones it needed to report: those are exactly the
+            # cells the average was missing for.
+            inside_a_gap = df["cumulative_value_group"].notna()
+            remaining_na = int((df[diff_col].isna() & inside_a_gap).sum())
 
             if remaining_na > 0:
+                without_average = int(
+                    (df[diff_col].isna() & inside_a_gap & df[avg_col].isna()).sum()
+                )
                 logging.error(
-                    f"{remaining_na} missing values still exist in column {diff_col} where avg was available. Check masks and imputation logic.",
+                    f"{remaining_na} cell(s) inside a gap are still missing in "
+                    f"column {diff_col} after imputation, {without_average} of "
+                    f"them where no project average was available. Check masks "
+                    f"and imputation logic.",
                 )
 
         logging.info(f"Calculating {diff_col} imputation gap stats")
@@ -655,6 +667,29 @@ def process_imputation_vectorized(
             "impute_values"
         ].transform("sum")
 
+        # How many cells of the gap the average speaks for. This is what the
+        # fill routes on: whether the average is *there*, not how large it sums
+        # to. A gap whose average is partly missing is a different case from one
+        # with no average at all, and summing cannot tell them apart -- an
+        # all-missing group sums to 0.0 because transform("sum") skips pd.NA.
+        df["impute_present"] = df["gap_length"] - df["impute_na"]
+
+        # Where the average is missing for some cells of a gap but not all, those
+        # cells take the gap's own mean. The shape is kept where it is known and
+        # goes flat where it is not, and the fill still conserves the measured
+        # jump. Both terms come from reductions already computed above, so this
+        # costs no additional pass.
+        partial = (df["impute_na"] > 0) & (df["impute_present"] > 0)
+        gap_mean = df["impute_jump"] / df["impute_present"]
+        df["impute_values"] = df["impute_values"].where(
+            ~(partial & df["avg_na"]), gap_mean
+        )
+        # The gap's total moves with the substitution, so recompute it rather
+        # than scaling against a sum that no longer matches impute_values.
+        df["impute_jump"] = df["impute_jump"].where(
+            ~partial, df["impute_jump"] * df["gap_length"] / df["impute_present"]
+        )
+
         # calculate cumulative total for household for scaling the averages (optional)
         df[is_imputed_col] = False
         df[impute_type_col] = pd.Series(pd.NA, dtype="Int64", index=df.index)
@@ -757,10 +792,14 @@ def process_imputation_vectorized(
         df.loc[flat_gap_jump_mask, diff_col] = 0
         df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEAR_ZERO_GAP_JUMP.value
 
-        # positive gap jump and impute jump near zero - linear fill
-        # round(gap_jump / gap_length,10)
+        # No average for any cell of the gap, or an average that is present but
+        # everywhere zero: there is no shape to distribute by, so the jump is
+        # spread evenly. Routing on presence rather than on the summed average
+        # is what separates this from the partly-missing case -- an all-missing
+        # group sums to 0.0, so a magnitude test cannot tell them apart.
+        no_shape = (df["impute_present"] <= 0) | (df["impute_jump"] < 1e-8)
         positive_gap_linear_mask = (
-            has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & (df["impute_jump"] < 1e-8)
+            has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & no_shape
         )
         df.loc[positive_gap_linear_mask, is_imputed_col] = True
         df.loc[positive_gap_linear_mask, diff_col] = round(
@@ -769,9 +808,12 @@ def process_imputation_vectorized(
         )
         df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL.value
 
-        # positive gap jump and positive impute jump - scaled impute value fill (only when avg available)
+        # A shape exists for at least one cell of the gap, so the jump is
+        # distributed by it. Cells whose average was missing carry the gap's own
+        # mean by this point, so every cell of the gap is filled and none is
+        # silently skipped.
         positive_gap_scaled_mask = (
-            has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & (df["impute_jump"] >= 1e-8)
+            has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & ~no_shape
         )
         _can_scaled = positive_gap_scaled_mask & df["impute_values"].notna()
         df.loc[_can_scaled, is_imputed_col] = True

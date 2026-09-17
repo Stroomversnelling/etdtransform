@@ -4,7 +4,11 @@ from math import floor, isclose, log10
 
 import numpy as np
 import pandas as pd
-from etdmap.data_model import thresholds_dict
+from etdmap.data_model import (
+    cumulative_column,
+    interval_column,
+    thresholds_dict,
+)
 
 from etdmap.flags import MappingFlag, flag_column
 
@@ -14,8 +18,7 @@ from etdtransform.bounds import (
     column_bound_by_household,
     dataset_grid_minutes,
     load_column_cadence,
-    scale_shape_to_level,
-    shape_and_level_average,
+    resample_to_grid,
 )
 
 import etdtransform
@@ -24,7 +27,7 @@ from etdtransform.vectorized_impute import impute_and_normalize
 #: Findings that disqualify a value from shaping a project average: it was
 #: written by the pipeline rather than measured, or it was measured over a
 #: window rather than at the interval it sits on.
-_NOT_MEASURED_HERE = MappingFlag.INVENTED.value | MappingFlag.CATCHUP.value
+_NOT_MEASURED_HERE = MappingFlag.NOT_A_MEASUREMENT.value
 
 
 def calculate_average_diff(
@@ -72,8 +75,8 @@ def calculate_average_diff(
         - 'n_discarded': how many values were discarded for exceeding the
           column threshold
         - 'n_flagged': how many values were excluded as invented or mistimed
-        - 'shape_level': how many households contributed to the shape and to the
-          level, from :func:`etdtransform.bounds.shape_and_level_average`
+        - 'coverage': the share of slots the average has a value for
+        - 'duty': of those, the share carrying consumption
 
     Notes
     -----
@@ -148,9 +151,15 @@ def calculate_average_diff(
         households_to_include = household_max_with_bounds.loc[include_mask, "HuisIdBSV"]
 
         logging.info(f"Filtering the dataframe for {col}.")
+        # The cumulative variable supplies the volume where it has readings, so
+        # it travels with the interval column, as do both findings columns.
         wanted = ["HuisIdBSV", project_id_column, "ReadingDate", col]
-        if flag_column(col) in df.columns:
-            wanted.append(flag_column(col))
+        for extra in (cumulative_column(col), flag_column(col)):
+            if extra and extra in df.columns and extra not in wanted:
+                wanted.append(extra)
+        cum_findings = flag_column(cumulative_column(col) or "")
+        if cum_findings in df.columns and cum_findings not in wanted:
+            wanted.append(cum_findings)
         df_filtered = df[wanted][df["HuisIdBSV"].isin(households_to_include)]
 
         logging.info(f"Checking for negative Diff values in {col}.")
@@ -215,15 +224,26 @@ def calculate_average_diff(
         # A household reporting coarser than the grid records how much was
         # consumed but not when within its reporting interval, so averaging its
         # readings in directly would place several grid intervals of consumption
-        # in one slot. shape_and_level_average takes the distribution across the
-        # day from the households reporting at the grid cadence and the level
-        # from all of them. Where every household reports at the grid cadence
-        # the result is the arithmetic mean.
-        avg_diff, shape_level = shape_and_level_average(
-            df_filtered, col, project_id_column, cadence,
-            grid_minutes=grid_minutes,
+        # in one slot. Resampling spreads each reading evenly over the slots it
+        # covers first, which makes every row a per-grid-interval rate and the
+        # average a plain mean over them. A household already at the grid
+        # cadence resamples to itself.
+        df_filtered = df_filtered.assign(
+            **{col: resample_to_grid(df_filtered, col, cadence, grid_minutes)}
         )
+        grouped = df_filtered.groupby([project_id_column, "ReadingDate"])[col]
+        avg_diff = grouped.mean().reset_index()
         avg_diff.columns = [project_id_column, "ReadingDate", f"{col}_avg"]
+
+        # coverage: slots the meters delivered anything for. duty: of those, the
+        # slots that carry consumption. Both are counts over the same grouping,
+        # so neither costs a pass.
+        present = avg_diff[f"{col}_avg"].notna()
+        coverage = float(present.mean()) if len(avg_diff) else 0.0
+        duty = (
+            float((avg_diff.loc[present, f"{col}_avg"] > 0).mean())
+            if int(present.sum()) else 0.0
+        )
         impute_na = avg_diff[col + "_avg"].isna().sum()
         if impute_na > 0:
             logging.error(
@@ -236,7 +256,8 @@ def calculate_average_diff(
             "household_max_with_bounds": household_max_with_bounds,
             "n_discarded": n_discarded,
             "n_flagged": n_flagged,
-            "shape_level": shape_level,
+            "coverage": coverage,
+            "duty": duty,
         }
 
     return avg_diff_dict
@@ -295,6 +316,36 @@ def calculate_average_diff_ibis(
     hh_max_agg = {f"{col}_household_max": tbl[col].cast("Float64").max() for col in diff_columns}
     household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
 
+    # Two properties of the frame rather than of any column, so they are counted
+    # once here instead of once per column inside the loop below. See
+    # docs/performance/PROFILING_GUIDANCE.md on per-column execute in a loop.
+    _total_slots = int(
+        tbl.select(project_id_column, "ReadingDate").distinct().count().execute()
+    )
+    _coarsest = (
+        max(cadence["cadence_minutes"].dropna())
+        if cadence is not None and not cadence.empty
+        else grid_minutes
+    )
+    _max_slots = max(1, int(round(float(_coarsest) / float(grid_minutes))))
+
+    # Every column's negative count in one aggregate rather than one filtered
+    # count per column inside the loop. A negative here means the mapping-stage
+    # corrections did not do their job, so this is an assertion, not a routine
+    # branch -- and an assertion should not cost a round trip per column.
+    _guard_agg = {
+        f"_neg_{i}": (tbl[c] < 0).sum() for i, c in enumerate(diff_columns)
+    }
+    # The flag exclusion count is a log line, so it must not cost a round trip
+    # per column either.
+    for i, c in enumerate(diff_columns):
+        findings = flag_column(c)
+        if findings in tbl.columns:
+            _guard_agg[f"_flagged_{i}"] = (
+                (tbl[findings].fill_null(0) & _NOT_MEASURED_HERE) != 0
+            ).sum()
+    _guards = tbl.aggregate(**_guard_agg).execute().iloc[0].to_dict()
+
     avg_diff_dict = {}
 
     for col in diff_columns:
@@ -302,7 +353,8 @@ def calculate_average_diff_ibis(
         max_col = f"{col}_household_max"
         n_discarded = 0
         n_flagged = 0
-        shape_level = {"shape_households": 0, "level_households": 0, "fallback": False}
+        coverage = 0.0
+        duty = 0.0
 
         # 95th percentile of per-household max (near-zero excluded), doubled -> upper bound.
         # All projects appear in ub_tbl; projects with no qualifying households get NULL so
@@ -346,14 +398,7 @@ def calculate_average_diff_ibis(
             )
         else:
             # Check for negative values in filtered data (mirrors the pandas version's guard)
-            has_negative = (
-                tbl
-                .filter(tbl["HuisIdBSV"].isin(included_ids))
-                .filter(tbl[col] < 0)
-                .count()
-                .execute()
-            )
-            if has_negative > 0:
+            if (_guards.get(f"_neg_{diff_columns.index(col)}") or 0) > 0:
                 raise ValueError("Negative Diff values found")
 
             included = tbl.filter(tbl["HuisIdBSV"].isin(included_ids))
@@ -377,7 +422,9 @@ def calculate_average_diff_ibis(
                 not_measured_here = (
                     included[findings].fill_null(0) & _NOT_MEASURED_HERE
                 ) != 0
-                n_flagged = int(included.filter(not_measured_here).count().execute())
+                n_flagged = int(
+                    _guards.get(f"_flagged_{diff_columns.index(col)}") or 0
+                )
                 if n_flagged:
                     logging.info(
                         f"Excluded {n_flagged} value(s) from the {col} average: "
@@ -410,13 +457,41 @@ def calculate_average_diff_ibis(
                 # group with an NA average.
                 value = over.ifelse(ibis.null().cast("float64"), value)
 
-            prepared = included.mutate(_value=value, _minutes=minutes)
-            prepared = prepared.mutate(
-                _rate=prepared["_value"] / (prepared["_minutes"] / grid_minutes),
-                _at_grid=prepared["_minutes"] == float(grid_minutes),
+            # The cumulative variable is authoritative, so it supplies the
+            # volume wherever it holds usable readings. Deciding per household
+            # keeps a single column behind every window.
+            cumulative = cumulative_column(col)
+            cum_value = None
+            on_cumulative_ids = []
+            if cumulative and cumulative in included.columns:
+                cum_value = included[cumulative].cast("float64")
+                cum_findings = flag_column(cumulative)
+                if cum_findings in included.columns:
+                    cum_value = (
+                        (included[cum_findings].fill_null(0) & _NOT_MEASURED_HERE)
+                        != 0
+                    ).ifelse(ibis.null().cast("float64"), cum_value)
+                on_cumulative_ids = (
+                    included.filter(cum_value.notnull())
+                    .select("HuisIdBSV")
+                    .distinct()
+                    .execute()["HuisIdBSV"]
+                    .tolist()
+                )
+
+            if on_cumulative_ids:
+                on_cumulative = included["HuisIdBSV"].isin(on_cumulative_ids)
+                source = on_cumulative.ifelse(cum_value, value)
+            else:
+                on_cumulative = ibis.literal(False)
+                source = value
+
+            prepared = included.mutate(
+                _value=source, _minutes=minutes, _on_cumulative=on_cumulative
             )
-            avg_diff, shape_level = _shape_and_level_average_ibis(
-                prepared, col, project_id_column
+            avg_diff, coverage, duty = _resample_average_ibis(
+                prepared, col, project_id_column, grid_minutes,
+                max_slots=_max_slots, total_slots=_total_slots,
             )
 
         impute_na = avg_diff[f"{col}_avg"].isna().sum()
@@ -435,7 +510,8 @@ def calculate_average_diff_ibis(
             ),
             "n_discarded": n_discarded,
             "n_flagged": n_flagged,
-            "shape_level": shape_level,
+            "coverage": coverage,
+            "duty": duty,
         }
 
     return avg_diff_dict
@@ -476,91 +552,139 @@ def _per_household(household_column, by_household, default):
         return ibis.literal(float(default)).cast("float64")
     return household_column.substitute(known, else_=float(default)).cast("float64")
 
-
-def _shape_and_level_average_ibis(prepared, diff_col, project_id_column):
+def _resample_average_ibis(
+    prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots
+):
     """
-    The project average of *diff_col*, across households reporting at different
-    cadences, computed in SQL.
+    The project average of *diff_col*, computed in SQL by resampling.
 
-    The counterpart of :func:`etdtransform.bounds.shape_and_level_average`: the
-    distribution across the day comes from the households reporting at the grid
-    cadence, the level from all of them, and the two are combined by the same
-    scaling function the pandas path uses.
+    The counterpart of :func:`etdtransform.bounds.resample_to_grid` followed by a
+    plain mean. Two consecutive usable readings bound a window; its volume is
+    spread evenly over the grid slots between them, ending at the later reading.
 
-    Only the aggregates are executed -- one row per (project, ReadingDate) for
-    the shape and one row per project for the levels.
+    ``_value`` arrives with every disqualified value already NULL, so a usable
+    reading is simply a non-NULL one. The row number is taken over the full
+    table before those rows are filtered out, so the count between two readings
+    is a count of grid slots.
+
+    Placement is a bounded cross join rather than a fill: each window is
+    expanded into the slots it covers against a small table of offsets, at most
+    as many as the coarsest cadence spans. DuckDB does not expose ``IGNORE
+    NULLS`` through ibis 9.5, so a carry-backwards is not available.
 
     Parameters
     ----------
     prepared : ibis.Table
-        Carrying ``_value`` (the value after exclusions), ``_rate`` (that value
-        per grid interval) and ``_at_grid``.
+        Carrying ``_value`` (the value after exclusions) and ``_minutes`` (the
+        interval each household's reading covers).
     diff_col : str
         Interval column being averaged.
     project_id_column : str
         Column identifying the project.
+    grid_minutes : float
+        Grid interval in minutes.
 
     Returns
     -------
-    tuple of (pd.DataFrame, dict)
-        As :func:`etdtransform.bounds.shape_and_level_average` returns.
+    tuple of (pd.DataFrame, float, float)
+        The average with columns *project_id_column*, ``ReadingDate`` and
+        ``<diff_col>_avg``; then coverage and duty.
     """
     import ibis
+    from ibis import _
 
-    levels = _to_nullable(
-        prepared.group_by(project_id_column)
-        .aggregate(
-            level_all=prepared["_rate"].mean(),
-            level_grid=prepared["_at_grid"]
-            .ifelse(prepared["_rate"], ibis.null().cast("float64"))
-            .mean(),
-            shape_households=prepared["_at_grid"]
-            .ifelse(prepared["HuisIdBSV"], ibis.null())
-            .nunique(),
-            level_households=prepared["HuisIdBSV"].nunique(),
-        )
-        .execute(),
-        float_cols=["level_all", "level_grid"],
+    order = ibis.window(group_by="HuisIdBSV", order_by="ReadingDate")
+    slots = prepared["_minutes"] / float(grid_minutes)
+
+    positioned = prepared.mutate(
+        _pos=ibis.row_number().over(order), _slots=slots
+    )
+    readings = positioned.filter(positioned["_value"].notnull())
+    readings = readings.mutate(
+        _rise=_._value - _._value.lag().over(order),
+        _gap=(_._pos - _._pos.lag().over(order)).cast("float64"),
     )
 
-    at_grid = prepared.filter(prepared["_at_grid"])
-    shape = _to_nullable(
-        at_grid.group_by([project_id_column, "ReadingDate"])
-        .aggregate(shape=at_grid["_value"].mean())
-        .execute(),
-        float_cols=["shape"],
+    # A cumulative reading states a running total, so a window's volume is the
+    # rise since the previous reading and its length is the distance back to it.
+    # A delivered interval value already is its own window's volume, and that
+    # window is its cadence however long ago the last reading arrived.
+    readings = readings.mutate(
+        _volume=_._on_cumulative.ifelse(_._rise, _._value),
+        _length=_._on_cumulative.ifelse(_._gap, _._slots),
     )
 
-    # A project with no grid-cadence household has no shape to scale, and must
-    # not simply drop out of the result. Its average is the mean of the
-    # per-grid-interval rates instead.
-    without_shape = set(levels.loc[levels["shape_households"] == 0, project_id_column])
-    fallback = None
-    if without_shape:
-        rows = prepared.filter(
-            prepared[project_id_column].isin(sorted(without_shape))
-        )
-        fallback = _to_nullable(
-            rows.group_by([project_id_column, "ReadingDate"])
-            .aggregate(**{f"{diff_col}_avg": rows["_rate"].mean()})
-            .execute(),
-            float_cols=[f"{diff_col}_avg"],
-        )
-
-    indexed = levels.set_index(project_id_column)
-    avg = scale_shape_to_level(
-        shape,
-        indexed["level_all"],
-        indexed["level_grid"],
-        project_id_column,
-        diff_col,
-        fallback=fallback,
+    # A cumulative window longer than one reporting interval spans a meter
+    # outage. Spreading measured consumption across it is imputation's work, not
+    # the average's. An interval-sourced window is its cadence and cannot span
+    # one.
+    readings = readings.filter(
+        _._length.notnull()
+        & (_._length > 0)
+        & (~_._on_cumulative | (_._gap.notnull() & (_._gap <= _._slots)))
     )
-    return avg, {
-        "shape_households": int(levels["shape_households"].sum()),
-        "level_households": int(levels["level_households"].sum()),
-        "fallback": bool(without_shape),
-    }
+    readings = readings.mutate(_per_slot=_._volume / _._length)
+
+    # The offsets table is sized from the coarsest declared cadence rather than
+    # by querying the longest window. Both give the same bound; the cadence
+    # table is already in hand, and a query here would be one more round trip
+    # per column. PROFILING_GUIDANCE.md: no per-column execute in a loop.
+    span = int(max_slots)
+    if span < 1:
+        blank = _to_nullable(
+            prepared.select(project_id_column, "ReadingDate").distinct().execute()
+        )
+        blank[f"{diff_col}_avg"] = pd.array([pd.NA] * len(blank), dtype="Float64")
+        return blank, 0.0, 0.0
+
+    offsets = ibis.memtable(
+        pd.DataFrame({"_offset": pd.array(range(span), dtype="Int64")})
+    )
+    placed = readings.cross_join(offsets).filter(
+        _._offset.cast("float64") < _._length
+    )
+    placed = placed.mutate(
+        _slot=_.ReadingDate
+        - (_._offset.cast("int64") * ibis.interval(minutes=int(grid_minutes)))
+    )
+
+    covered = placed.group_by([project_id_column, "_slot"]).aggregate(
+        **{f"{diff_col}_avg": _._per_slot.mean()}
+    )
+
+    # Every (project, slot) the frame holds must appear, carrying NULL where no
+    # window covers it. Grouping over the expanded windows alone drops those
+    # slots entirely, and a missing row is not the same as a row with no value:
+    # the pandas path keeps the group with an NA average, and the merge
+    # downstream depends on that.
+    slots = prepared.select(project_id_column, "ReadingDate").distinct()
+    joined = slots.left_join(
+        covered,
+        [
+            slots[project_id_column] == covered[project_id_column],
+            slots["ReadingDate"] == covered["_slot"],
+        ],
+    )
+    avg = _to_nullable(
+        joined.select(
+            slots[project_id_column], slots["ReadingDate"], covered[f"{diff_col}_avg"]
+        ).execute(),
+        float_cols=[f"{diff_col}_avg"],
+    )
+    avg = avg[[project_id_column, "ReadingDate", f"{diff_col}_avg"]].sort_values(
+        [project_id_column, "ReadingDate"]
+    ).reset_index(drop=True)
+
+    # coverage over the slots the frame spans, not over the slots that survived.
+    # total_slots is a property of the frame, not of the column, so the caller
+    # counts it once rather than once per column.
+    present = avg[f"{diff_col}_avg"].notna()
+    coverage = float(int(present.sum()) / total_slots) if total_slots else 0.0
+    duty = (
+        float((avg.loc[present, f"{diff_col}_avg"] > 0).mean())
+        if int(present.sum()) else 0.0
+    )
+    return avg, coverage, duty
 
 
 def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
@@ -714,9 +838,10 @@ def validate_household_column(household_df, cum_col, household_id):
             f"HuisIdBSV {household_id} has no change in {cum_col}. Skipping column.",
         )
         return False
-    if round(household_df[f"{cum_col}Diff"].sum(), 10) == 0:
+    diff_col = interval_column(cum_col)
+    if round(household_df[diff_col].sum(), 10) == 0:
         logging.warning(
-            f"HuisIdBSV {household_id} has no non-zero values in {cum_col}Diff before imputation.",
+            f"HuisIdBSV {household_id} has no non-zero values in {diff_col} before imputation.",
         )
 
     return True
@@ -770,7 +895,7 @@ def get_reading_date_imputation_stats(df, project_id_column, cumulative_columns)
     for col in cumulative_columns:
         logging.info(f"Calculating imputation statistics by ReadingDate for {col}")
 
-        diff_col = f"{col}Diff"
+        diff_col = interval_column(col)
         is_imputed_col = f"{diff_col}_is_imputed"
 
         imputed_stats = grouped[is_imputed_col].sum().rename("imputed")
@@ -860,7 +985,10 @@ def get_diff_columns(cumulative_columns: list):
     between consecutive cumulative values.
 
     """
-    return [col + "Diff" for col in cumulative_columns]
+    return [
+        interval_column(col) for col in cumulative_columns
+        if interval_column(col) is not None
+    ]
 
 def prepare_diff_averages_for_impute(
     df: pd.DataFrame,
