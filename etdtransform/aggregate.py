@@ -1628,7 +1628,10 @@ def _resample_sql_expr(col: str, method: str, min_count: int) -> str:
             f"CASE WHEN COUNT({qcol}) >= {min_count}"
             f" THEN SUM({num}) / COUNT({qcol}) ELSE NULL END AS {qcol}"
         )
-    raise ValueError(f"Unknown resample_method '{method}' for column '{col}'")
+    raise ValueError(
+        f"Unknown resample_method '{method}' for column '{col}' -- "
+        f"check the data model."
+    )
 
 
 def _parse_interval(interval: str):
@@ -2121,7 +2124,10 @@ def aggregate_project_data_duckdb(
             elif method == "sum":
                 agg_exprs.append(f'SUM(CAST("{col}" AS DOUBLE)) AS "{col}"')
             else:
-                raise ValueError(f"Unknown aggregate_method '{method}' for column '{col}'")
+                raise ValueError(
+                    f"Unknown aggregate_method '{method}' for column '{col}' -- "
+                    f"check the data model."
+                )
 
         agg_clause = ",\n            ".join(agg_exprs)
 
@@ -2598,11 +2604,8 @@ def resample_by_columns(
     )
 
     for var, config in active_aggregation_variables(df).items():
-        # 'derive' columns (intensive ratios, e.g. ZelfgebruikPercentage) are
-        # not resampled directly -- they are recomputed from their resampled
-        # components as a post-step in resample_and_save, exactly as the DuckDB
-        # path does. Skip them here so resample_variable is never asked to
-        # resample a ratio.
+        # 'derive' columns are recomputed from their resampled components in
+        # resample_and_save, so they are not resampled directly here.
         if config["resample_method"] == "derive":
             continue
         logging.info(f"in loop for {var}")
@@ -2666,11 +2669,10 @@ def resample_variable(df, var, config, interval, group_column, min_count):
         return resample_max(df_copy, var, interval, group_column, min_count)
     elif method == "avg":
         return resample_avg(df_copy, var, interval, group_column, min_count)
-    # 'derive' columns (intensive ratios) are recomputed from their resampled
-    # components as a post-step in resample_and_save. Any other
-    # method is a data-model error -- fail loudly rather than returning
-    # None
-    raise ValueError(f"Unknown resample_method '{method}' for column '{var}'")
+    raise ValueError(
+        f"Unknown resample_method '{method}' for column '{var}' -- "
+        f"check the data model."
+    )
 
 
 def resample_max(df, column, interval, group_column, min_count):
