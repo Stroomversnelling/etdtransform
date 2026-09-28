@@ -17,6 +17,8 @@ import ibis
 from etdtransform.knmi import load_knmi_weather_data
 from etdtransform.load_data import join_weather_data
 
+pytestmark = pytest.mark.unit
+
 
 KNMI_HEADER = textwrap.dedent("""\
     # SOURCE: TEST

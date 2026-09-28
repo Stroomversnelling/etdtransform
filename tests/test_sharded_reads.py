@@ -32,6 +32,8 @@ from etdtransform.load_data import (
     read_mapped_households,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def _hh_df(hid: int, n: int = 6) -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="5min", tz="UTC")

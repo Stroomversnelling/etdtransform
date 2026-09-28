@@ -7,6 +7,8 @@ from etdtransform.calculated_columns import sympy_to_ibis
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 from etdtransform.calculated_columns import add_calculated_columns_adaptive
 
+pytestmark = pytest.mark.integration
+
 
 def _make_catalog(*rules):
     """Build a minimal catalog DataFrame from (lhs, rhs_text, rhs_vars) tuples."""

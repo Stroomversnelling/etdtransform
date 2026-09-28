@@ -55,6 +55,7 @@ def _write_index(folder: Path, rows):
     df.to_parquet(folder / "index.parquet")
 
 
+@pytest.mark.unit
 class TestExplicitOutputFolderRequired:
     """The sharded stage-3 WRITERS must never default their output folder.
 
@@ -82,6 +83,7 @@ class TestExplicitOutputFolderRequired:
             )
 
 
+@pytest.mark.unit
 class TestIncludedHouseholdIds:
     def test_meenemen_filter(self, tmp_path):
         _write_index(tmp_path, [(1, 1, 1, True), (2, 2, 1, False), (3, 3, 2, True)])
@@ -137,6 +139,8 @@ def _read_parquet(p):
     return pd.read_parquet(p, dtype_backend="numpy_nullable")
 
 
+@pytest.mark.integration
+@pytest.mark.pipeline
 class TestShardedChainEquivalence:
     """Every artifact of the sharded chain equals its legacy counterpart on the
     fixture (same data, same math, different I/O shell)."""
@@ -207,6 +211,8 @@ class TestShardedChainEquivalence:
         )
 
 
+@pytest.mark.integration
+@pytest.mark.pipeline
 class TestBatchSafetyGuards:
     """The averaging/imputation chain refuses multi-batch households and
     overlapping batch periods until batch-aware imputation exists."""

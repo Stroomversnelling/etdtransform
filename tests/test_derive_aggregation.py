@@ -27,6 +27,8 @@ from etdtransform.aggregate import (
     aggregate_project_data_duckdb,
 )
 
+pytestmark = pytest.mark.integration
+
 REL_TOL = 1e-9
 
 # Rule: ZelfgebruikPercentage = 100 * Zelfgebruik / ZonopwekBruto (percent form).

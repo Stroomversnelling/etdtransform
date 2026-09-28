@@ -45,6 +45,9 @@ the test.
 """
 
 import pandas as pd
+import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 # Pipeline fixtures (pandas_pipeline, ibis_pipeline, duckdb_pipeline) and their
 # Meenemen / cum_cols dependencies live in tests/conftest.py so other test

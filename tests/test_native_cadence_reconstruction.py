@@ -29,6 +29,8 @@ from etdmap.mapping_helpers import (
 )
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
+pytestmark = pytest.mark.unit
+
 CUM = "WatergebruikWarmTapwater"
 DIFF = f"{CUM}Diff"
 NORMAL = 3.0

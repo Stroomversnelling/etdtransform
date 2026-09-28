@@ -26,6 +26,8 @@ import pytest
 
 from etdtransform.impute import calculate_average_diff
 
+pytestmark = pytest.mark.unit
+
 DIFF = "ElektriciteitNetgebruikDiff"
 N = 12
 

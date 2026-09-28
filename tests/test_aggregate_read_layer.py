@@ -26,27 +26,26 @@ import etdtransform
 from etdmap.index_helpers import HouseBatchOverlapError
 from etdtransform.aggregate import aggregate_hh_data_duckdb
 
-TESTDATA_MAPPED = Path(etdtransform.options.mapped_folder_path)
+pytestmark = pytest.mark.integration
 
-
-def _copy_index_reviewed(dst: Path) -> None:
+def _copy_index_reviewed(mapped: Path, dst: Path) -> None:
     """Copy the fixture index with Meenemen set True: the fixture ships in
     the first-mapping state (Meenemen empty), but these tests represent a
     REVIEWED dataset -- the aggregation's Meenemen gate must pass."""
-    idx = pd.read_parquet(TESTDATA_MAPPED / "index.parquet",
+    idx = pd.read_parquet(mapped / "index.parquet",
                           dtype_backend="numpy_nullable")
     idx["Meenemen"] = pd.array([True] * len(idx), dtype="boolean")
     idx.to_parquet(dst / "index.parquet")
 
 
-def _copy_flat(dst: Path) -> None:
+def _copy_flat(mapped: Path, dst: Path) -> None:
     dst.mkdir(parents=True)
-    _copy_index_reviewed(dst)
-    for f in TESTDATA_MAPPED.glob("household_*_table.parquet"):
+    _copy_index_reviewed(mapped, dst)
+    for f in mapped.glob("household_*_table.parquet"):
         shutil.copy2(f, dst / f.name)
 
 
-def _copy_sharded(dst: Path) -> None:
+def _copy_sharded(mapped: Path, dst: Path) -> None:
     """Build the sharded layout FROM the flat fixture files.
 
     Derived rather than copied from a checked-in sharded directory, so the two
@@ -55,8 +54,8 @@ def _copy_sharded(dst: Path) -> None:
     equivalence test into a comparison of two different datasets.
     """
     dst.mkdir(parents=True)
-    _copy_index_reviewed(dst)
-    for f in sorted(TESTDATA_MAPPED.glob("household_*_table.parquet")):
+    _copy_index_reviewed(mapped, dst)
+    for f in sorted(mapped.glob("household_*_table.parquet")):
         household_id = int(f.stem.split("_")[1])
         shard_dir = (
             dst / "sharded" / f"HuisIdBSV={household_id}"
@@ -93,11 +92,11 @@ def _run_aggregate(mapped: Path, out: Path) -> pd.DataFrame:
 
 
 class TestStage2ReadLayer:
-    def test_flat_vs_sharded_equivalence(self, tmp_path):
+    def test_flat_vs_sharded_equivalence(self, tmp_path, mapped_dataset):
         flat_dir = tmp_path / "flat_mapped"
         shard_dir = tmp_path / "sharded_mapped"
-        _copy_flat(flat_dir)
-        _copy_sharded(shard_dir)
+        _copy_flat(mapped_dataset, flat_dir)
+        _copy_sharded(mapped_dataset, shard_dir)
 
         df_flat = _run_aggregate(flat_dir, tmp_path / "out_flat")
         df_shard = _run_aggregate(shard_dir, tmp_path / "out_shard")
@@ -105,9 +104,9 @@ class TestStage2ReadLayer:
         assert len(df_flat) > 0
         pd.testing.assert_frame_equal(df_flat, df_shard)
 
-    def test_multi_batch_household_raises(self, tmp_path):
+    def test_multi_batch_household_raises(self, tmp_path, mapped_dataset):
         shard_dir = tmp_path / "sharded_mapped"
-        _copy_sharded(shard_dir)
+        _copy_sharded(mapped_dataset, shard_dir)
         # Duplicate household 1's shard under a second batch id.
         src = next((shard_dir / "sharded" / "HuisIdBSV=1").glob("HuisBatchIdBSV=*"))
         dup = shard_dir / "sharded" / "HuisIdBSV=1" / "HuisBatchIdBSV=999"

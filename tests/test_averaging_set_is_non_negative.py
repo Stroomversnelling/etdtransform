@@ -38,6 +38,8 @@ from etdmap.data_model import (
 )
 from etdtransform.impute import get_diff_columns
 
+pytestmark = pytest.mark.unit
+
 AVERAGED = get_diff_columns(cumulative_columns)
 
 

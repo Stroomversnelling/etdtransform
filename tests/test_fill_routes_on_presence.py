@@ -23,6 +23,8 @@ from etdtransform.vectorized_impute import (
     process_imputation_vectorized,
 )
 
+pytestmark = pytest.mark.unit
+
 DIFF = "ElektriciteitNetgebruikDiff"
 CUM = "ElektriciteitNetgebruik"
 AVG = f"{DIFF}_avg"

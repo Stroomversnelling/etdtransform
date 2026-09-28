@@ -15,6 +15,8 @@ from etdtransform.aggregate import (
     reconstruct_cumulative_columns_ibis,
 )
 
+pytestmark = pytest.mark.unit
+
 COLS = ["ElektriciteitNetgebruikLaag", "ElektriciteitTerugleveringHoog"]
 ROWS = 20
 

@@ -31,6 +31,8 @@ from etdmap.data_stats import (
 
 from etdtransform.data_stats import get_data_stats
 
+pytestmark = pytest.mark.integration
+
 
 def _build_fixture_parquet(tmp_dir: str) -> str:
     """

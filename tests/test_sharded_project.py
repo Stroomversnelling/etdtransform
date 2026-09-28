@@ -23,20 +23,16 @@ from etdtransform.aggregate import (
     resample_hh_data_duckdb,
 )
 
-TESTDATA_AGG = Path(etdtransform.options.aggregate_folder_path)
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 
-def _split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
-    df = pd.read_parquet(monolith_path, dtype_backend="numpy_nullable")
-    for hid, g in df.groupby("HuisIdBSV", sort=True):
-        d = shard_root / f"HuisIdBSV={int(hid)}" / f"HuisBatchIdBSV={int(hid)}"
-        d.mkdir(parents=True)
-        g.drop(columns=["HuisIdBSV"]).to_parquet(d / "part.parquet", index=False)
+
 
 
 class TestProjectAggregationCrossFormat:
-    def test_monolith_vs_sharded_equivalence(self, tmp_path):
-        source = TESTDATA_AGG / "household_calculated.parquet"
+    def test_monolith_vs_sharded_equivalence(self, tmp_path, aggregate_artifacts,
+                                             calculated_shards):
+        source = aggregate_artifacts / "household_calculated.parquet"
 
         flat_dir = tmp_path / "flat"
         flat_dir.mkdir()
@@ -45,8 +41,7 @@ class TestProjectAggregationCrossFormat:
             intervals=("60min",), aggregate_folder_path=str(flat_dir)
         )
 
-        shard_src = tmp_path / "calculated_shards"
-        _split_monolith_to_shards(source, shard_src)
+        shard_src = calculated_shards
         shard_dir = tmp_path / "shard"
         shard_dir.mkdir()
         resample_hh_data_duckdb(
@@ -76,10 +71,10 @@ class TestProjectAggregationCrossFormat:
                 assert av.astype("string").equals(bv.astype("string")), (
                     f"values differ: {col}")
 
-    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path):
-        source = TESTDATA_AGG / "household_calculated.parquet"
-        shard_src = tmp_path / "calculated_shards"
-        _split_monolith_to_shards(source, shard_src)
+    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
+                                                            fresh_shards):
+        # Copies a batch directory in, so it needs a tree of its own.
+        shard_src = fresh_shards("household_calculated.parquet")
         shard_dir = tmp_path / "shard"
         shard_dir.mkdir()
         resample_hh_data_duckdb(

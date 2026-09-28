@@ -20,6 +20,8 @@ from etdtransform.aggregate import (
     aggregate_project_data_duckdb,
 )
 
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

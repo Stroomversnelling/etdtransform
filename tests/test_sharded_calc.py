@@ -26,16 +26,11 @@ import pytest
 import etdtransform
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 
-TESTDATA_AGG = Path(etdtransform.options.aggregate_folder_path)
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
+
 FILLNA_VARS = ["ElektriciteitsgebruikBoilervatDiff", "ElektriciteitsgebruikWTWDiff"]
 
 
-def _split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
-    df = pd.read_parquet(monolith_path, dtype_backend="numpy_nullable")
-    for hid, g in df.groupby("HuisIdBSV", sort=True):
-        d = shard_root / f"HuisIdBSV={int(hid)}" / f"HuisBatchIdBSV={int(hid)}"
-        d.mkdir(parents=True)
-        g.drop(columns=["HuisIdBSV"]).to_parquet(d / "part.parquet", index=False)
 
 
 def _read_shards(shard_root: Path) -> pd.DataFrame:
@@ -49,10 +44,10 @@ def _read_shards(shard_root: Path) -> pd.DataFrame:
 
 
 class TestCalcCrossFormat:
-    def test_monolith_vs_sharded_equivalence(self, tmp_path):
-        source = TESTDATA_AGG / "household_imputed.parquet"
-        shard_src = tmp_path / "household_imputed_shards"
-        _split_monolith_to_shards(source, shard_src)
+    def test_monolith_vs_sharded_equivalence(self, tmp_path, aggregate_artifacts,
+                                             imputed_shards):
+        source = aggregate_artifacts / "household_imputed.parquet"
+        shard_src = imputed_shards
 
         out_file = tmp_path / "household_calculated.parquet"
         add_calculated_columns_to_hh_data_ibis(
@@ -87,10 +82,10 @@ class TestCalcCrossFormat:
                 assert av.astype("string").equals(bv.astype("string")), (
                     f"values differ: {col}")
 
-    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path):
-        source = TESTDATA_AGG / "household_imputed.parquet"
-        shard_src = tmp_path / "shards"
-        _split_monolith_to_shards(source, shard_src)
+    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
+                                                            fresh_shards):
+        # Copies a batch directory in, so it needs a tree of its own.
+        shard_src = fresh_shards("household_imputed.parquet")
         # Duplicate household 1 under a second batch: overlapping periods.
         src1 = next((shard_src / "HuisIdBSV=1").glob("HuisBatchIdBSV=*"))
         shutil.copytree(src1, shard_src / "HuisIdBSV=1" / "HuisBatchIdBSV=999")
@@ -102,10 +97,11 @@ class TestCalcCrossFormat:
                 fillna_vars=FILLNA_VARS, partition_output=True,
             )
 
-    def test_partition_output_requires_batch_column(self, tmp_path):
+    def test_partition_output_requires_batch_column(self, tmp_path,
+                                                    aggregate_artifacts):
         # Opting into hive output from a monolith source (no HuisBatchIdBSV)
         # is a caller error and must fail before writing anything.
-        source = TESTDATA_AGG / "household_imputed.parquet"
+        source = aggregate_artifacts / "household_imputed.parquet"
         with pytest.raises(ValueError, match="HuisBatchIdBSV"):
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(source),

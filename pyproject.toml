@@ -77,3 +77,14 @@ unfixable = ["B"]
 [tool.ruff.format]
 # 5. Use double quotes in `ruff format`.
 quote-style = "double"
+
+[tool.pytest.ini_options]
+# The default run excludes the pipeline tests. Add --full-suite to include
+# them; see the option's help text for when that is expected.
+# --durations-min keeps the timing report quiet unless a test passes a second.
+addopts = "-m 'not pipeline' --durations=10 --durations-min=1.0"
+markers = [
+    "unit: no disk IO; builds its frames in memory",
+    "integration: reads or writes parquet, or runs a pipeline stage end to end",
+    "pipeline: needs a pipeline built by a session fixture, or the mapped dataset on disk",
+]

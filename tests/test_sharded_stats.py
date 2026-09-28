@@ -12,16 +12,12 @@ import pandas as pd
 
 import etdtransform
 from etdtransform.data_stats import get_data_stats
+import pytest
 
-TESTDATA_AGG = Path(etdtransform.options.aggregate_folder_path)
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 
-def _split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
-    df = pd.read_parquet(monolith_path, dtype_backend="numpy_nullable")
-    for hid, g in df.groupby("HuisIdBSV", sort=True):
-        d = shard_root / f"HuisIdBSV={int(hid)}" / f"HuisBatchIdBSV={int(hid)}"
-        d.mkdir(parents=True)
-        g.drop(columns=["HuisIdBSV"]).to_parquet(d / "part.parquet", index=False)
+
 
 
 def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
@@ -52,10 +48,10 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
     assert any("HugeRatio" in w for w in warnings)
 
 
-def test_monolith_vs_sharded_stats_equivalence(tmp_path):
-    source = TESTDATA_AGG / "household_imputed.parquet"
-    shard_src = tmp_path / "shards"
-    _split_monolith_to_shards(source, shard_src)
+def test_monolith_vs_sharded_stats_equivalence(tmp_path, aggregate_artifacts,
+                                               imputed_shards):
+    source = aggregate_artifacts / "household_imputed.parquet"
+    shard_src = imputed_shards
 
     # precision="exact": approximate quantiles (the default) use DuckDB
     # sketches whose result depends on scan order, which differs between a

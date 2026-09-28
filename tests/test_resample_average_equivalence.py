@@ -17,6 +17,8 @@ import pytest
 from etdtransform.bounds import resample_to_grid
 from etdtransform.impute import _resample_average_ibis
 
+pytestmark = pytest.mark.unit
+
 CUM = "ElektriciteitNetgebruik"
 IV = "ElektriciteitNetgebruikDiff"
 GRID = 5

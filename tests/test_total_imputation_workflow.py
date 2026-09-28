@@ -31,6 +31,8 @@ from etdtransform.aggregate import (
 from etdmap.data_model import test_aggregation_columns
 from etdtransform.impute import prepare_diff_averages_for_impute
 
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
+
 
 @pytest.fixture(scope="session")
 def index_df():

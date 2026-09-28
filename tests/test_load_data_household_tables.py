@@ -24,6 +24,8 @@ import etdmap
 import etdtransform
 from etdtransform.load_data import get_household_table, get_household_tables
 
+pytestmark = pytest.mark.integration
+
 _HOUSEHOLDS = [1, 2]
 _ROWS_PER_HH = 4
 

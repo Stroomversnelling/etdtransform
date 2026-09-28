@@ -15,6 +15,8 @@ import ibis
 
 from etdtransform.impute import calculate_average_diff, calculate_average_diff_ibis
 
+pytestmark = pytest.mark.unit
+
 # Two projects: 20 normal + 1 outlier per project.
 # Outlier values are ~15-20x larger than the normal range so the
 # 95th-percentile upper-bound logic clearly excludes them.

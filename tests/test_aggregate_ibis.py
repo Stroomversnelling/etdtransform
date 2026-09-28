@@ -20,6 +20,8 @@ from etdtransform.aggregate import (
     impute_hh_data_5min_chunked,
 )
 
+pytestmark = pytest.mark.integration
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

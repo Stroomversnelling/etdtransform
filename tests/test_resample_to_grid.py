@@ -15,6 +15,8 @@ import pytest
 from etdmap.flags import MappingFlag, flag_column
 from etdtransform.bounds import resample_to_grid, usable_readings
 
+pytestmark = pytest.mark.unit
+
 CUM = "ElektriciteitNetgebruik"
 IV = "ElektriciteitNetgebruikDiff"
 

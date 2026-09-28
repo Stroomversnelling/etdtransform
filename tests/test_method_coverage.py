@@ -19,6 +19,9 @@ etdtransform/etdtransform/aggregate.py:
 Add a method here only after it is implemented in the path(s) above.
 """
 from etdmap.data_model import get_aggregation_config
+import pytest
+
+pytestmark = pytest.mark.unit
 
 RESAMPLE_METHODS_IMPLEMENTED = {"sum", "max", "avg", "derive"}
 AGGREGATE_METHODS_IMPLEMENTED = {"avg", "sum", "derive"}

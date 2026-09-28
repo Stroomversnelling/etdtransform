@@ -30,6 +30,8 @@ from etdtransform.catalog import (
     verify_against_serial,
 )
 
+pytestmark = pytest.mark.unit
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

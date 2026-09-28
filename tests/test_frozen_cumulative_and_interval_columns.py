@@ -15,6 +15,8 @@ import pytest
 from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
+pytestmark = pytest.mark.unit
+
 CUM = "WatergebruikWarmTapwater"
 DIFF = f"{CUM}Diff"
 MAX_PER_5MIN = 100.0  # thresholds.csv bound for DIFF

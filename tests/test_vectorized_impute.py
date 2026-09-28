@@ -1,192 +1,107 @@
-"""
-Performance and regression tests for imputation gap stats calculation.
+"""The gap statistics `impute_and_normalize` returns alongside the filled data.
 
-Three approaches are benchmarked:
-  1. apply  -- original: one groupby().apply() call, Python function per group
-  2. agg    -- current: one groupby().agg() for scalar stats + apply for methods list
-  3. sep    -- alternative: 7 separate C-level groupby operations
-
-Run with -s to see timing output:
-  pytest tests/test_vectorized_impute.py -s -v
+One row per (project, household, column), reporting what the fill did and
+whether it conserved the volume the cumulative variable accounts for.
+`deviation` is the quantity that matters: the filled interval total minus the
+cumulative variable's own range over the same rows.
 """
-import numpy as np
+
 import pandas as pd
 import pytest
 
+from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
-# ---------------------------------------------------------------------------
-# Re-implementations of the three approaches (self-contained, no etdtransform
-# import needed -- we are testing the algorithm, not the module integration)
-# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.unit
 
-def _gap_stats_apply(df, project_col, cum_col, diff_col, impute_type_col):
-    """Original groupby().apply() approach."""
-    def _calc(group):
-        diff_total = group[diff_col].sum()
-        cum_diff = group[cum_col].max() - group[cum_col].min()
-        return pd.Series({
-            "column": diff_col,
-            "diff_col_total": diff_total,
-            "cum_col_min_max_diff": cum_diff,
-            "deviation": diff_total - cum_diff,
-            "missing": (~group["gap_length"].isna()).sum(),
-            "methods": sorted(set(v for v in group[impute_type_col] if pd.notna(v))),
-            "imputed": group[impute_type_col].notna().sum(),
-            "imputed_na": group["cumulative_value_group"].notna().sum() - group[impute_type_col].notna().sum(),
-        })
-    return (
-        df.groupby([project_col, "HuisIdBSV"])
-        .apply(_calc, include_groups=False)
-        .reset_index()
-    )
+CUM = "ElektriciteitNetgebruik"
+DIFF = "ElektriciteitNetgebruikDiff"
 
 
-def _gap_stats_agg(df, project_col, cum_col, diff_col, impute_type_col):
-    """Combined agg() for scalar stats + apply only for methods list."""
-    grp = df.groupby([project_col, "HuisIdBSV"])
-    stats = grp.agg(
-        diff_col_total=(diff_col, "sum"),
-        _cum_max=(cum_col, "max"),
-        _cum_min=(cum_col, "min"),
-        missing=("gap_length", "count"),
-        imputed=(impute_type_col, "count"),
-        _cvg_count=("cumulative_value_group", "count"),
-    ).reset_index()
-    stats["cum_col_min_max_diff"] = stats["_cum_max"] - stats["_cum_min"]
-    stats["deviation"] = stats["diff_col_total"] - stats["cum_col_min_max_diff"]
-    stats["imputed_na"] = stats["_cvg_count"] - stats["imputed"]
-    stats["column"] = diff_col
-    stats["methods"] = (
-        grp[impute_type_col]
-        .apply(lambda x: sorted(set(v for v in x if pd.notna(v))))
-        .values
-    )
-    stats.drop(columns=["_cum_max", "_cum_min", "_cvg_count"], inplace=True)
-    return stats
-
-
-def _gap_stats_sep(df, project_col, cum_col, diff_col, impute_type_col):
-    """7 separate C-level groupby operations."""
-    grp = df.groupby([project_col, "HuisIdBSV"])
-    diff_sum = grp[diff_col].sum()
-    cum_max = grp[cum_col].max()
-    cum_min = grp[cum_col].min()
-    gap_count = grp["gap_length"].count()
-    imputed_count = grp[impute_type_col].count()
-    cvg_count = grp["cumulative_value_group"].count()
-    methods_list = grp[impute_type_col].apply(
-        lambda x: sorted(set(v for v in x if pd.notna(v)))
-    )
+def _frame(cumulative, diffs, averages):
+    n = len(cumulative)
     return pd.DataFrame({
-        "column": diff_col,
-        "diff_col_total": diff_sum,
-        "cum_col_min_max_diff": cum_max - cum_min,
-        "deviation": diff_sum - (cum_max - cum_min),
-        "missing": gap_count,
-        "methods": methods_list,
-        "imputed": imputed_count,
-        "imputed_na": cvg_count - imputed_count,
-    }).reset_index()
-
-
-# ---------------------------------------------------------------------------
-# Fixture
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def gap_stats_df():
-    """
-    Synthetic dataset mimicking df state during imputation gap stats calculation.
-    2 projects x 50 households x 10000 rows = 1M rows, 1 cumulative column.
-    """
-    rng = np.random.default_rng(42)
-    n_proj, n_hh, n_rows = 2, 50, 10_000
-    n_total = n_proj * n_hh * n_rows
-
-    proj = np.repeat(np.arange(1, n_proj + 1), n_hh * n_rows)
-    household = np.tile(np.repeat(np.arange(1, n_hh + 1), n_rows), n_proj) + (proj - 1) * 100
-
-    diff_raw = rng.exponential(0.1, n_total)
-    cum_vals = np.cumsum(diff_raw)
-
-    gap_mask = rng.random(n_total) < 0.05
-    imputed_mask = gap_mask & (rng.random(n_total) < 0.5)
-    impute_types = rng.integers(1, 4, n_total).astype(float)
-    cvg_groups = rng.integers(1, 100, n_total).astype(float)
-
-    diff_arr = diff_raw.copy()
-    diff_arr[gap_mask] = np.nan
-
-    impute_type_arr = np.where(imputed_mask, impute_types, np.nan)
-    gap_length_arr = np.where(gap_mask, 1.0, np.nan)
-    cvg_arr = np.where(gap_mask, cvg_groups, np.nan)
-
-    return pd.DataFrame({
-        "ProjectIdBSV": pd.array(proj, dtype="Int64"),
-        "HuisIdBSV": pd.array(household, dtype="Int64"),
-        "Diff": pd.array(diff_arr, dtype="Float64"),
-        "Cum": pd.array(cum_vals, dtype="Float64"),
-        "gap_length": pd.array(gap_length_arr, dtype="Float64"),
-        "cumulative_value_group": pd.array(cvg_arr, dtype="Float64"),
-        "impute_type": pd.array(impute_type_arr, dtype="Float64"),
+        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
+        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
+        CUM: pd.array(cumulative, dtype="Float64"),
+        DIFF: pd.array(diffs, dtype="Float64"),
+        f"{DIFF}_avg": pd.array(averages, dtype="Float64"),
     })
 
 
-# ---------------------------------------------------------------------------
-# Helper to normalise results for comparison
-# ---------------------------------------------------------------------------
-
-def _normalise(df, project_col):
-    sort_cols = [project_col, "HuisIdBSV"]
-    return (
-        df.sort_values(sort_cols)
-        .reset_index(drop=True)
-        [[project_col, "HuisIdBSV", "diff_col_total", "cum_col_min_max_diff",
-          "deviation", "missing", "imputed", "imputed_na", "methods"]]
+def _impute(frame):
+    filled, gap_stats, _ = impute_and_normalize(
+        frame, [CUM], "ProjectIdBSV", pd.DataFrame()
     )
+    return filled, gap_stats
 
 
-# ---------------------------------------------------------------------------
-# Correctness: all three approaches must agree
-# ---------------------------------------------------------------------------
+@pytest.fixture()
+def conserved():
+    """A gap bounded by two readings, filled proportionally."""
+    return _impute(_frame(
+        cumulative=[100.0, pd.NA, pd.NA, pd.NA, 104.0, 105.0],
+        diffs=[0.0, pd.NA, pd.NA, pd.NA, pd.NA, 1.0],
+        averages=[1.0] * 6,
+    ))
 
-def test_gap_stats_agg_matches_apply(gap_stats_df):
-    """agg approach must produce identical scalar stats to the original apply."""
-    proj, cum, diff, itype = "ProjectIdBSV", "Cum", "Diff", "impute_type"
-    ref = _normalise(_gap_stats_apply(gap_stats_df, proj, cum, diff, itype), proj)
-    new = _normalise(_gap_stats_agg(gap_stats_df, proj, cum, diff, itype), proj)
 
-    scalar_cols = ["diff_col_total", "cum_col_min_max_diff", "deviation",
-                   "missing", "imputed", "imputed_na"]
-    for col in scalar_cols:
-        pd.testing.assert_series_equal(
-            ref[col].astype(float),
-            new[col].astype(float),
-            check_names=False,
-            rtol=1e-5,
-            obj=f"agg vs apply: {col}",
+class TestTheStatsDescribeTheFill:
+    def test_one_row_per_household_and_column(self, conserved):
+        _, stats = conserved
+        assert len(stats) == 1
+        row = stats.iloc[0]
+        assert row["column"] == DIFF
+        assert int(row["HuisIdBSV"]) == 1
+        assert int(row["ProjectIdBSV"]) == 1
+
+    def test_diff_total_is_the_filled_column(self, conserved):
+        filled, stats = conserved
+        assert float(stats.iloc[0]["diff_col_total"]) == pytest.approx(
+            float(filled[DIFF].sum())
         )
 
-    for apply_methods, agg_methods in zip(ref["methods"], new["methods"]):
-        assert sorted(apply_methods) == sorted(agg_methods), (
-            f"methods mismatch: apply={apply_methods}  agg={agg_methods}"
+    def test_cum_range_is_the_cumulative_min_to_max(self, conserved):
+        filled, stats = conserved
+        expected = float(filled[CUM].max()) - float(filled[CUM].min())
+        assert float(stats.iloc[0]["cum_col_min_max_diff"]) == pytest.approx(expected)
+
+    def test_imputed_counts_the_cells_carrying_a_type(self, conserved):
+        filled, stats = conserved
+        assert int(stats.iloc[0]["imputed"]) == int(
+            filled[f"{DIFF}_impute_type"].notna().sum()
         )
 
+    def test_bitwise_methods_is_the_or_of_methods(self, conserved):
+        _, stats = conserved
+        row = stats.iloc[0]
+        expected = 0
+        for method in row["methods"]:
+            expected |= int(method)
+        assert int(row["bitwise_methods"]) == expected
 
-def test_gap_stats_sep_matches_apply(gap_stats_df):
-    """Separate-ops approach must produce identical scalar stats to the original apply."""
-    proj, cum, diff, itype = "ProjectIdBSV", "Cum", "Diff", "impute_type"
-    ref = _normalise(_gap_stats_apply(gap_stats_df, proj, cum, diff, itype), proj)
-    sep = _normalise(_gap_stats_sep(gap_stats_df, proj, cum, diff, itype), proj)
+    def test_the_method_recorded_is_the_one_the_fill_used(self, conserved):
+        filled, stats = conserved
+        assert int(stats.iloc[0]["bitwise_methods"]) & ImputeType.SCALED_FILL.value
 
-    scalar_cols = ["diff_col_total", "cum_col_min_max_diff", "deviation",
-                   "missing", "imputed", "imputed_na"]
-    for col in scalar_cols:
-        pd.testing.assert_series_equal(
-            ref[col].astype(float),
-            sep[col].astype(float),
-            check_names=False,
-            rtol=1e-5,
-            obj=f"sep vs apply: {col}",
-        )
 
+class TestDeviationReportsConservation:
+    """`deviation` is the reason these statistics exist: it says whether the
+    filled intervals still add up to what the cumulative variable recorded."""
+
+    def test_an_anchored_fill_deviates_by_nothing(self, conserved):
+        _, stats = conserved
+        assert float(stats.iloc[0]["deviation"]) == pytest.approx(0.0)
+
+    def test_a_meter_reset_is_reported_as_a_shortfall(self):
+        """The cumulative drops, so the gap fills with zeros and the interval
+        total cannot match the cumulative's min-to-max range."""
+        _, stats = _impute(_frame(
+            cumulative=[100.0, pd.NA, pd.NA, 90.0],
+            diffs=[0.0, pd.NA, pd.NA, pd.NA],
+            averages=[1.0] * 4,
+        ))
+        row = stats.iloc[0]
+        assert int(row["bitwise_methods"]) & ImputeType.NEGATIVE_GAP_JUMP.value
+        assert float(row["diff_col_total"]) == pytest.approx(0.0)
+        assert float(row["deviation"]) < 0

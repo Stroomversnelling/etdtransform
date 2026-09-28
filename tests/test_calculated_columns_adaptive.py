@@ -20,6 +20,8 @@ from etdtransform.calculated_columns import (
     add_calculated_columns_imputed_data,
 )
 
+pytestmark = pytest.mark.unit
+
 
 # ---------------------------------------------------------------------------
 # Helpers

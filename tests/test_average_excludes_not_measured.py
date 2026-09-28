@@ -32,6 +32,8 @@ from etdmap.mapping_helpers import (
 from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import impute_and_normalize
 
+pytestmark = pytest.mark.unit
+
 CUM = "WatergebruikWarmTapwater"
 DIFF = f"{CUM}Diff"
 FLAGS = flag_column(DIFF)

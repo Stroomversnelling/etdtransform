@@ -21,16 +21,11 @@ import pytest
 import etdtransform
 from etdtransform.aggregate import resample_hh_data_duckdb
 
-TESTDATA_AGG = Path(etdtransform.options.aggregate_folder_path)
+pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
+
 INTERVALS = ("5min", "60min")
 
 
-def _split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
-    df = pd.read_parquet(monolith_path, dtype_backend="numpy_nullable")
-    for hid, g in df.groupby("HuisIdBSV", sort=True):
-        d = shard_root / f"HuisIdBSV={int(hid)}" / f"HuisBatchIdBSV={int(hid)}"
-        d.mkdir(parents=True)
-        g.drop(columns=["HuisIdBSV"]).to_parquet(d / "part.parquet", index=False)
 
 
 def _read_shards(shard_root: Path) -> pd.DataFrame:
@@ -62,10 +57,10 @@ def _assert_frames_equivalent(a: pd.DataFrame, b: pd.DataFrame) -> None:
 
 
 class TestResampleCrossFormat:
-    def test_monolith_vs_sharded_equivalence(self, tmp_path):
-        source = TESTDATA_AGG / "household_calculated.parquet"
-        shard_src = tmp_path / "calculated_shards"
-        _split_monolith_to_shards(source, shard_src)
+    def test_monolith_vs_sharded_equivalence(self, tmp_path, aggregate_artifacts,
+                                             calculated_shards):
+        source = aggregate_artifacts / "household_calculated.parquet"
+        shard_src = calculated_shards
 
         out_flat = tmp_path / "out_flat"
         out_flat.mkdir()
@@ -84,13 +79,12 @@ class TestResampleCrossFormat:
             b = _read_shards(out_shard / f"household_{interval}")
             _assert_frames_equivalent(a, b)
 
-    def test_rerun_overwrites_existing_shard_output(self, tmp_path):
+    def test_rerun_overwrites_existing_shard_output(self, tmp_path,
+                                                    calculated_shards):
         """Regression: the writer clears its existing output directory on a
         re-run. This cleanup only executes when output already exists -- a
         path that tests with freshly created directories never reach."""
-        source = TESTDATA_AGG / "household_calculated.parquet"
-        shard_src = tmp_path / "calculated_shards"
-        _split_monolith_to_shards(source, shard_src)
+        shard_src = calculated_shards
         out = tmp_path / "out"
         out.mkdir()
         resample_hh_data_duckdb(str(shard_src), str(out), intervals=("60min",),
@@ -101,10 +95,10 @@ class TestResampleCrossFormat:
         second = _read_shards(out / "household_60min")
         assert len(first) == len(second)
 
-    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path):
-        source = TESTDATA_AGG / "household_calculated.parquet"
-        shard_src = tmp_path / "shards"
-        _split_monolith_to_shards(source, shard_src)
+    def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
+                                                            fresh_shards):
+        # Copies a batch directory in, so it needs a tree of its own.
+        shard_src = fresh_shards("household_calculated.parquet")
         src1 = next((shard_src / "HuisIdBSV=1").glob("HuisBatchIdBSV=*"))
         shutil.copytree(src1, shard_src / "HuisIdBSV=1" / "HuisBatchIdBSV=999")
 
@@ -114,8 +108,9 @@ class TestResampleCrossFormat:
                 partition_output=True,
             )
 
-    def test_partition_output_requires_batch_column(self, tmp_path):
-        source = TESTDATA_AGG / "household_calculated.parquet"
+    def test_partition_output_requires_batch_column(self, tmp_path,
+                                                    aggregate_artifacts):
+        source = aggregate_artifacts / "household_calculated.parquet"
         with pytest.raises(ValueError, match="HuisBatchIdBSV"):
             resample_hh_data_duckdb(
                 str(source), str(tmp_path / "out"), intervals=("60min",),
