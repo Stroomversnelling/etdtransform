@@ -30,6 +30,45 @@ from etdtransform.vectorized_impute import impute_and_normalize
 _NOT_MEASURED_HERE = MappingFlag.NOT_A_MEASUREMENT.value
 
 
+def assert_no_negative_interval(column, smallest) -> None:
+    """Stop if *smallest*, the minimum of *column*, is below zero.
+
+    Mapping classifies and blanks a decreasing cumulative reading, so a negative
+    interval reaching the average means those findings were not applied.
+    """
+    if smallest is None or pd.isna(smallest) or smallest >= 0:
+        return
+    raise ValueError(
+        f"{column}: negative interval value(s) present, smallest {smallest}. "
+        f"Mapping is expected to blank these before the average sees them."
+    )
+
+
+def assert_averageable(diff_columns) -> None:
+    """Refuse to average a column whose values do not meet criteria.
+
+    Metadata only, once per call: this costs nothing per row.
+    """
+    offenders = []
+    for column in diff_columns:
+        declared = thresholds_dict.get(column, {})
+        lower = declared.get("Min")
+        if lower is None or pd.isna(lower):
+            offenders.append(
+                f"{column}: no Min declared, so the discard cannot floor it"
+            )
+        elif float(lower) < 0:
+            offenders.append(
+                f"{column}: Min={lower}, so the discard passes negatives through"
+            )
+
+    if offenders:
+        listed = "\n  ".join(offenders)
+        raise ValueError(
+            f"These columns cannot be used for a project average:\n  {listed}\n"
+        )
+
+
 def calculate_average_diff(
     df: pd.DataFrame,
     project_id_column: str,
@@ -41,9 +80,8 @@ def calculate_average_diff(
     """
     Calculate average differences for specified columns grouped by project and reading date.
 
-    This function computes the average differences for the specified columns,
-    excluding outliers based on a 95th percentile threshold. It's used to prepare
-    data for imputation of missing values.
+    This function computes the average differences for the specified columns. It's used to prepare
+    data for imputation of missing values. Criteria used to assess the inclusion of values is found in assert_averageable()
 
     Parameters
     ----------
@@ -86,11 +124,12 @@ def calculate_average_diff(
 
     Warnings
     --------
-    - Negative difference values will raise a ValueError.
     - Missing values in the resulting average columns will be logged as errors.
+
 
     """
     logging.info("Calculating Diff column averages.")
+    assert_averageable(diff_columns)
 
     if bounds is None:
         bounds = {
@@ -140,15 +179,9 @@ def calculate_average_diff(
             f"{col}_upper_bound"
         ].multiply(2)
 
-        logging.info(f"Identifying households to include for {col}.")
         household_max_with_bounds = household_max[
             [project_id_column, "HuisIdBSV", f"{col}_household_max"]
         ].merge(upper_bounds, on=project_id_column, how="left")
-        include_mask = (
-            household_max_with_bounds[f"{col}_household_max"]
-            < household_max_with_bounds[f"{col}_upper_bound"]
-        )
-        households_to_include = household_max_with_bounds.loc[include_mask, "HuisIdBSV"]
 
         logging.info(f"Filtering the dataframe for {col}.")
         # The cumulative variable supplies the volume where it has readings, so
@@ -160,26 +193,18 @@ def calculate_average_diff(
         cum_findings = flag_column(cumulative_column(col) or "")
         if cum_findings in df.columns and cum_findings not in wanted:
             wanted.append(cum_findings)
-        df_filtered = df[wanted][df["HuisIdBSV"].isin(households_to_include)]
+        df_filtered = df[wanted]
 
-        logging.info(f"Checking for negative Diff values in {col}.")
+        # any() on the mask is the cheap test; the minimum is only computed
+        # when it has already failed.
         if (df_filtered[col] < 0).any():
-            raise ValueError("Negative Diff values found")
-        # df_filtered[df_filtered[col]<0][col] = pd.NA
+            assert_no_negative_interval(col, df_filtered[col].min())
 
         df_filtered = df_filtered.copy()
 
-        # An average states what households consumed at a time of day, so only
-        # values measured at that time may shape it. Two kinds are excluded:
-        #
-        #   invented  -- filled down, filled to zero, or redistributed across a
-        #                frozen span. Nothing was measured at this slot.
-        #   mistimed  -- a catch-up. It was measured, but over a window rather
-        #                than at this slot.
-        #
-        # Neither is excluded by a threshold. Redistribution places its values
-        # inside the bounds, and a catch-up is plausible at the column's own
-        # cadence, so the flags are what identifies them.
+        # Exclude values that were not measured at this slot: invented by the
+        # pipeline, or recorded over a window rather than at this interval.
+        # Identified by their findings flags, not by a threshold.
         n_flagged = 0
         findings = flag_column(col)
         if findings in df_filtered.columns:
@@ -194,14 +219,8 @@ def calculate_average_diff(
                     f"invented or recorded for a different window."
                 )
 
-        # A value above the variable's threshold is implausible rather than
-        # merely large, so it is discarded instead of clipped: clipping would
-        # leave a fabricated number in the pool, while discarding leaves the
-        # average to the households that reported plausible values.
-        #
-        # The threshold used is the column threshold, scaled to how often each
-        # household reports, so a delivered hourly reading is judged against
-        # what an hour may hold rather than what five minutes may hold.
+        # Values above the column threshold are discarded, not clipped. The
+        # threshold is scaled to each household's reporting cadence.
         n_discarded = 0
         bound = (bounds or {}).get(col, pd.NA)
         if bound is None or (not isinstance(bound, pd.Series) and pd.isna(bound)):
@@ -221,23 +240,20 @@ def calculate_average_diff(
                 )
 
         logging.info(f"Calculating the average differences for {col}.")
-        # A household reporting coarser than the grid records how much was
-        # consumed but not when within its reporting interval, so averaging its
-        # readings in directly would place several grid intervals of consumption
-        # in one slot. Resampling spreads each reading evenly over the slots it
-        # covers first, which makes every row a per-grid-interval rate and the
-        # average a plain mean over them. A household already at the grid
-        # cadence resamples to itself.
+        # Spread each reading evenly over the grid slots it covers, so every
+        # row is a per-grid-interval rate and the average is a plain mean over
+        # them. A household already at the grid cadence resamples to itself.
         df_filtered = df_filtered.assign(
             **{col: resample_to_grid(df_filtered, col, cadence, grid_minutes)}
         )
         grouped = df_filtered.groupby([project_id_column, "ReadingDate"])[col]
         avg_diff = grouped.mean().reset_index()
         avg_diff.columns = [project_id_column, "ReadingDate", f"{col}_avg"]
+        # Nanoseconds in both paths, so the two outputs merge cleanly.
+        avg_diff = _match_reading_date_dtype(avg_diff)
 
-        # coverage: slots the meters delivered anything for. duty: of those, the
-        # slots that carry consumption. Both are counts over the same grouping,
-        # so neither costs a pass.
+        # coverage: slots the meters delivered anything for. duty: of those,
+        # the slots that carry consumption.
         present = avg_diff[f"{col}_avg"].notna()
         coverage = float(present.mean()) if len(avg_diff) else 0.0
         duty = (
@@ -301,6 +317,7 @@ def calculate_average_diff_ibis(
     import ibis.selectors as s
 
     logging.info("Calculating Diff column averages (Ibis).")
+    assert_averageable(diff_columns)
 
     if bounds is None:
         bounds = {
@@ -316,9 +333,8 @@ def calculate_average_diff_ibis(
     hh_max_agg = {f"{col}_household_max": tbl[col].cast("Float64").max() for col in diff_columns}
     household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
 
-    # Two properties of the frame rather than of any column, so they are counted
-    # once here instead of once per column inside the loop below. See
-    # docs/performance/PROFILING_GUIDANCE.md on per-column execute in a loop.
+    # Properties of the frame rather than of any column, so they are computed
+    # once here instead of once per column inside the loop below.
     _total_slots = int(
         tbl.select(project_id_column, "ReadingDate").distinct().count().execute()
     )
@@ -329,27 +345,28 @@ def calculate_average_diff_ibis(
     )
     _max_slots = max(1, int(round(float(_coarsest) / float(grid_minutes))))
 
-    # Every column's negative count in one aggregate rather than one filtered
-    # count per column inside the loop. A negative here means the mapping-stage
-    # corrections did not do their job, so this is an assertion, not a routine
-    # branch -- and an assertion should not cost a round trip per column.
-    _guard_agg = {
-        f"_neg_{i}": (tbl[c] < 0).sum() for i, c in enumerate(diff_columns)
-    }
-    # The flag exclusion count is a log line, so it must not cost a round trip
-    # per column either.
+    # Every column's flagged count in one aggregate, so the loop below does not
+    # make a round trip per column.
+    _guard_agg = {}
     for i, c in enumerate(diff_columns):
+        _guard_agg[f"_min_{i}"] = tbl[c].min()
         findings = flag_column(c)
         if findings in tbl.columns:
             _guard_agg[f"_flagged_{i}"] = (
                 (tbl[findings].fill_null(0) & _NOT_MEASURED_HERE) != 0
             ).sum()
-    _guards = tbl.aggregate(**_guard_agg).execute().iloc[0].to_dict()
+    _guards = (
+        tbl.aggregate(**_guard_agg).execute().iloc[0].to_dict()
+        if _guard_agg else {}
+    )
 
     avg_diff_dict = {}
 
     for col in diff_columns:
         logging.info(f"Handling column (Ibis): {col}")
+        assert_no_negative_interval(
+            col, _guards.get(f"_min_{diff_columns.index(col)}")
+        )
         max_col = f"{col}_household_max"
         n_discarded = 0
         n_flagged = 0
@@ -374,12 +391,10 @@ def calculate_average_diff_ibis(
             .left_join(ub_tbl, project_id_column)
             .select(~s.endswith("_right"))
         )
+        # Every household contributes. The bound above is computed because it
+        # is reported, not to exclude anyone.
         included_ids = (
-            joined
-            .filter(joined[max_col] < joined[f"{col}_upper_bound"])
-            .select("HuisIdBSV")
-            .execute()["HuisIdBSV"]
-            .tolist()
+            joined.select("HuisIdBSV").distinct().execute()["HuisIdBSV"].tolist()
         )
 
         if not included_ids:
@@ -397,10 +412,6 @@ def calculate_average_diff_ibis(
                 }
             )
         else:
-            # Check for negative values in filtered data (mirrors the pandas version's guard)
-            if (_guards.get(f"_neg_{diff_columns.index(col)}") or 0) > 0:
-                raise ValueError("Negative Diff values found")
-
             included = tbl.filter(tbl["HuisIdBSV"].isin(included_ids))
             value = included[col].cast("float64")
 
@@ -414,9 +425,7 @@ def calculate_average_diff_ibis(
 
             # Exclude values that were not measured at this slot: written by the
             # pipeline, or recorded for a window rather than for this interval.
-            # See calculate_average_diff for why a threshold cannot identify
-            # them. Mapped data produced before flags existed has no findings
-            # column, in which case nothing is excluded here.
+            # A column with no findings column has nothing excluded here.
             findings = flag_column(col)
             if findings in included.columns:
                 not_measured_here = (
@@ -434,9 +443,8 @@ def calculate_average_diff_ibis(
                         ibis.null().cast("float64"), value
                     )
 
-            # A value above the variable's threshold is implausible rather than
-            # merely large, so it is discarded instead of clipped. The threshold
-            # is scaled to each household's cadence, as in the pandas path.
+            # Values above the column threshold are discarded, not clipped.
+            # The threshold is scaled to each household's cadence.
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
                 scaled_bound = _per_household(
@@ -451,15 +459,14 @@ def calculate_average_diff_ibis(
                         f"Discarded {n_discarded} value(s) above the column "
                         f"bound for {col} before averaging."
                     )
-                # NULL the value rather than filtering the row out. Filtering
-                # would drop a (project, timestamp) group entirely when every
-                # value in it is discarded, while the pandas path keeps the
-                # group with an NA average.
+                # NULL rather than filter: filtering would drop a
+                # (project, timestamp) group whose values are all discarded,
+                # where the group must survive with an NA average.
                 value = over.ifelse(ibis.null().cast("float64"), value)
 
-            # The cumulative variable is authoritative, so it supplies the
-            # volume wherever it holds usable readings. Deciding per household
-            # keeps a single column behind every window.
+            # The cumulative variable supplies the volume wherever it holds
+            # usable readings. Decided per household, so one column is behind
+            # every window.
             cumulative = cumulative_column(col)
             cum_value = None
             on_cumulative_ids = []
@@ -552,6 +559,25 @@ def _per_household(household_column, by_household, default):
         return ibis.literal(float(default)).cast("float64")
     return household_column.substitute(known, else_=float(default)).cast("float64")
 
+def _match_reading_date_dtype(frame):
+    """Give ReadingDate the resolution pandas produces, preserving any timezone.
+
+    DuckDB returns microsecond timestamps; the pandas path produces nanosecond
+    ones. Both describe the same instant, but the two frames are then not
+    directly comparable and a merge against a nanosecond frame is at the mercy
+    of pandas version behaviour. Normalise here, at the boundary where the
+    result leaves the engine, rather than making every caller cope.
+    """
+    if "ReadingDate" not in frame.columns:
+        return frame
+    column = frame["ReadingDate"]
+    if isinstance(column.dtype, pd.DatetimeTZDtype):
+        frame["ReadingDate"] = column.dt.as_unit("ns")
+    elif pd.api.types.is_datetime64_any_dtype(column):
+        frame["ReadingDate"] = column.astype("datetime64[ns]")
+    return frame
+
+
 def _resample_average_ibis(
     prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots
 ):
@@ -635,7 +661,7 @@ def _resample_average_ibis(
             prepared.select(project_id_column, "ReadingDate").distinct().execute()
         )
         blank[f"{diff_col}_avg"] = pd.array([pd.NA] * len(blank), dtype="Float64")
-        return blank, 0.0, 0.0
+        return _match_reading_date_dtype(blank), 0.0, 0.0
 
     offsets = ibis.memtable(
         pd.DataFrame({"_offset": pd.array(range(span), dtype="Int64")})
@@ -671,6 +697,7 @@ def _resample_average_ibis(
         ).execute(),
         float_cols=[f"{diff_col}_avg"],
     )
+    avg = _match_reading_date_dtype(avg)
     avg = avg[[project_id_column, "ReadingDate", f"{diff_col}_avg"]].sort_values(
         [project_id_column, "ReadingDate"]
     ).reset_index(drop=True)

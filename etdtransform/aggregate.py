@@ -2667,10 +2667,9 @@ def resample_variable(df, var, config, interval, group_column, min_count):
     elif method == "avg":
         return resample_avg(df_copy, var, interval, group_column, min_count)
     # 'derive' columns (intensive ratios) are recomputed from their resampled
-    # components as a post-step in resample_and_save, exactly as the DuckDB path
-    # does; the caller skips them so they never reach this dispatch. Any other
-    # method is a data-model/config error -- fail loudly instead of returning
-    # None (which previously caused a downstream merge(None) crash).
+    # components as a post-step in resample_and_save. Any other
+    # method is a data-model error -- fail loudly rather than returning
+    # None
     raise ValueError(f"Unknown resample_method '{method}' for column '{var}'")
 
 

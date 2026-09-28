@@ -1,25 +1,17 @@
 """Which fill a gap gets is decided by whether the average is there.
 
-The routing used to be on the average's summed energy against 1e-8. A sum cannot
-tell an all-missing average from a genuinely-zero one, because
-``transform("sum")`` skips pd.NA and an all-missing group sums to 0.0. So a gap
-with no shape and a gap whose shape is zero took the same branch by accident,
-and a gap whose average was only partly present took the proportional branch and
-then left the cells without an average unfilled.
-
 Three cases, decided on presence:
 
   average present for every cell   -> proportional
   present for some cells           -> proportional, the rest taking the gap mean
   absent for every cell            -> uniform
 
-Two things about the fixture, both learned the hard way. The gap group runs from
-the first missing cell up to and including the row carrying the closing
-cumulative reading -- that row's interval value is consumption over the step into
-it, so it belongs to the gap. And the filled values must stay under the column's
-declared maximum (1.5 for ``ElektriciteitNetgebruikDiff``): the threshold pass
-runs after imputation and nulls anything above it, which is indistinguishable
-from a fill that never happened.
+Two constraints on the fixtures. The gap group runs from the first missing cell
+up to and including the row carrying the closing cumulative reading -- that
+row's interval value is consumption over the step into it, so it belongs to the
+gap. And filled values must stay under the column's declared maximum (1.5 for
+``ElektriciteitNetgebruikDiff``), because the threshold pass runs after
+imputation and nulls anything above it.
 """
 
 import pandas as pd
@@ -97,7 +89,7 @@ class TestTheThreeRoutes:
         filled = _filled(out).astype(float).tolist()
         assert filled == pytest.approx([1.0, 1.0, 1.0, 1.0])
         assert float(sum(filled)) == pytest.approx(JUMP)
-        assert _types(out) == {ImputeType.LINEAR_FILL.value}
+        assert _types(out) == {ImputeType.UNIFORM_FILL.value}
 
     def test_a_partly_present_average_fills_every_cell(self):
         """The case that used to lose cells: those with no average got nothing."""
@@ -124,7 +116,7 @@ class TestZeroIsNotAbsent:
         out = _impute([pd.NA, 0.0, 0.0, 0.0, 0.0])
         filled = _filled(out).astype(float).tolist()
         assert filled == pytest.approx([1.0, 1.0, 1.0, 1.0])
-        assert _types(out) == {ImputeType.LINEAR_FILL.value}
+        assert _types(out) == {ImputeType.UNIFORM_FILL.value}
 
     def test_a_partly_zero_average_keeps_its_zeros_and_conserves_volume(self):
         """A smaller jump here on purpose.

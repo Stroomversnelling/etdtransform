@@ -118,8 +118,7 @@ def apply_thresholds(
     Values outside the thresholds are replaced with average values and marked
     as imputed.
     """
-    # Physical outliers are judged at the column threshold: a delivered reading
-    # is implausible only relative to the interval it covers.
+    # Out-of-bounds rows, judged against the column threshold.
     mask = (
         bound_flags(
             df[diff_col],
@@ -129,11 +128,8 @@ def apply_thresholds(
         != MappingFlag.NONE.value
     )
 
-    # A catch-up is consumption that accumulated over the preceding frozen span
-    # and arrived in one reading. The cumulative variable accounts for it, so
-    # replacing it with the project average would discard that volume. Its
-    # timing is corrected at the mapping stage, where span treatment spreads it
-    # across the freeze and leaves an ordinary gap for the redistribution below.
+    # Catch-up readings are excluded from the mask: their volume is already
+    # accounted for by the cumulative variable.
     catchup = _catchup_positions(
         df, diff_col, upper_bound if detection_bound is None else detection_bound
     )
@@ -146,7 +142,11 @@ def apply_thresholds(
 
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
-    df.loc[mask, impute_type_col] = df[impute_type_col].fillna(ImputeType.NONE.value) | ImputeType.THRESHOLD_ADJUSTED.value
+    df.loc[mask, impute_type_col] = (
+        df[impute_type_col].fillna(ImputeType.NONE.value)
+        | ImputeType.THRESHOLD_ADJUSTED.value
+        | ImputeType.UNSCALED_AVERAGE.value
+    )
 
     return df
 
@@ -155,13 +155,11 @@ def _catchup_positions(df, diff_col, upper_bound) -> pd.Series:
     """
     Rows where an over-bound value is the catch-up of a frozen span.
 
-    Uses the mapping-stage detector rather than a second implementation of it:
-    a value is only spared if a flat run of non-advancing readings sits directly
-    before it, which is what distinguishes accumulation arriving late from a
-    reading that is simply wrong.
+    Calls the mapping-stage detector, ``etdmap.flags.frozen_spans``. A value
+    counts as a catch-up only when a flat run of non-advancing readings sits
+    directly before it.
 
-    Detection runs per household, since a span is a property of one household's
-    own history.
+    Runs per household, since a span is a property of one household's series.
     """
     found = pd.Series(False, index=df.index)
     if pd.isna(upper_bound) or df.empty:
@@ -328,10 +326,8 @@ def impute_and_normalize(
                 cadence=_cadence,
             )
 
-            # Every cell inside a gap should carry a value once imputation has
-            # run. Testing only the cells that had an average made the guard
-            # blind to the ones it needed to report: those are exactly the
-            # cells the average was missing for.
+            # Every cell inside a gap should carry a value once imputation
+            # has run.
             inside_a_gap = df["cumulative_value_group"].notna()
             remaining_na = int((df[diff_col].isna() & inside_a_gap).sum())
 
@@ -348,8 +344,7 @@ def impute_and_normalize(
 
         logging.info(f"Calculating {diff_col} imputation gap stats")
         _grp = df.groupby([project_id_column, "HuisIdBSV"])
-        # One C-level pass for all scalar stats; apply only for the methods list
-        # (one small set-op per group vs 7 stat computations per group in the old apply).
+        # One C-level pass for all scalar stats; apply only for the methods list.
         _stats = _grp.agg(
             diff_col_total=(diff_col, "sum"),
             _cum_max=(cum_col, "max"),
@@ -667,25 +662,18 @@ def process_imputation_vectorized(
             "impute_values"
         ].transform("sum")
 
-        # How many cells of the gap the average speaks for. This is what the
-        # fill routes on: whether the average is *there*, not how large it sums
-        # to. A gap whose average is partly missing is a different case from one
-        # with no average at all, and summing cannot tell them apart -- an
-        # all-missing group sums to 0.0 because transform("sum") skips pd.NA.
+        # How many cells of the gap the average has a value for. The fill
+        # routes on this count, not on the summed average.
         df["impute_present"] = df["gap_length"] - df["impute_na"]
 
-        # Where the average is missing for some cells of a gap but not all, those
-        # cells take the gap's own mean. The shape is kept where it is known and
-        # goes flat where it is not, and the fill still conserves the measured
-        # jump. Both terms come from reductions already computed above, so this
-        # costs no additional pass.
+        # Cells of a partly-covered gap that have no average take the gap's own
+        # mean. Both terms are reductions already computed above.
         partial = (df["impute_na"] > 0) & (df["impute_present"] > 0)
         gap_mean = df["impute_jump"] / df["impute_present"]
         df["impute_values"] = df["impute_values"].where(
             ~(partial & df["avg_na"]), gap_mean
         )
-        # The gap's total moves with the substitution, so recompute it rather
-        # than scaling against a sum that no longer matches impute_values.
+        # Recomputed after the substitution so it matches impute_values.
         df["impute_jump"] = df["impute_jump"].where(
             ~partial, df["impute_jump"] * df["gap_length"] / df["impute_present"]
         )
@@ -721,9 +709,18 @@ def process_imputation_vectorized(
         total_counts = df.groupby("HuisIdBSV")[diff_col].transform("size")
         not_enough_comparable = comparable_counts <= (total_counts / 2)
 
-        df["house_impute_factor"] = (df["diff_avg_sum"] / df["cum_diff_sum"]).replace(
+        # The household's level relative to the project average: 1.0 matches the
+        # average, 2.0 is twice it. Multiplies the average to bring it to this
+        # household's level.
+        df["house_impute_factor"] = (df["cum_diff_sum"] / df["diff_avg_sum"]).replace(
             [float("inf"), -float("inf")],
             pd.NA,
+        )
+        # True where the factor below is the neutral 1.0 rather than a value
+        # computed from the household's own rows. The fill branches read it to
+        # choose between the scaled and unscaled impute types.
+        df["house_factor_is_fallback"] = (
+            df["house_impute_factor"].isna() | not_enough_comparable
         )
         df["house_impute_factor"] = (
             df["house_impute_factor"].fillna(1.0).mask(not_enough_comparable, 1.0)
@@ -735,6 +732,7 @@ def process_imputation_vectorized(
         "gap_jump_is_na_mask",
         "gap_jump",
         "house_impute_factor",
+        "house_factor_is_fallback",
         "avg_na",
         "impute_jump",
         "impute_na",
@@ -782,7 +780,9 @@ def process_imputation_vectorized(
         flat_gap_jump_mask = has_gap_jump_mask & (df["gap_jump"] < 0)
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEGATIVE_GAP_JUMP.value
+        df.loc[flat_gap_jump_mask, impute_type_col] = (
+            ImputeType.NEGATIVE_GAP_JUMP.value | ImputeType.ZERO_FILL.value
+        )
 
         # gap jump near zero - fill with zeros
         flat_gap_jump_mask = (
@@ -790,13 +790,13 @@ def process_imputation_vectorized(
         )
         df.loc[flat_gap_jump_mask, is_imputed_col] = True
         df.loc[flat_gap_jump_mask, diff_col] = 0
-        df.loc[flat_gap_jump_mask, impute_type_col] = ImputeType.NEAR_ZERO_GAP_JUMP.value
+        df.loc[flat_gap_jump_mask, impute_type_col] = (
+            ImputeType.NEAR_ZERO_GAP_JUMP.value | ImputeType.ZERO_FILL.value
+        )
 
         # No average for any cell of the gap, or an average that is present but
-        # everywhere zero: there is no shape to distribute by, so the jump is
-        # spread evenly. Routing on presence rather than on the summed average
-        # is what separates this from the partly-missing case -- an all-missing
-        # group sums to 0.0, so a magnitude test cannot tell them apart.
+        # everywhere zero: no shape to distribute by, so the jump is spread
+        # evenly.
         no_shape = (df["impute_present"] <= 0) | (df["impute_jump"] < 1e-8)
         positive_gap_linear_mask = (
             has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & no_shape
@@ -806,12 +806,11 @@ def process_imputation_vectorized(
             df["gap_jump"] / df["gap_length"],
             10,
         )
-        df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.LINEAR_FILL.value
+        df.loc[positive_gap_linear_mask, impute_type_col] = ImputeType.UNIFORM_FILL.value
 
         # A shape exists for at least one cell of the gap, so the jump is
-        # distributed by it. Cells whose average was missing carry the gap's own
-        # mean by this point, so every cell of the gap is filled and none is
-        # silently skipped.
+        # distributed by it. Cells without an average carry the gap's own mean
+        # by this point.
         positive_gap_scaled_mask = (
             has_gap_jump_mask & (df["gap_jump"] >= 1e-8) & ~no_shape
         )
@@ -849,38 +848,56 @@ def process_imputation_vectorized(
             wo_gap_jump_mask & df["end_cum_value"].isna() & df["prev_cum_value"].isna()
         )
         if nogpjump_no_start_no_end_value_mask.any():
+            # add_diff_columns seeds row 0 of each household with 0, so that row
+            # is excluded when testing whether the household delivers intervals.
+            _first_in_house = df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)
             house_no_diff_values = (
-                df.groupby("HuisIdBSV")[diff_col].transform("count") == 0
+                (df[diff_col].notna() & ~_first_in_house)
+                .groupby(df["HuisIdBSV"])
+                .transform("sum")
+                == 0
             )
 
-            # Neither end of the gap has a cumulative value. Whether that is a
-            # fault depends on whether the interval column has anything either.
-            #
-            # Nothing in either: the variable is absent for this household and
-            # there is nothing to impute from.
-            #
-            # Intervals but no cumulative values: the variable is delivered as
-            # intervals only, which is a supported case rather than an error.
-            # The project average fills the gap directly, since there is no
-            # cumulative reading to scale it against -- which is also why the
-            # gap-jump paths above cannot reach this case.
+            # Neither end of the gap has a cumulative value. The household
+            # delivers this variable as intervals only when the interval column
+            # holds values and the cumulative does not.
             _interval_only = (
                 nogpjump_no_start_no_end_value_mask
                 & ~house_no_diff_values
                 & df["impute_values"].notna()
             )
-            if _interval_only.any():
+            # No cumulative reading bounds the gap, so house_impute_factor is
+            # the only scale available. Fill where it was computed from the
+            # household's own rows; leave the cells empty where it fell back.
+            _fallback = df["house_factor_is_fallback"]
+            _fill_io = _interval_only & ~_fallback
+            _skip_io = _interval_only & _fallback
+
+            if _fill_io.any():
                 logging.info(
-                    f"{diff_col}: filling {int(_interval_only.sum())} interval(s) "
-                    f"from the project average -- the variable is delivered as "
-                    f"intervals only for this household."
+                    f"{diff_col}: filling {int(_fill_io.sum())} interval(s) from "
+                    f"the project average scaled to the household -- the variable "
+                    f"is delivered as intervals only for this household."
                 )
-                df.loc[_interval_only, is_imputed_col] = True
-                df.loc[_interval_only, diff_col] = df.loc[
-                    _interval_only, "impute_values"
-                ]
-                df.loc[_interval_only, impute_type_col] = (
+                df.loc[_fill_io, is_imputed_col] = True
+                df.loc[_fill_io, diff_col] = (
+                    df.loc[_fill_io, "impute_values"]
+                    * df.loc[_fill_io, "house_impute_factor"]
+                )
+                df.loc[_fill_io, impute_type_col] = (
                     ImputeType.NO_CUMULATIVE_VALUE.value
+                    | ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
+                )
+
+            if _skip_io.any():
+                logging.warning(
+                    f"{diff_col}: leaving {int(_skip_io.sum())} interval(s) "
+                    f"unfilled -- no cumulative reading bounds them and the "
+                    f"household factor has too few comparable rows to scale with."
+                )
+                df.loc[_skip_io, impute_type_col] = (
+                    ImputeType.NO_CUMULATIVE_VALUE.value
+                    | ImputeType.NOT_FILLED.value
                 )
 
             _truly_empty = nogpjump_no_start_no_end_value_mask & house_no_diff_values
@@ -902,7 +919,9 @@ def process_imputation_vectorized(
         )
         df.loc[nogpjump_has_end_value_zero_mask, is_imputed_col] = True
         df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
-        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = ImputeType.ZERO_END_VALUE.value
+        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = (
+            ImputeType.ZERO_END_VALUE.value | ImputeType.ZERO_FILL.value
+        )
 
         #### end value > 0 - fill with impute values - type 7 (only when avg available)
         nogpjump_has_end_value_positive_mask = nogpjump_has_end_value_mask & (
@@ -911,7 +930,9 @@ def process_imputation_vectorized(
         _can_fill_ev = nogpjump_has_end_value_positive_mask & df["impute_values"].notna()
         df.loc[_can_fill_ev, is_imputed_col] = True
         df.loc[_can_fill_ev, diff_col] = df.loc[_can_fill_ev, "impute_values"]
-        df.loc[_can_fill_ev, impute_type_col] = ImputeType.POSITIVE_END_VALUE.value
+        df.loc[_can_fill_ev, impute_type_col] = (
+            ImputeType.POSITIVE_END_VALUE.value | ImputeType.UNSCALED_AVERAGE.value
+        )
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
@@ -923,13 +944,31 @@ def process_imputation_vectorized(
         nogpjump_has_start_value_mask = (
             wo_gap_jump_mask & df["end_cum_value"].isna() & ~df["prev_cum_value"].isna()
         )
+        # The gap opens on a reading and never closes, so again only
+        # house_impute_factor scales it. Same rule as the no-cumulative case.
         _can_fill_sv = nogpjump_has_start_value_mask & df["impute_values"].notna()
-        df.loc[_can_fill_sv, is_imputed_col] = True
-        df.loc[_can_fill_sv, diff_col] = (
-            df.loc[_can_fill_sv, "impute_values"]
-            * df.loc[_can_fill_sv, "house_impute_factor"]
+        _sv_fallback = df["house_factor_is_fallback"]
+        _fill_sv = _can_fill_sv & ~_sv_fallback
+        _skip_sv = _can_fill_sv & _sv_fallback
+
+        df.loc[_fill_sv, is_imputed_col] = True
+        df.loc[_fill_sv, diff_col] = (
+            df.loc[_fill_sv, "impute_values"]
+            * df.loc[_fill_sv, "house_impute_factor"]
         )
-        df.loc[_can_fill_sv, impute_type_col] = ImputeType.NO_END_VALUE.value
+        df.loc[_fill_sv, impute_type_col] = (
+            ImputeType.NO_END_VALUE.value | ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
+        )
+
+        if _skip_sv.any():
+            logging.warning(
+                f"{diff_col}: leaving {int(_skip_sv.sum())} interval(s) unfilled "
+                f"-- the gap has no closing reading and the household factor has "
+                f"too few comparable rows to scale with."
+            )
+            df.loc[_skip_sv, impute_type_col] = (
+                ImputeType.NO_END_VALUE.value | ImputeType.NOT_FILLED.value
+            )
 
         return df
 
@@ -940,6 +979,24 @@ def process_imputation_vectorized(
         impute_type_col=impute_type_col,
         is_imputed_col=is_imputed_col,
     )
+
+    # Gap cells no branch above wrote to. Row 0 of a household bounds no gap,
+    # so it is excluded.
+    _first_in_house = df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)
+    _unfilled = (
+        df[diff_col].isna()
+        & df["cumulative_value_group"].notna()
+        & ~_first_in_house
+    )
+    if _unfilled.any():
+        df.loc[_unfilled, impute_type_col] = (
+            df[impute_type_col].fillna(ImputeType.NONE.value)
+            | ImputeType.NOT_FILLED.value
+        )
+        logging.warning(
+            f"{diff_col}: {int(_unfilled.sum())} cell(s) inside a gap were not "
+            f"filled and carry NOT_FILLED."
+        )
 
     logging.info("Apply thresholds to remove physically impossible outliers")
     df = apply_thresholds(
@@ -987,7 +1044,7 @@ class ImputeType(IntFlag):
         Represents a negative gap jump. Fills with zeros (potentially a meter reset)
     NEAR_ZERO_GAP_JUMP : int
         Represents a gap jump near zero. Fills with zeros (no change).
-    LINEAR_FILL : int
+    UNIFORM_FILL : int
         Represents a linear fill for positive gaps with near-zero impute jumps based on average.
     SCALED_FILL : int
         Represents a scaled fill for positive gaps with positive impute jumps based on average.
@@ -1003,21 +1060,43 @@ class ImputeType(IntFlag):
         with averages.
     THRESHOLD_ADJUSTED : int
         Represents values adjusted due to threshold violations. This happens after imputation and could be triggered by imputed values.
+    ZERO_FILL : int
+        A zero was written. Set by the three conditions that fill with zeros.
+    UNSCALED_AVERAGE : int
+        The project average was written as it stands, with no household factor
+        applied. Also set where a household factor was intended but fell back to
+        the neutral 1.0 for want of comparable rows.
+    HOUSEHOLD_SCALED_AVERAGE : int
+        The project average was written multiplied by a household factor that
+        was computed from that household's own comparable rows.
+    NOT_FILLED : int
+        A cell inside a gap that no branch wrote to, left as pd.NA.
 
     Notes
     -----
     The THRESHOLD_ADJUSTED flag can be combined with other imputation types.
 
+    The members above THRESHOLD_ADJUSTED name the condition that led to a fill;
+    those below it name the action taken. Every cell that was written carries
+    exactly one action flag, so a reader can select on what happened to a value
+    without enumerating the conditions that can lead there.
+
     .. :no-index:
     """
 
     NONE = 0
+
     NEGATIVE_GAP_JUMP = auto()
     NEAR_ZERO_GAP_JUMP = auto()
-    LINEAR_FILL = auto()
+    UNIFORM_FILL = auto()
     SCALED_FILL = auto()
     ZERO_END_VALUE = auto()
     POSITIVE_END_VALUE = auto()
     NO_END_VALUE = auto()
     NO_CUMULATIVE_VALUE = auto()
     THRESHOLD_ADJUSTED = auto()
+
+    ZERO_FILL = auto()
+    UNSCALED_AVERAGE = auto()
+    HOUSEHOLD_SCALED_AVERAGE = auto()
+    NOT_FILLED = auto()

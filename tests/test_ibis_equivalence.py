@@ -23,7 +23,7 @@ _P1_OUTLIER = 199
 _P2_NORMAL = list(range(201, 221))
 _P2_OUTLIER = 299
 
-DIFF_COLS = ["ElektriciteitNetgebruikLaagDiff", "Zon-opwekTotaalDiff"]
+DIFF_COLS = ["ElektriciteitNetgebruikLaagDiff", "ZonopwekVerbruikDiff"]
 
 # Rows whose measurement values are set to pd.NA to verify null handling.
 # We use (project_id, household_id, timestamp_index) tuples to identify them.
@@ -48,7 +48,7 @@ def diff_fixture_df() -> pd.DataFrame:
                     "HuisIdBSV": household_id,
                     "ReadingDate": dt,
                     "ElektriciteitNetgebruikLaagDiff": pd.NA if null_this else float(rng.uniform(1.0, 10.0)),
-                    "Zon-opwekTotaalDiff": pd.NA if null_this else float(rng.uniform(0.5, 5.0)),
+                    "ZonopwekVerbruikDiff": pd.NA if null_this else float(rng.uniform(0.5, 5.0)),
                 })
         for dt in dates:
             rows.append({
@@ -56,14 +56,14 @@ def diff_fixture_df() -> pd.DataFrame:
                 "HuisIdBSV": outlier_id,
                 "ReadingDate": dt,
                 "ElektriciteitNetgebruikLaagDiff": float(rng.uniform(150.0, 300.0)),
-                "Zon-opwekTotaalDiff": float(rng.uniform(150.0, 300.0)),
+                "ZonopwekVerbruikDiff": float(rng.uniform(150.0, 300.0)),
             })
 
     df = pd.DataFrame(rows).astype({
         "ProjectIdBSV": "Int64",
         "HuisIdBSV": "Int64",
         "ElektriciteitNetgebruikLaagDiff": "Float64",
-        "Zon-opwekTotaalDiff": "Float64",
+        "ZonopwekVerbruikDiff": "Float64",
     })
     # Row-by-row construction reverts timestamps to ns; pin to us to match
     # DuckDB's output precision and the parquet files produced by the pipeline.
@@ -147,14 +147,14 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
         "ProjectIdBSV": pd.array([1, 1, 1, 1, 1, 1], dtype="Int64"),
         "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate": list(dates) * 2,
-        "TestDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
+        "ZonopwekVerbruikDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
     })
 
-    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["TestDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["TestDiff"])
+    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
 
-    avg_pd = result_pd["TestDiff"]["avg_diff"]["TestDiff_avg"].sort_values().values
-    avg_ib = result_ibis["TestDiff"]["avg_diff"]["TestDiff_avg"].sort_values().values
+    avg_pd = result_pd["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
+    avg_ib = result_ibis["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
 
     np.testing.assert_allclose(avg_pd, avg_ib, rtol=1e-6)
     # Verify the mean correctly ignores the null
@@ -181,35 +181,56 @@ def test_empty_project_edge_cases():
         "ProjectIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "HuisIdBSV":    pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate":  list(dates) * 2,
-        "TestDiff":     pd.array([0.0, 0.0, 0.0, 3.0, 5.0, 4.0], dtype="Float64"),
+        "ZonopwekVerbruikDiff":     pd.array([0.0, 0.0, 0.0, 3.0, 5.0, 4.0], dtype="Float64"),
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["TestDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["TestDiff"])
+    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        ub = result["TestDiff"]["upper_bounds"]
-        hmb = result["TestDiff"]["household_max_with_bounds"]
-        avg = result["TestDiff"]["avg_diff"]
+        ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]
+        hmb = result["ZonopwekVerbruikDiff"]["household_max_with_bounds"]
+        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
         # Both projects must appear in upper_bounds
         assert set(ub["ProjectIdBSV"].dropna()) >= {2}, f"{label}: project 2 missing from upper_bounds"
         assert 1 in ub["ProjectIdBSV"].values, f"{label}: project 1 missing from upper_bounds"
 
         # Project 1 upper_bound must be null (no qualifying households)
-        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "TestDiff_upper_bound"]
+        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_upper_bound"]
         assert p1_ub.isna().all(), f"{label}: project 1 upper_bound should be null, got {p1_ub.values}"
 
         # Project 2 upper_bound must be non-null and positive
-        p2_ub = ub.loc[ub["ProjectIdBSV"] == 2, "TestDiff_upper_bound"]
+        p2_ub = ub.loc[ub["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_upper_bound"]
         assert p2_ub.notna().all() and (p2_ub > 0).all(), (
             f"{label}: project 2 upper_bound should be positive, got {p2_ub.values}"
         )
 
         # avg_diff must have rows for project 2 only (project 1 excluded)
-        assert (avg["ProjectIdBSV"] == 2).all(), f"{label}: avg_diff should only contain project 2"
-        assert len(avg) == 3, f"{label}: expected 3 avg rows for project 2, got {len(avg)}"
+        # Project 1 is all-zero, so it has no average to report -- but its
+        # slots exist and come back carrying pd.NA. A slot with no value is not
+        # a missing slot, and the merge downstream is on
+        # (project, ReadingDate).
+        assert set(avg["ProjectIdBSV"].dropna()) == {1, 2}, (
+            f"{label}: both projects should appear, got "
+            f"{set(avg['ProjectIdBSV'].dropna())}"
+        )
+        # Zero is a measurement, so an all-zero project averages to 0.0. That is
+        # a different fact from pd.NA, which means nothing was measured, and the
+        # two must not be conflated.
+        assert (
+            avg.loc[avg["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_avg"].dropna() == 0.0
+        ).all(), f"{label}: an all-zero project should average to zero, not NA"
+        assert avg.loc[avg["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_avg"].notna().any(), (
+            f"{label}: project 2 has data and should have an average"
+        )
+        # Three slots for each of the two projects, now that project 1 is no
+        # longer dropped wholesale.
+        assert len(avg) == 6, f"{label}: expected 3 slots per project, got {len(avg)}"
+        assert len(avg[avg["ProjectIdBSV"] == 2]) == 3, (
+            f"{label}: project 2 should still have its 3 slots"
+        )
 
         # household_max_with_bounds must include all households
         assert set(hmb["HuisIdBSV"]) == {1, 2}, f"{label}: unexpected households in hmb: {set(hmb['HuisIdBSV'])}"
@@ -218,13 +239,13 @@ def test_empty_project_edge_cases():
     sort_ub  = ["ProjectIdBSV"]
     sort_avg = ["ProjectIdBSV", "ReadingDate"]
     pd.testing.assert_frame_equal(
-        result_pd["TestDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
-        result_ibis["TestDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
+        result_pd["ZonopwekVerbruikDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
+        result_ibis["ZonopwekVerbruikDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
         check_like=True, rtol=1e-5,
     )
     pd.testing.assert_frame_equal(
-        result_pd["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        result_ibis["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        result_pd["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        result_ibis["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
         check_like=True, rtol=1e-5,
     )
 
@@ -244,49 +265,64 @@ def test_flagged_values_excluded_in_both_paths():
         "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
         "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate": list(dates) * 2,
-        "TestDiff": pd.array([3.0, 3.0, 3.0, 9.0, 9.0, 9.0], dtype="Float64"),
-        flag_column("TestDiff"): pd.array(
+        "ZonopwekVerbruikDiff": pd.array([3.0, 3.0, 3.0, 9.0, 9.0, 9.0], dtype="Float64"),
+        flag_column("ZonopwekVerbruikDiff"): pd.array(
             [0, 0, 0] + [MappingFlag.FROZEN_SPAN.value] * 3, dtype="Int64"
         ),
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["TestDiff"])
+    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["TestDiff"]
+        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"]
     )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        assert result["TestDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
-        avg = result["TestDiff"]["avg_diff"]["TestDiff_avg"].astype(float)
+        assert result["ZonopwekVerbruikDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
+        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].astype(float)
         assert (avg == 3.0).all(), f"{label}: flagged values shaped the average"
 
     sort_avg = ["ProjectIdBSV", "ReadingDate"]
     pd.testing.assert_frame_equal(
-        result_pd["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        result_ibis["TestDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        result_pd["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
+        result_ibis["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
         check_like=True, rtol=1e-5,
     )
 
 
 def test_all_null_diffs_edge_case():
-    """When all diff values for a project are pd.NA, behaviour mirrors all-zeros."""
+    """A project whose every value is pd.NA gets a row per slot, carrying pd.NA.
+
+    It used to get no rows at all, but only as a side effect of the relative
+    household filter: a household whose maximum was NA failed
+    `max < 2 x p95(maxima)` and was dropped, taking its slots with it. Plan group
+    K removed that filter, so the slots survive with no value -- which is what
+    they are. A slot that exists and has no average is not the same as a slot
+    that does not exist, and the merge downstream is on (project, ReadingDate).
+
+    Both paths agree on this, which is the point of the assertion.
+    """
     dates = pd.date_range("2024-06-01", periods=2, freq="5min")
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1, 1], dtype="Int64"),
         "HuisIdBSV":    pd.array([1, 1], dtype="Int64"),
         "ReadingDate":  list(dates),
-        "TestDiff":     pd.array([pd.NA, pd.NA], dtype="Float64"),
+        "ZonopwekVerbruikDiff":     pd.array([pd.NA, pd.NA], dtype="Float64"),
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["TestDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["TestDiff"])
+    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        ub = result["TestDiff"]["upper_bounds"]
-        avg = result["TestDiff"]["avg_diff"]
+        ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]
+        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
-        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "TestDiff_upper_bound"]
+        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_upper_bound"]
         assert p1_ub.isna().all(), f"{label}: all-null project upper_bound should be null"
-        assert len(avg) == 0, f"{label}: avg_diff should be empty for all-null project, got {len(avg)} rows"
+        assert len(avg) == len(dates), (
+            f"{label}: expected one row per slot, got {len(avg)}"
+        )
+        assert avg["ZonopwekVerbruikDiff_avg"].isna().all(), (
+            f"{label}: an all-null project has no average to report"
+        )

@@ -414,11 +414,6 @@ def join_weather_data(tbl: ibis.Expr, weather_station_table: Optional[ibis.Expr]
     # 1 hour) yields exactly that (ref.hour()+1 == h for h in 1..23) and also
     # handles the midnight boundary correctly: a 00:00 reading maps to uurvak
     # 24 of the previous day instead of the non-existent HH=0.
-    #
-    # This replaces an earlier "+1 on ReadingDate.hour()" that over-shifted
-    # every reading by one uurvak; the one-hour lead was confirmed empirically
-    # by cross-correlating TemperatuurBuitenWarmtepomp (local sensor) against
-    # the joined KNMI temperature (peak correlation at a -1 hour shift).
     if 'YYYYMMDD' not in tbl.columns:
         ref = tbl.ReadingDate - ibis.interval(hours=1)
         tbl = tbl.mutate(

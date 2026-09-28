@@ -67,9 +67,7 @@ def _assert_frames_equal(df_a, df_b, label_a, label_b):
 
 # ---------------------------------------------------------------------------
 # Session fixtures: reuse the shared `ibis_pipeline` fixture from conftest.py
-# (its household_calculated.parquet is identical to what this file used to
-# produce in its own _calculated_dir fixture -- ~128s of duplicated work
-# eliminated).
+# rather than building household_calculated.parquet again here.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")

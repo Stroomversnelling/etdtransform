@@ -42,7 +42,6 @@ autodoc_default_options = {
     'show-inheritance': True,
     'member-order': 'bysource',
     'special-members': '__init__',
-    'exclude-members': '__weakref__, NONE, NEGATIVE_GAP_JUMP, NEAR_ZERO_GAP_JUMP, LINEAR_FILL, SCALED_FILL, ZERO_END_VALUE, POSITIVE_END_VALUE, NO_END_VALUE, THRESHOLD_ADJUSTED'
 }
 
 source_suffix = {
