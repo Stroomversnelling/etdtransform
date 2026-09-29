@@ -8,7 +8,6 @@ from etdmap.flags import (
     MappingFlag,
     bound_flags,
     frozen_spans,
-    scale_bound_to_cadence,
 )
 from etdmap.data_model import interval_column
 from etdmap.record_validators import thresholds_dict
@@ -140,12 +139,25 @@ def apply_thresholds(
         )
         mask = mask & ~catchup
 
+    # The average is the replacement, so where it is absent the pass blanks the
+    # value instead of substituting one. The two outcomes carry different
+    # action flags; THRESHOLD_VIOLATED records the condition either way.
+    replaced = mask & df[avg_col].notna()
+    blanked = mask & df[avg_col].isna()
+
     df.loc[mask, diff_col] = df.loc[mask, avg_col]
     df.loc[mask, is_imputed_col] = True
-    df.loc[mask, impute_type_col] = (
+    df.loc[replaced, impute_type_col] = (
         df[impute_type_col].fillna(ImputeType.NONE.value)
         | ImputeType.THRESHOLD_ADJUSTED.value
+        | ImputeType.THRESHOLD_VIOLATED.value
         | ImputeType.UNSCALED_AVERAGE.value
+    )
+    df.loc[blanked, impute_type_col] = (
+        df[impute_type_col].fillna(ImputeType.NONE.value)
+        | ImputeType.THRESHOLD_ADJUSTED.value
+        | ImputeType.THRESHOLD_VIOLATED.value
+        | ImputeType.NULLED_POST_IMPUTATION.value
     )
 
     return df
@@ -160,9 +172,15 @@ def _catchup_positions(df, diff_col, upper_bound) -> pd.Series:
     directly before it.
 
     Runs per household, since a span is a property of one household's series.
+    *upper_bound* is a scalar or one value per row; the bound is the same for
+    every row of a household, so the first of them is the household's bound.
     """
     found = pd.Series(False, index=df.index)
-    if pd.isna(upper_bound) or df.empty:
+    if df.empty:
+        return found
+
+    per_row = isinstance(upper_bound, pd.Series)
+    if not per_row and pd.isna(upper_bound):
         return found
 
     group_column = "HuisIdBSV" if "HuisIdBSV" in df.columns else None
@@ -170,8 +188,11 @@ def _catchup_positions(df, diff_col, upper_bound) -> pd.Series:
         df.groupby(group_column, sort=False) if group_column else [(None, df)]
     )
     for _, group in groups:
+        bound = upper_bound.loc[group.index].iloc[0] if per_row else upper_bound
+        if pd.isna(bound):
+            continue
         spans = frozen_spans(
-            group[diff_col].reset_index(drop=True), upper_bound=upper_bound
+            group[diff_col].reset_index(drop=True), upper_bound=bound
         )
         if not spans.empty:
             found.loc[group.index[spans["catchup_position"].astype(int)]] = True
@@ -184,6 +205,7 @@ def impute_and_normalize(
     cumulative_columns: list,
     project_id_column: str,
     max_bound: pd.DataFrame,
+    cadence: pd.DataFrame | None = None,
 ):
     """
     Perform vectorized imputation and normalization on cumulative columns
@@ -202,6 +224,10 @@ def impute_and_normalize(
         The name of the column containing project identifiers.
     max_bound : pandas.DataFrame
         A DataFrame containing maximum bounds for each variable.
+    cadence : pandas.DataFrame, optional
+        The per-column cadence table. Every threshold is scaled to the cadence
+        the column reports at, so it is read from the mapped folder when not
+        given, and an absent sidecar is an error rather than a grid assumption.
 
     Returns
     -------
@@ -236,7 +262,7 @@ def impute_and_normalize(
     logging.info("Starting to impute cumulative column diffs (vectorized).")
 
     # Read once per call: the bound for every column is scaled from this.
-    _cadence = load_column_cadence()
+    _cadence = load_column_cadence() if cadence is None else cadence
 
     def calculate_imputation_gap_stats(group, cum_col, diff_col, impute_type_col):
         diff_column_total = group[diff_col].sum()
@@ -917,22 +943,61 @@ def process_imputation_vectorized(
         nogpjump_has_end_value_zero_mask = nogpjump_has_end_value_mask & (
             df["end_cum_value"] < 1e-8
         )
-        df.loc[nogpjump_has_end_value_zero_mask, is_imputed_col] = True
-        df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
-        df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = (
-            ImputeType.ZERO_END_VALUE.value | ImputeType.ZERO_FILL.value
-        )
+        # DISABLED, deliberately reversible. Filling zeros here says the meter
+        # stood at zero for the whole gap, which follows only if it had never
+        # advanced. With no opening reading there is nothing to support that:
+        # the cumulative is pd.NA, not zero. Left in place so the previous
+        # behaviour can be restored by uncommenting.
+        #
+        # df.loc[nogpjump_has_end_value_zero_mask, is_imputed_col] = True
+        # df.loc[nogpjump_has_end_value_zero_mask, diff_col] = 0
+        # df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = (
+        #     ImputeType.ZERO_END_VALUE.value
+        #     | ImputeType.ONLY_CLOSING_READING.value
+        #     | ImputeType.ZERO_FILL.value
+        # )
+        if nogpjump_has_end_value_zero_mask.any():
+            df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = (
+                ImputeType.ZERO_END_VALUE.value
+                | ImputeType.ONLY_CLOSING_READING.value
+                | ImputeType.NOT_FILLED.value
+            )
 
         #### end value > 0 - fill with impute values - type 7 (only when avg available)
         nogpjump_has_end_value_positive_mask = nogpjump_has_end_value_mask & (
             df["end_cum_value"] > 1e-8
         )
+        # Only a closing reading bounds this gap, which is the mirror of the
+        # opening-reading case below and takes the same treatment: scale the
+        # average to the household where the factor rests on enough of the
+        # series, and write nothing where it does not.
         _can_fill_ev = nogpjump_has_end_value_positive_mask & df["impute_values"].notna()
-        df.loc[_can_fill_ev, is_imputed_col] = True
-        df.loc[_can_fill_ev, diff_col] = df.loc[_can_fill_ev, "impute_values"]
-        df.loc[_can_fill_ev, impute_type_col] = (
-            ImputeType.POSITIVE_END_VALUE.value | ImputeType.UNSCALED_AVERAGE.value
+        _ev_fallback = df["house_factor_is_fallback"]
+        _fill_ev = _can_fill_ev & ~_ev_fallback
+        _skip_ev = _can_fill_ev & _ev_fallback
+
+        df.loc[_fill_ev, is_imputed_col] = True
+        df.loc[_fill_ev, diff_col] = (
+            df.loc[_fill_ev, "impute_values"]
+            * df.loc[_fill_ev, "house_impute_factor"]
         )
+        df.loc[_fill_ev, impute_type_col] = (
+            ImputeType.POSITIVE_END_VALUE.value
+            | ImputeType.ONLY_CLOSING_READING.value
+            | ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
+        )
+
+        if _skip_ev.any():
+            logging.warning(
+                f"{diff_col}: leaving {int(_skip_ev.sum())} interval(s) unfilled "
+                f"-- the gap has no opening reading and the household factor has "
+                f"too few comparable rows to scale with."
+            )
+            df.loc[_skip_ev, impute_type_col] = (
+                ImputeType.POSITIVE_END_VALUE.value
+                | ImputeType.ONLY_CLOSING_READING.value
+                | ImputeType.NOT_FILLED.value
+            )
 
         #### end value < 0 - raise exception
         if (df["end_cum_value"] < 0).any():
@@ -957,7 +1022,9 @@ def process_imputation_vectorized(
             * df.loc[_fill_sv, "house_impute_factor"]
         )
         df.loc[_fill_sv, impute_type_col] = (
-            ImputeType.NO_END_VALUE.value | ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
+            ImputeType.NO_END_VALUE.value
+            | ImputeType.ONLY_OPENING_READING.value
+            | ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
         )
 
         if _skip_sv.any():
@@ -967,7 +1034,9 @@ def process_imputation_vectorized(
                 f"too few comparable rows to scale with."
             )
             df.loc[_skip_sv, impute_type_col] = (
-                ImputeType.NO_END_VALUE.value | ImputeType.NOT_FILLED.value
+                ImputeType.NO_END_VALUE.value
+                | ImputeType.ONLY_OPENING_READING.value
+                | ImputeType.NOT_FILLED.value
             )
 
         return df
@@ -1054,10 +1123,6 @@ class ImputeType(IntFlag):
         Represents imputation when end value is positive but there is no start value. Fills with averages.
     NO_END_VALUE : int
         Represents imputation when there is no end value. Fills with averages.
-    NO_CUMULATIVE_VALUE : int
-        Represents imputation of a variable delivered as intervals only, where
-        neither end of the gap has a cumulative value to scale against. Fills
-        with averages.
     THRESHOLD_ADJUSTED : int
         Represents values adjusted due to threshold violations. This happens after imputation and could be triggered by imputed values.
     ZERO_FILL : int
@@ -1071,6 +1136,10 @@ class ImputeType(IntFlag):
         was computed from that household's own comparable rows.
     NOT_FILLED : int
         A cell inside a gap that no branch wrote to, left as pd.NA.
+    NO_CUMULATIVE_VALUE : int
+        Represents imputation of a variable delivered as intervals only, where
+        neither end of the gap has a cumulative value to scale against. Fills
+        with averages.
 
     Notes
     -----
@@ -1086,6 +1155,8 @@ class ImputeType(IntFlag):
 
     NONE = 0
 
+    # --- signals: the condition the cell was in ---
+
     NEGATIVE_GAP_JUMP = auto()
     NEAR_ZERO_GAP_JUMP = auto()
     UNIFORM_FILL = auto()
@@ -1093,10 +1164,85 @@ class ImputeType(IntFlag):
     ZERO_END_VALUE = auto()
     POSITIVE_END_VALUE = auto()
     NO_END_VALUE = auto()
-    NO_CUMULATIVE_VALUE = auto()
+
+    # DEPRECATED. An alias of THRESHOLD_VIOLATED in practice: the threshold pass
+    # sets both on the same rows, so this adds nothing THRESHOLD_VIOLATED and the
+    # action flags do not already say. It predates the split of condition from
+    # action and is kept because its bit is written into every dataset. Read
+    # THRESHOLD_VIOLATED for the condition and the action flags for the outcome.
     THRESHOLD_ADJUSTED = auto()
+
+    # --- actions: what imputation did about it ---
 
     ZERO_FILL = auto()
     UNSCALED_AVERAGE = auto()
     HOUSEHOLD_SCALED_AVERAGE = auto()
     NOT_FILLED = auto()
+
+    # --- appended: signals ---
+
+    # No opening cumulative reading bounds the gap; the closing one does.
+    # Replaces the pair ZERO_END_VALUE / POSITIVE_END_VALUE, which split the
+    # same condition by the closing value rather than by what is known.
+    ONLY_CLOSING_READING = auto()
+
+    # An opening cumulative reading bounds the gap; no closing one does.
+    ONLY_OPENING_READING = auto()
+
+    # The value lies outside the bound the threshold pass judges it against.
+    # The condition only; what the pass then does is an action of its own.
+    # Supersedes THRESHOLD_ADJUSTED, which is set on the same rows.
+    THRESHOLD_VIOLATED = auto()
+
+    # --- appended: actions ---
+
+    # Imputation blanked the cell.
+    NULLED = auto()
+
+    # The threshold pass blanked the cell after imputation had written it.
+    # Separate from NULLED because it is a different pass acting on a value
+    # imputation had already recorded a decision about.
+    NULLED_POST_IMPUTATION = auto()
+
+    # --- appended: signals ---
+
+    # Neither end of the gap has a cumulative reading, which is the state of a
+    # variable delivered as intervals only.
+    NO_CUMULATIVE_VALUE = auto()
+
+    # --- composites ---
+
+    # The two categories, declared rather than left to a comment. A signal names
+    # the condition a cell was in; an action names what imputation did about it.
+    # Every single-bit member belongs to exactly one, which a test pins, so a
+    # report can label any flag without keeping its own list.
+    SIGNALS = (
+        NEGATIVE_GAP_JUMP
+        | NEAR_ZERO_GAP_JUMP
+        | UNIFORM_FILL
+        | SCALED_FILL
+        | ZERO_END_VALUE
+        | POSITIVE_END_VALUE
+        | NO_END_VALUE
+        | THRESHOLD_ADJUSTED
+        | ONLY_CLOSING_READING
+        | ONLY_OPENING_READING
+        | THRESHOLD_VIOLATED
+        | NO_CUMULATIVE_VALUE
+    )
+    ACTIONS = (
+        ZERO_FILL
+        | UNSCALED_AVERAGE
+        | HOUSEHOLD_SCALED_AVERAGE
+        | NOT_FILLED
+        | NULLED
+        | NULLED_POST_IMPUTATION
+    )
+
+    # Imputation wrote a value. Selects an imputed number without naming every
+    # fill method.
+    FILLED = ZERO_FILL | UNSCALED_AVERAGE | HOUSEHOLD_SCALED_AVERAGE
+
+    # Every cell imputation changed, whichever way. NOT_FILLED is excluded:
+    # nothing was written there.
+    IMPUTED_VALUE = FILLED | NULLED | NULLED_POST_IMPUTATION

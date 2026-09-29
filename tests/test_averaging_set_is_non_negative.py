@@ -1,31 +1,26 @@
 """The averaging set cannot contain a negative value, and why that is not luck.
 
-`calculate_average_diff` used to scan every column on every run for a negative
-and raise if it found one. That scan is gone, because three things upstream make
-a negative unreachable:
+Three things make a negative unreachable by the mean:
 
-1. Every averaged column declares `Min = 0.0`, and the threshold filter discards
-   what falls below `Min` before the mean is taken. **The discard is the
-   guarantee, not the declaration** -- a column declaring a zero floor can still
-   be delivered with a negative value; what makes the average safe is that the
-   value is removed first.
-2. `assert_averageable` refuses at the entry point any column whose declared
-   `Min` is negative or absent, so the filter can always floor what it sees.
+1. `assert_averageable` refuses at the entry point any column that is not the
+   interval form of a variable declared `Monotoon`. Accumulation is what makes
+   an interval a volume the average may sum, scale and redistribute.
+2. `assert_no_negative_interval` raises on the way in if one arrives anyway. It
+   is a data-model error, not a value to filter out: mapping is what blanks a
+   decreasing reading, and a negative here means it did not.
 3. Where a meter does go down, mapping classifies the cause into one of the
-   `CUMULATIVE_UNUSABLE` findings and blanks the readings. Exhaustiveness of that
-   classification is tested in etdmap
+   `CUMULATIVE_UNUSABLE` findings and blanks the readings. Exhaustiveness of
+   that classification is tested in etdmap
    (`test_cases_are_mutually_exclusive_and_cover_every_negative_diff`).
 
 Note what is NOT relied on. `Cumulatief=ja` says a variable is a running total,
-which is a statement about meaning, not a promise that its values never
-decrease -- meter resets, replacements and rollovers all break that, which is why
-mapping has four findings for them. Monotonicity is assumed nowhere.
+which is a statement about meaning, not about sign; `Monotoon` is the separate
+declaration that its values do not decrease.
 
-These tests pin (1) and (2). If someone adds a negative-capable column to the
-averaging set -- `Netuitwisseling` and the two `ElektriciteitsgebruikTotaal*`
-columns are `5-minute` interval columns with `Min = -2.01`, and are the obvious
-candidates -- these fail, and the decision to drop the runtime check has to be
-revisited rather than silently outlived.
+These tests pin (1) and (2). `Netuitwisseling` and the two
+`ElektriciteitsgebruikTotaal*` columns are the obvious candidates for being
+added to the averaging set by mistake -- they are interval columns that can go
+negative by design.
 """
 
 import pandas as pd
@@ -34,9 +29,14 @@ import pytest
 from etdmap.data_model import (
     cumulative_columns,
     interval_column,
+    monotonic_interval_columns,
     thresholds_dict,
 )
-from etdtransform.impute import get_diff_columns
+from etdtransform.impute import (
+    assert_averageable,
+    assert_no_negative_interval,
+    get_diff_columns,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -49,25 +49,18 @@ def test_the_averaging_set_is_not_empty():
 
 
 @pytest.mark.parametrize("column", AVERAGED)
-def test_every_averaged_column_declares_a_non_negative_floor(column):
-    declared = thresholds_dict.get(column, {})
-    lower = declared.get("Min")
-    assert lower is not None and pd.notna(lower), (
-        f"{column} is averaged but declares no Min, so a negative would not be "
-        f"discarded"
-    )
-    assert float(lower) >= 0.0, (
-        f"{column} declares Min={lower}. A negative value can now reach the "
-        f"project average, and the runtime check that used to catch it was "
-        f"removed on the grounds that this could not happen."
+def test_every_averaged_column_accumulates(column):
+    assert column in monotonic_interval_columns, (
+        f"{column} is averaged but its cumulative variable is not declared "
+        f"Monotoon, so its values may decrease and the average would treat a "
+        f"decrease as a volume"
     )
 
 
 @pytest.mark.parametrize("column", AVERAGED)
 def test_every_averaged_column_is_one_half_of_a_declared_pair(column):
     """Provenance, not sign: the column must be the declared complement of a
-    cumulative variable rather than merely a name ending in Diff. This says
-    nothing about whether its values can be negative -- that is the Min check."""
+    cumulative variable rather than merely a name ending in Diff."""
     sources = [c for c in cumulative_columns if interval_column(c) == column]
     assert len(sources) == 1, (
         f"{column} is averaged but is the interval form of {len(sources)} "
@@ -75,12 +68,39 @@ def test_every_averaged_column_is_one_half_of_a_declared_pair(column):
     )
 
 
-def test_the_entry_point_refuses_a_negative_capable_column():
-    from etdtransform.impute import assert_averageable
+class TestTheEntryPointRefusesWhatCannotBeAveraged:
+    def test_the_real_set_passes(self):
+        assert_averageable(AVERAGED)
 
-    assert_averageable(AVERAGED)  # the real set passes
-    with pytest.raises(ValueError, match="Min="):
-        assert_averageable(["Netuitwisseling"])
+    def test_a_column_that_may_decrease_is_refused(self):
+        with pytest.raises(ValueError, match="Monotoon"):
+            assert_averageable(["Netuitwisseling"])
+
+    def test_a_column_with_no_declared_complement_is_refused(self):
+        """An unresolvable link is not a declaration that the variable
+        accumulates, so it is refused rather than assumed."""
+        with pytest.raises(ValueError, match="Monotoon"):
+            assert_averageable(["NotAColumnInTheDataModel"])
+
+    def test_the_message_names_the_offending_column(self):
+        with pytest.raises(ValueError, match="Netuitwisseling"):
+            assert_averageable([*AVERAGED, "Netuitwisseling"])
+
+
+class TestANegativeIntervalStops():
+    """Filtering a negative out would hide that mapping did not do its job."""
+
+    def test_a_negative_raises(self):
+        with pytest.raises(ValueError, match="negative interval"):
+            assert_no_negative_interval("GasgebruikDiff", -0.25)
+
+    def test_the_message_carries_the_value(self):
+        with pytest.raises(ValueError, match="-0.25"):
+            assert_no_negative_interval("GasgebruikDiff", -0.25)
+
+    @pytest.mark.parametrize("smallest", [0.0, 0.25, None, pd.NA])
+    def test_anything_else_passes(self, smallest):
+        assert_no_negative_interval("GasgebruikDiff", smallest)
 
 
 def test_a_negative_capable_column_is_not_in_the_averaging_set():
@@ -95,7 +115,6 @@ def test_a_negative_capable_column_is_not_in_the_averaging_set():
         if lower is None or pd.isna(lower) or float(lower) >= 0:
             continue  # its declared floor changed; nothing to guard here
         assert column not in AVERAGED, (
-            f"{column} declares Min={lower} and is now averaged. The averaging "
-            f"no longer checks for negatives; decide what should happen before "
-            f"including it."
+            f"{column} declares Min={lower} and is now averaged. Decide what "
+            f"should happen to its negative values before including it."
         )

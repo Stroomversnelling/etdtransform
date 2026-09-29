@@ -254,6 +254,21 @@ def _filter_metadata_to_subset(metadata: dict, subset: set) -> dict:
 #   - stats test  : per-column min/max/null_count diff in subset -> fail
 # ---------------------------------------------------------------------------
 
+#: Columns the pipeline derives from a variable's name. The flag columns hold the
+#: values a reader decodes the data with, so a change in them is a change in what
+#: the dataset means and belongs in the compared surface. Derived by rule so the
+#: names never become a second list to keep in step with the first.
+_DERIVED_SUFFIXES = ("_flags", "_is_imputed", "_impute_type")
+
+
+def _compared_columns() -> set:
+    """The curated variables plus the columns derived from them."""
+    return set(test_aggregation_columns) | {
+        f"{column}{suffix}"
+        for column in test_aggregation_columns
+        for suffix in _DERIVED_SUFFIXES
+    }
+
 def test_files_schema_equal_expected():
     """
     Schema check: for each file in conftest.file_names, the column SET
@@ -265,7 +280,7 @@ def test_files_schema_equal_expected():
     fixture stale, regenerate) from removals (in fixture, missing from
     generated -- pipeline regression). Both kinds fail the test.
     """
-    subset = set(test_aggregation_columns)
+    subset = _compared_columns()
     failures: list[tuple[str, list[str], list[str]]] = []
     for name in conftest.file_names:
         name = name.split('.parquet')[0]
@@ -308,7 +323,7 @@ def test_files_values_equal_expected():
     are not this test's concern -- they are reported by
     test_files_schema_equal_expected.
     """
-    subset = set(test_aggregation_columns)
+    subset = _compared_columns()
     failures: list[tuple[str, list[str]]] = []
     for name in conftest.file_names:
         name = name.split('.parquet')[0]
@@ -359,7 +374,7 @@ def test_files_metadata_stats_equal_expected(load_metadata):
 
     Files with no overlap in the subset trivially pass.
     """
-    subset = set(test_aggregation_columns)
+    subset = _compared_columns()
     failures: list[tuple[str, list[str]]] = []
     for name in conftest.file_names:
         name = name.split('.parquet')[0]

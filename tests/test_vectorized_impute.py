@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +32,8 @@ def _frame(cumulative, diffs, averages):
 
 def _impute(frame):
     filled, gap_stats, _ = impute_and_normalize(
-        frame, [CUM], "ProjectIdBSV", pd.DataFrame()
+        frame, [CUM], "ProjectIdBSV", pd.DataFrame(),
+        cadence=cadence_table(frame, [CUM]),
     )
     return filled, gap_stats
 

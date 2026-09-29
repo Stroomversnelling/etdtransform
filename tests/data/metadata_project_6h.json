@@ -228,7 +228,7 @@
         },
         "ElektriciteitsgebruikTotaalGebouwgebonden": {
             "statistics": {
-                "min": "76.51111686565999",
+                "min": "76.51111686563999",
                 "max": "84.69267145348",
                 "null_count": 0
             }
@@ -242,7 +242,7 @@
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-61.52181514996499",
+                "min": "-61.52181514993892",
                 "max": "-33.97775976449999",
                 "null_count": 0
             }
@@ -495,7 +495,7 @@
         "ElektriciteitsgebruikBooster": {
             "statistics": {
                 "min": "11.105796977020002",
-                "max": "16808.49359985253",
+                "max": "16808.49353317375",
                 "null_count": 0
             }
         },

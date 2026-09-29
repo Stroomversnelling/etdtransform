@@ -25,10 +25,12 @@ import pandas as pd
 import pytest
 
 from etdtransform.impute import calculate_average_diff
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
-DIFF = "ElektriciteitNetgebruikDiff"
+CUM = "ElektriciteitNetgebruik"
+DIFF = f"{CUM}Diff"
 N = 12
 
 
@@ -43,7 +45,8 @@ def _household(household, values, project=1):
 
 def _average(frame):
     result = calculate_average_diff(
-        frame, "ProjectIdBSV", [DIFF], cadence=pd.DataFrame(), grid_minutes=5
+        frame, "ProjectIdBSV", [DIFF],
+        cadence=cadence_table(frame, [CUM]), grid_minutes=5,
     )
     return result[DIFF]["avg_diff"]
 

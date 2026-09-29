@@ -7,10 +7,20 @@ import pandas as pd
 from etdmap.data_model import (
     cumulative_column,
     interval_column,
+    monotonic_interval_columns,
     thresholds_dict,
 )
 
 from etdmap.flags import MappingFlag, flag_column
+
+from etdtransform.presence import (
+    MIN_WINDOW_COVERAGE,
+    SUFFICIENCY_FRACTION,
+    SUFFICIENCY_SHAPE,
+    WINDOW_MINUTES,
+    apply_presence_filter,
+    window_minutes_for_column,
+)
 
 from etdtransform.bounds import (
     cadence_minutes_by_household,
@@ -45,27 +55,32 @@ def assert_no_negative_interval(column, smallest) -> None:
 
 
 def assert_averageable(diff_columns) -> None:
-    """Refuse to average a column whose values do not meet criteria.
+    """Refuse to average an interval column whose cumulative source may decrease.
+
+    The average and the gap fill both treat an interval as a volume: they sum
+    it, scale it and redistribute it. That holds only where the variable
+    accumulates, which the data model declares on the cumulative variable as
+    Monotoon and etdmap resolves to the interval columns through
+    ComplementVariabele.
+
+    A column whose complement cannot be resolved is refused as well: an
+    undeclared link is not a declaration that the variable accumulates.
 
     Metadata only, once per call: this costs nothing per row.
     """
-    offenders = []
-    for column in diff_columns:
-        declared = thresholds_dict.get(column, {})
-        lower = declared.get("Min")
-        if lower is None or pd.isna(lower):
-            offenders.append(
-                f"{column}: no Min declared, so the discard cannot floor it"
-            )
-        elif float(lower) < 0:
-            offenders.append(
-                f"{column}: Min={lower}, so the discard passes negatives through"
-            )
+    offenders = [
+        column for column in diff_columns
+        if column not in monotonic_interval_columns
+    ]
 
     if offenders:
-        listed = "\n  ".join(offenders)
+        listed = "\n  ".join(
+            f"{column}: not the interval column of a variable declared Monotoon"
+            for column in offenders
+        )
         raise ValueError(
             f"These columns cannot be used for a project average:\n  {listed}\n"
+            f"Check the data model: Monotoon and ComplementVariabele.\n"
         )
 
 
@@ -246,6 +261,18 @@ def calculate_average_diff(
         df_filtered = df_filtered.assign(
             **{col: resample_to_grid(df_filtered, col, cadence, grid_minutes)}
         )
+
+        # A household counts toward a slot only where it covered the window the
+        # slot sits in, and a slot has an average only where enough of the
+        # eligible households delivered for it.
+        window_minutes = window_minutes_for_column(
+            cadence_minutes_by_household(col, cadence).values()
+        )
+        values, presence_stats = apply_presence_filter(
+            df_filtered, col, project_id_column, window_minutes=window_minutes
+        )
+        df_filtered = df_filtered.assign(**{col: values})
+
         grouped = df_filtered.groupby([project_id_column, "ReadingDate"])[col]
         avg_diff = grouped.mean().reset_index()
         avg_diff.columns = [project_id_column, "ReadingDate", f"{col}_avg"]
@@ -274,6 +301,7 @@ def calculate_average_diff(
             "n_flagged": n_flagged,
             "coverage": coverage,
             "duty": duty,
+            "presence": presence_stats,
         }
 
     return avg_diff_dict
@@ -499,6 +527,9 @@ def calculate_average_diff_ibis(
             avg_diff, coverage, duty = _resample_average_ibis(
                 prepared, col, project_id_column, grid_minutes,
                 max_slots=_max_slots, total_slots=_total_slots,
+                window_minutes=window_minutes_for_column(
+                    cadence_minutes_by_household(col, cadence).values()
+                ),
             )
 
         impute_na = avg_diff[f"{col}_avg"].isna().sum()
@@ -579,7 +610,8 @@ def _match_reading_date_dtype(frame):
 
 
 def _resample_average_ibis(
-    prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots
+    prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots,
+    window_minutes=WINDOW_MINUTES,
 ):
     """
     The project average of *diff_col*, computed in SQL by resampling.
@@ -609,6 +641,9 @@ def _resample_average_ibis(
         Column identifying the project.
     grid_minutes : float
         Grid interval in minutes.
+    window_minutes : float
+        The window presence is judged over, as in
+        :mod:`etdtransform.presence`.
 
     Returns
     -------
@@ -617,6 +652,7 @@ def _resample_average_ibis(
         ``<diff_col>_avg``; then coverage and duty.
     """
     import ibis
+    import ibis.selectors as s_selectors
     from ibis import _
 
     order = ibis.window(group_by="HuisIdBSV", order_by="ReadingDate")
@@ -674,8 +710,68 @@ def _resample_average_ibis(
         - (_._offset.cast("int64") * ibis.interval(minutes=int(grid_minutes)))
     )
 
+    # The two presence gates, as in etdtransform.presence: a household counts
+    # toward a slot only where it covered the window the slot sits in, and a
+    # slot has an average only where enough of the window's eligible households
+    # delivered for it.
+    window = int(window_minutes)
+    placed = placed.mutate(
+        _window=(_._slot.epoch_seconds() // 60) // window
+    )
+
+    # The denominator is every grid row the household has in the window, so a
+    # window clipped by the edge of the dataset is judged on what it held.
+    grid = prepared.mutate(
+        _window=(prepared["ReadingDate"].epoch_seconds() // 60) // window
+    )
+    held = grid.group_by([project_id_column, "HuisIdBSV", "_window"]).aggregate(
+        _held=_.count()
+    )
+    delivered = placed.group_by(
+        [project_id_column, "HuisIdBSV", "_window"]
+    ).aggregate(_delivered=_._per_slot.count())
+
+    coverage_keys = [project_id_column, "HuisIdBSV", "_window"]
+    eligible = (
+        delivered.inner_join(held, coverage_keys)
+        .select(~s_selectors.endswith("_right"))
+        .filter(
+            _._delivered.cast("float64") / _._held.cast("float64")
+            >= float(MIN_WINDOW_COVERAGE)
+        )
+        .select(*coverage_keys)
+    )
+
+    n_eligible = eligible.group_by([project_id_column, "_window"]).aggregate(
+        _n_eligible=_.count()
+    )
+
+    placed = placed.inner_join(eligible, coverage_keys).select(
+        ~s_selectors.endswith("_right")
+    )
+
     covered = placed.group_by([project_id_column, "_slot"]).aggregate(
-        **{f"{diff_col}_avg": _._per_slot.mean()}
+        **{f"{diff_col}_avg": _._per_slot.mean()},
+        _contributors=_._per_slot.count(),
+        # A slot belongs to one window, so every row of this group shares it.
+        _window=_._window.max(),
+    )
+    covered = covered.left_join(
+        n_eligible, [project_id_column, "_window"]
+    ).select(~s_selectors.endswith("_right"))
+    minimum = ibis.least(
+        int(SUFFICIENCY_SHAPE),
+        (
+            float(SUFFICIENCY_FRACTION)
+            * covered["_n_eligible"].fill_null(0).cast("float64")
+        ).ceil(),
+    )
+    covered = covered.mutate(
+        **{
+            f"{diff_col}_avg": (covered["_contributors"] >= minimum).ifelse(
+                covered[f"{diff_col}_avg"], ibis.null().cast("float64")
+            )
+        }
     )
 
     # Every (project, slot) the frame holds must appear, carrying NULL where no

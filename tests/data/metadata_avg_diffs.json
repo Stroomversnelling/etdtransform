@@ -18,72 +18,72 @@
         },
         "ElektriciteitNetgebruikHoogDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "1.44414078938",
-                "null_count": 0
+                "min": "0.06812342720950255",
+                "max": "1.4441407893726137",
+                "null_count": 2
             }
         },
         "ElektriciteitNetgebruikLaagDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "1.42852187374",
-                "null_count": 0
+                "min": "0.03257741944253212",
+                "max": "1.4285218737422838",
+                "null_count": 2
             }
         },
         "ElektriciteitTerugleveringHoogDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "1.4412920417400001",
-                "null_count": 0
+                "min": "0.06050638692177017",
+                "max": "1.441292041755878",
+                "null_count": 2
             }
         },
         "ElektriciteitTerugleveringLaagDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "1.4233789071",
-                "null_count": 0
+                "min": "0.04353653442085488",
+                "max": "1.4233789070909553",
+                "null_count": 2
             }
         },
         "GasgebruikDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "0.79808133394",
-                "null_count": 0
+                "min": "0.042722243348544",
+                "max": "0.7980813339308952",
+                "null_count": 2
             }
         },
         "ElektriciteitsgebruikWTWDiff_avg": {
             "statistics": {
-                "min": null,
-                "max": null,
-                "null_count": 210240
+                "min": "0.11761238982932506",
+                "max": "0.2056011180461686",
+                "null_count": 24
             }
         },
         "ElektriciteitsgebruikWarmtepompDiff_avg": {
             "statistics": {
-                "min": null,
-                "max": null,
-                "null_count": 210240
+                "min": "0.1910159275670594",
+                "max": "0.7608248012843736",
+                "null_count": 6
             }
         },
         "ElektriciteitsgebruikWarmtepompInternDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "1.8768289145400001",
-                "null_count": 0
+                "min": "0.08566347596643027",
+                "max": "1.8768289145402377",
+                "null_count": 2
             }
         },
         "ElektriciteitsgebruikBoosterDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "0.3119947876333333",
-                "null_count": 0
+                "min": "0.0040525102012907155",
+                "max": "0.3119947876243714",
+                "null_count": 6
             }
         },
         "ElektriciteitsgebruikBoilervatDiff_avg": {
             "statistics": {
-                "min": "-0.0",
-                "max": "0.31123206908",
-                "null_count": 0
+                "min": "0.015250579391977225",
+                "max": "0.3112320690800637",
+                "null_count": 2
             }
         }
     }

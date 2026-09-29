@@ -418,6 +418,13 @@ def reconstruct_cumulative_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame
     The interval column is the one the data model links to the cumulative
     variable, which is not always its name plus "Diff".
 
+    "Original" is the cumulative column as this stage received it. For a column
+    the mapping stage built from delivered intervals
+    (MappingFlag.CUMULATIVE_CONSTRUCTED) that is itself a running total starting
+    from its own first interval, so its absolute level carries no meter reading
+    and only differences across it mean anything. "Check" is a difference either
+    way, so it remains the drift imputation introduced.
+
     Data must be sorted by HuisIdBSV then ReadingDate before calling this.
     Mutates df in-place and returns it.
     """
@@ -438,7 +445,8 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
 
     Builds lazy window expressions -- nothing is executed until the caller
     calls .to_parquet() or .execute().  All three derived columns per col
-    (Original, rebuilt cumsum, Check) are added as Ibis mutations.
+    (Original, rebuilt cumsum, Check) are added as Ibis mutations, and carry the
+    same meaning as in reconstruct_cumulative_columns.
 
     Typical pipeline use:
         tbl = ibis.read_parquet(imputed_path)

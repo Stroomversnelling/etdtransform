@@ -453,3 +453,31 @@ DEFAULT_MARKEXPR = "not pipeline"
 def pytest_configure(config):
     if config.getoption("--full-suite") and config.option.markexpr == DEFAULT_MARKEXPR:
         config.option.markexpr = ""
+
+
+def cadence_table(df, columns, minutes=5):
+    """A cadence table declaring *minutes* for each of *df*'s households.
+
+    Imputation scales every threshold to the cadence the column reports at, and
+    an absent cadence is an error rather than an assumed grid. A synthetic frame
+    is built at a known spacing, so it declares that spacing here.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain ``HuisIdBSV``.
+    columns : iterable of str
+        Cumulative column names. Cadence is recorded under the delivered name,
+        which is the cumulative side of the pair.
+    minutes : float
+        The spacing *df* was built at.
+    """
+    households = sorted(int(h) for h in df["HuisIdBSV"].dropna().unique())
+    rows = [
+        {"HuisIdBSV": household, "column": column, "cadence_minutes": minutes}
+        for household in households
+        for column in columns
+    ]
+    return pd.DataFrame(rows).astype({
+        "HuisIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+    })

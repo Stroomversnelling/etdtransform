@@ -31,25 +31,14 @@ AVG = f"{DIFF}_avg"
 IMPUTED = f"{DIFF}_is_imputed"
 ITYPE = f"{DIFF}_impute_type"
 
-CONDITIONS = {
-    ImputeType.NEGATIVE_GAP_JUMP,
-    ImputeType.NEAR_ZERO_GAP_JUMP,
-    ImputeType.UNIFORM_FILL,
-    ImputeType.SCALED_FILL,
-    ImputeType.ZERO_END_VALUE,
-    ImputeType.POSITIVE_END_VALUE,
-    ImputeType.NO_END_VALUE,
-    ImputeType.NO_CUMULATIVE_VALUE,
-}
-ACTIONS = {
-    ImputeType.ZERO_FILL,
-    ImputeType.UNSCALED_AVERAGE,
-    ImputeType.HOUSEHOLD_SCALED_AVERAGE,
-    ImputeType.NOT_FILLED,
-}
-# Neither a condition nor an action: set by the threshold pass after imputation,
-# on top of whatever the fill already recorded.
-MODIFIERS = {ImputeType.THRESHOLD_ADJUSTED}
+# The signal / action / modifier split is defined once, in
+# test_impute_flag_taxonomy.py. This file asserts that each member is actually
+# produced by the code, so it imports the classification rather than repeating
+# it -- two lists would drift.
+from test_impute_flag_taxonomy import ACTIONS, SIGNALS  # noqa: E402
+from conftest import cadence_table
+
+CONDITIONS = SIGNALS
 
 # Recorded by _expect as each test asserts; read by the contract test below.
 SEEN: set[ImputeType] = set()
@@ -72,6 +61,7 @@ def _impute(frame):
     return process_imputation_vectorized(
         prepared, diff_col=DIFF, cum_col=CUM, avg_col=AVG,
         impute_type_col=ITYPE, is_imputed_col=IMPUTED,
+        cadence=cadence_table(frame, [CUM]),
     )
 
 
@@ -122,15 +112,43 @@ class TestOnlyOneBoundReading:
     """One end of the gap has a cumulative reading and the other does not, so
     there is no jump to distribute."""
 
-    def test_a_zero_closing_reading_fills_zeros(self):
+    def test_a_zero_closing_reading_no_longer_fills_zeros(self):
+        """Filling zeros here would say the meter stood at zero for the whole
+        gap. With no opening reading the cumulative is pd.NA, not zero, so
+        nothing supports that and nothing is written."""
         out = _impute(_frame([pd.NA, pd.NA, 0.0, 1.0], [1.0] * 4))
-        _expect(out, slice(0, 2), ImputeType.ZERO_END_VALUE, ImputeType.ZERO_FILL)
+        assert out.loc[0:2, DIFF].isna().all()
+        _expect(out, slice(0, 2), ImputeType.ZERO_END_VALUE,
+                ImputeType.ONLY_CLOSING_READING, ImputeType.NOT_FILLED)
 
-    def test_a_positive_closing_reading_takes_the_average_unscaled(self):
+    def test_a_positive_closing_reading_with_no_evidence_fills_nothing(self):
+        """Too few comparable rows for a household factor, so the same rule as
+        the opening-reading case applies: nothing is written."""
         out = _impute(_frame([pd.NA, pd.NA, 50.0, 51.0], [1.0, 1.0, 1.0, 1.0]))
+        assert out.loc[0:2, DIFF].isna().all()
         _expect(
             out, slice(0, 2),
-            ImputeType.POSITIVE_END_VALUE, ImputeType.UNSCALED_AVERAGE,
+            ImputeType.POSITIVE_END_VALUE, ImputeType.ONLY_CLOSING_READING,
+            ImputeType.NOT_FILLED,
+        )
+
+    def test_a_closing_reading_scales_by_the_household(self):
+        """With the factor resting on enough of the series, the gap is filled
+        at the household's own level -- the mirror of the opening-reading
+        case."""
+        # The closing reading must land on a row whose interval is still
+        # missing, or it does not close the gap: the group ends where a
+        # cumulative value meets an absent diff.
+        cumulative = [pd.NA, pd.NA, pd.NA, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0]
+        diffs = [pd.NA] * 4 + [0.5] * 6
+        out = _impute(_frame(cumulative, [1.0] * 10, diffs=diffs))
+        filled = out.loc[0:3, DIFF]
+        assert filled.notna().all()
+        assert filled.astype(float).tolist() == pytest.approx([0.5] * 4)
+        _expect(
+            out, slice(0, 3),
+            ImputeType.POSITIVE_END_VALUE, ImputeType.ONLY_CLOSING_READING,
+            ImputeType.HOUSEHOLD_SCALED_AVERAGE,
         )
 
     def test_an_opening_reading_and_no_close_scales_by_the_household(self):
@@ -144,7 +162,8 @@ class TestOnlyOneBoundReading:
         out = _impute(_frame(cumulative, [1.0] * 10, diffs=diffs))
         _expect(
             out, slice(6, 9),
-            ImputeType.NO_END_VALUE, ImputeType.HOUSEHOLD_SCALED_AVERAGE,
+            ImputeType.NO_END_VALUE, ImputeType.ONLY_OPENING_READING,
+            ImputeType.HOUSEHOLD_SCALED_AVERAGE,
         )
         # Six comparable rows against an average of 1.0 give a factor of 0.5,
         # and six of ten clears the more-than-half bar the factor requires.
@@ -160,7 +179,8 @@ class TestOnlyOneBoundReading:
         out = _impute(_frame(cumulative, [1.0] * 6))
         _expect(
             out, slice(1, 5),
-            ImputeType.NO_END_VALUE, ImputeType.NOT_FILLED,
+            ImputeType.NO_END_VALUE, ImputeType.ONLY_OPENING_READING,
+            ImputeType.NOT_FILLED,
         )
         assert out.loc[1:5, DIFF].isna().all(), (
             "a gap with no closing reading and no household evidence was filled"
@@ -224,6 +244,39 @@ class TestActionsWithoutAConditionOfTheirOwn:
             assert int(value) & ImputeType.NOT_FILLED.value
         SEEN.add(ImputeType.NOT_FILLED)
 
+    def test_the_threshold_pass_records_the_condition_and_its_action(self):
+        """Out of bounds is the condition; substituting the average is the
+        action. A cell keeps the fill it was given -- the history is both."""
+        out = _impute(_frame([100.0, pd.NA, pd.NA, 112.0], [1.0] * 4))
+        types = [int(v) for v in out.loc[1:3, ITYPE].dropna()]
+        violated = [t for t in types if t & ImputeType.THRESHOLD_VIOLATED.value]
+        assert violated, "an over-bound fill was not marked THRESHOLD_VIOLATED"
+        for value in violated:
+            assert value & ImputeType.FILLED.value, (
+                "the fill that produced the value is no longer in the history"
+            )
+            assert not (value & ImputeType.NOT_FILLED.value)
+            # The substitute is the project average as it stands: the threshold
+            # pass has no household factor to scale it by. It is now the only
+            # producer of this flag.
+            assert value & ImputeType.UNSCALED_AVERAGE.value
+        SEEN.add(ImputeType.THRESHOLD_VIOLATED)
+        SEEN.add(ImputeType.UNSCALED_AVERAGE)
+
+    def test_the_threshold_pass_records_a_blanking_separately(self):
+        """With no average to substitute, the pass blanks the value. That is a
+        different action from substituting one, and from imputation's own
+        NULLED."""
+        out = _impute(_frame([100.0, pd.NA, pd.NA, 112.0], [pd.NA] * 4))
+        blanked = out.loc[1:3, DIFF].isna()
+        types = [int(v) for v in out.loc[1:3, ITYPE].dropna()]
+        if blanked.any():
+            assert any(
+                t & ImputeType.NULLED_POST_IMPUTATION.value for t in types
+            ), "a blanked cell was not marked NULLED_POST_IMPUTATION"
+        SEEN.add(ImputeType.NULLED_POST_IMPUTATION)
+        SEEN.add(ImputeType.NULLED)
+
     def test_a_fill_over_the_maximum_is_marked_adjusted(self):
         """1.5 is the declared maximum for this column; a jump of 12.0 over
         three cells lands at 4.0 each and has to be cut."""
@@ -241,11 +294,11 @@ class TestEveryMemberIsCovered:
 
     def test_the_two_groups_account_for_every_member(self):
         members = {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
-        assert members == CONDITIONS | ACTIONS | MODIFIERS, (
-            "ImputeType gained or lost a member; add it to CONDITIONS, "
-            "ACTIONS or MODIFIERS above and give it a test"
+        assert members == SIGNALS | ACTIONS, (
+            "ImputeType gained or lost a member; classify it in "
+            "test_impute_flag_taxonomy.py and give it a test here"
         )
 
     def test_every_member_was_asserted_on(self):
-        missing = sorted(m.name for m in (CONDITIONS | ACTIONS | MODIFIERS) - SEEN)
+        missing = sorted(m.name for m in (SIGNALS | ACTIONS) - SEEN)
         assert not missing, f"ImputeType members with no test: {missing}"

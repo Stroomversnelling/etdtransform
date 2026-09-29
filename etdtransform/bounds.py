@@ -50,7 +50,7 @@ from etdmap.data_model import (
     thresholds_dict,
 )
 from etdmap.flags import MappingFlag, flag_column
-from etdmap.index_helpers import DEFAULT_GRID_MINUTES, frequency_to_minutes
+from etdmap.index_helpers import frequency_to_minutes
 
 
 def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
@@ -62,11 +62,20 @@ def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
     data. It is recorded per (household, column) and is not carried in the
     aggregated table.
 
+    An absent sidecar is an error rather than a default. Without it every
+    threshold is judged at the grid cadence, which silently tightens the bound
+    for every household reporting more coarsely and nulls their readings as
+    out of bounds. Re-map the dataset to produce it.
+
     Returns
     -------
     pd.DataFrame
-        The cadence table, or an empty DataFrame when the sidecar is absent.
-        An empty table leaves every threshold unscaled.
+        The cadence table.
+
+    Raises
+    ------
+    FileNotFoundError
+        When no mapped folder is configured, or the sidecar is not in it.
     """
     import etdtransform
     from etdmap.mapping_helpers import CADENCE_FILENAME
@@ -75,20 +84,25 @@ def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
         etdtransform.options, "mapped_folder_path", None
     )
     if not folder:
-        return pd.DataFrame()
+        raise FileNotFoundError(
+            f"No mapped folder is configured, so {CADENCE_FILENAME} cannot be "
+            f"read. Set etdtransform.options.mapped_folder_path or pass "
+            f"mapped_folder_path."
+        )
 
     path = os.path.join(folder, CADENCE_FILENAME)
     if not os.path.exists(path):
-        logging.info(
-            f"No {CADENCE_FILENAME} in {folder}; bounds will not be scaled to "
-            f"cadence."
+        raise FileNotFoundError(
+            f"No {CADENCE_FILENAME} in {folder}. Every column's threshold is "
+            f"scaled to the cadence it reports at, so without it a coarsely "
+            f"reporting household is judged against the grid bound and its "
+            f"readings are nulled. Re-map the dataset."
         )
-        return pd.DataFrame()
 
     return pd.read_parquet(path, dtype_backend="numpy_nullable")
 
 
-def dataset_grid_minutes(mapped_folder_path=None, default=DEFAULT_GRID_MINUTES):
+def dataset_grid_minutes(mapped_folder_path=None):
     """
     The grid the mapped data sits on, in minutes.
 
@@ -98,8 +112,16 @@ def dataset_grid_minutes(mapped_folder_path=None, default=DEFAULT_GRID_MINUTES):
     shape can be resolved at. Batches on a coarser grid contribute level but not
     shape, which is what the averaging already does with a column's cadence.
 
-    Falls back to *default* when the index carries no declared frequency, which
-    is the state of any dataset mapped before the field existed.
+    An undeclared grid is an error rather than a default. The grid sets the
+    spacing every threshold is judged at, so assuming one silently rescales
+    every bound in the dataset.
+
+    Raises
+    ------
+    FileNotFoundError
+        When no mapped folder is configured, or the index is not in it.
+    ValueError
+        When the index declares no usable frequency.
     """
     import etdtransform
 
@@ -107,15 +129,25 @@ def dataset_grid_minutes(mapped_folder_path=None, default=DEFAULT_GRID_MINUTES):
         etdtransform.options, "mapped_folder_path", None
     )
     if not folder:
-        return float(default)
+        raise FileNotFoundError(
+            "No mapped folder is configured, so the dataset grid cannot be "
+            "read. Set etdtransform.options.mapped_folder_path or pass "
+            "mapped_folder_path."
+        )
 
     path = os.path.join(str(folder), "index.parquet")
     if not os.path.exists(path):
-        return float(default)
+        raise FileNotFoundError(
+            f"No index.parquet in {folder}, so the dataset grid is unknown. "
+            f"Every threshold is judged at the grid spacing. Re-map the dataset."
+        )
 
     index = pd.read_parquet(path, dtype_backend="numpy_nullable")
     if "Gegevensfrequentie" not in index.columns:
-        return float(default)
+        raise ValueError(
+            f"index.parquet in {folder} carries no Gegevensfrequentie, so the "
+            f"dataset grid is unknown. Check the data model. Re-map the dataset."
+        )
 
     declared = index["Gegevensfrequentie"].dropna().unique()
     minutes = sorted(
@@ -123,7 +155,11 @@ def dataset_grid_minutes(mapped_folder_path=None, default=DEFAULT_GRID_MINUTES):
         if pd.notna(m)
     )
     if not minutes:
-        return float(default)
+        raise ValueError(
+            f"index.parquet in {folder} declares no readable Gegevensfrequentie "
+            f"({list(declared)}), so the dataset grid is unknown. "
+            f"Check the data model."
+        )
     if len(minutes) > 1:
         logging.info(
             f"Household batches declare {len(minutes)} different grids "
@@ -201,22 +237,51 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
     bound_key : str
         Which threshold to scale, ``"Max"`` or ``"Min"``.
 
+    A household with no recorded cadence for this column takes the declared
+    bound, which is the bound for one interval of the threshold's own unit. The
+    cadence table records a column only if it carried readings when cadence was
+    measured, and some columns acquire values afterwards -- a zero written for an
+    absent device, a tariff column synthesised from a total -- so an absent row
+    is normal rather than an error. The missing rows are logged, because for a
+    column that does report coarsely it would mean judging it too tightly.
+
     Returns
     -------
     pd.Series or scalar
-        One threshold per row of *df*. Returns the declared scalar threshold
-        when no cadence is available, so the result can be passed to
-        ``bound_flags`` either way. Households absent from the cadence table
-        take the declared threshold.
+        One threshold per row of *df*. A scalar when the threshold is not
+        declared (unbounded) so the result can be passed to ``bound_flags``
+        either way.
+
+    Raises
+    ------
+    ValueError
+        When there is no cadence table at all, since then no column could be
+        scaled and every household would silently take the grid bound.
     """
     declared = thresholds_dict.get(diff_col, {})
     bound = declared.get(bound_key, pd.NA)
-    if pd.isna(bound) or cadence is None or cadence.empty:
+    if pd.isna(bound):
         return bound
 
+    if cadence is None or cadence.empty:
+        raise ValueError(
+            f"{diff_col}: no cadence table, so every household would be judged "
+            f"at the grid interval. Re-map the dataset."
+        )
+
     per_household = column_bound_by_household(diff_col, cadence, bound_key=bound_key)
-    if not per_household or "HuisIdBSV" not in df.columns:
+    if "HuisIdBSV" not in df.columns:
         return bound
+
+    unrecorded = sorted(
+        set(df["HuisIdBSV"].dropna().unique()) - set(per_household)
+    )
+    if unrecorded:
+        logging.info(
+            f"{diff_col}: {len(unrecorded)} household(s) have no recorded "
+            f"cadence and take the declared bound {bound} "
+            f"({unrecorded[:10]})."
+        )
 
     scaled = df["HuisIdBSV"].map(per_household).astype("Float64").fillna(bound)
     n_scaled = int((scaled != bound).sum())
@@ -290,7 +355,7 @@ def usable_readings(df, column):
     return usable
 
 
-def resample_to_grid(df, diff_col, cadence, grid_minutes=DEFAULT_GRID_MINUTES):
+def resample_to_grid(df, diff_col, cadence, grid_minutes):
     """
     Spread each household's readings of *diff_col* evenly over the grid.
 
@@ -305,12 +370,15 @@ def resample_to_grid(df, diff_col, cadence, grid_minutes=DEFAULT_GRID_MINUTES):
     A household reporting at the grid cadence has one-slot windows, so its
     output is its interval column unchanged.
 
-    The cumulative column supplies the volume wherever it holds usable readings,
-    since it is the authoritative form; the interval column supplies it only
-    where the cumulative does not. A window longer than one reporting interval
-    is a meter outage rather than a reading interval and contributes nothing --
-    distributing measured consumption across a gap is imputation's work, not the
-    average's.
+    The source is chosen per household, not per reading: a household with any
+    usable cumulative reading is read from the cumulative column throughout,
+    since it is the authoritative form, and only a household with none is read
+    from the interval column. One column behind every window keeps a window's
+    volume and its length measured on the same series.
+
+    A window longer than one reporting interval is a meter outage rather than a
+    reading interval and contributes nothing -- distributing measured
+    consumption across a gap is imputation's work, not the average's.
 
     Parameters
     ----------
@@ -359,6 +427,16 @@ def resample_to_grid(df, diff_col, cadence, grid_minutes=DEFAULT_GRID_MINUTES):
     by_household = readings.groupby("household", sort=False)
 
     minutes = cadence_minutes_by_household(diff_col, cadence)
+    unrecorded = sorted(set(readings["household"].unique()) - set(minutes))
+    if unrecorded:
+        logging.info(
+            f"{diff_col}: {len(unrecorded)} household(s) have no recorded "
+            f"cadence; each reading is placed on its own slot "
+            f"({unrecorded[:10]})."
+        )
+    # One slot where the cadence is unknown. That is the finest spacing the data
+    # sits on, so a reading is never spread across slots it may not cover; the
+    # error is to under-spread, which leaves volume where it was measured.
     slots = (
         readings["household"].map(minutes).astype("Float64") / float(grid_minutes)
     ).fillna(1.0)

@@ -14,6 +14,7 @@ import pytest
 
 from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -71,7 +72,9 @@ def _series(catchup: float) -> pd.DataFrame:
 
 
 def _impute(df: pd.DataFrame) -> pd.DataFrame:
-    out, _, _ = impute_and_normalize(df.copy(), [CUM], "ProjectIdBSV", None)
+    out, _, _ = impute_and_normalize(
+        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+    )
     return out
 
 
@@ -207,7 +210,10 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     df.loc[(df.HuisIdBSV == 99) & (df.ReadingDate == dates[0]), DIFF] = 5000.0
     df[DIFF] = df[DIFF].astype("Float64")
 
-    result = calculate_average_diff(df, "ProjectIdBSV", [DIFF])
+    result = calculate_average_diff(
+        df, "ProjectIdBSV", [DIFF],
+        cadence=cadence_table(df, [CUM]), grid_minutes=5,
+    )
     avg = result[DIFF]["avg_diff"]
     first = float(avg.loc[avg.ReadingDate == dates[0], f"{DIFF}_avg"].iloc[0])
     assert first == pytest.approx(3.0, abs=1e-9)
@@ -246,7 +252,10 @@ def test_project_average_rejects_physically_impossible_value():
     df.loc[df.ReadingDate == dates[0], DIFF] = 5000.0
     df[DIFF] = df[DIFF].astype("Float64")
 
-    result = calculate_average_diff(df, "ProjectIdBSV", [DIFF])
+    result = calculate_average_diff(
+        df, "ProjectIdBSV", [DIFF],
+        cadence=cadence_table(df, [CUM]), grid_minutes=5,
+    )
     avg = result[DIFF]["avg_diff"]
     first = avg.loc[avg.ReadingDate == dates[0], f"{DIFF}_avg"].iloc[0]
 
@@ -290,10 +299,16 @@ class TestWhichThresholdAppliesWhere:
         assert grid_bound(DIFF) == MAX_PER_5MIN
 
     def test_the_column_threshold_scales_with_how_often_the_column_reports(self):
+        from etdmap.data_model import scale_upper_bound
         from etdtransform.bounds import column_bound
         bound = column_bound(self._frame(), DIFF, self._cadence())
-        # Hourly: twelve five-minute intervals arrive in one reading.
-        assert float(bound.iloc[0]) == MAX_PER_5MIN * 12
+        # Hourly: twelve five-minute intervals arrive in one reading, so the
+        # bound grows -- by the declared shape, not in proportion, because a
+        # five-minute peak is not plausible sustained for an hour.
+        assert float(bound.iloc[0]) == pytest.approx(
+            scale_upper_bound(MAX_PER_5MIN, 12.0)
+        )
+        assert MAX_PER_5MIN < float(bound.iloc[0]) < MAX_PER_5MIN * 12
         # Already on the grid: the two thresholds coincide.
         assert float(bound.iloc[2]) == MAX_PER_5MIN
 
@@ -309,7 +324,10 @@ class TestWhichThresholdAppliesWhere:
         bound = fill_bound(
             self._frame(), DIFF, self._cadence(), is_imputed_col=f"{DIFF}_is_imputed"
         )
-        assert float(bound.iloc[0]) == MAX_PER_5MIN * 12   # delivered
+        from etdmap.data_model import scale_upper_bound
+        assert float(bound.iloc[0]) == pytest.approx(
+            scale_upper_bound(MAX_PER_5MIN, 12.0)
+        )  # delivered
         assert float(bound.iloc[1]) == MAX_PER_5MIN        # filled
         assert float(bound.iloc[3]) == MAX_PER_5MIN
 
@@ -318,17 +336,40 @@ class TestWhichThresholdAppliesWhere:
         of ITS reporting intervals, not relative to a grid slot it never reports
         on. Judged at the grid threshold, every normal hourly reading looks like
         a catch-up."""
+        from etdmap.data_model import scale_upper_bound
         from etdmap.flags import frozen_spans
-        # An hourly cumulative variable: flat, then one reading holding 400 L.
-        intervals = pd.Series(pd.array(
-            [3.0] + [0.0] * 8 + [400.0] + [3.0], dtype="Float64"
-        ))
-        at_grid = frozen_spans(intervals, upper_bound=MAX_PER_5MIN)
-        at_column = frozen_spans(intervals, upper_bound=MAX_PER_5MIN * 12)
-        assert len(at_grid) == 1, "the grid threshold calls it impossible"
-        assert len(at_column) == 0, "at its own cadence 400 L in an hour is plausible"
 
-    def test_no_cadence_table_leaves_the_declared_bound_everywhere(self):
+        hourly = scale_upper_bound(MAX_PER_5MIN, 12.0)
+        # An hourly cumulative variable: flat, then one reading holding an
+        # hour's worth -- more than a grid slot allows, less than an hour does.
+        plausible = (MAX_PER_5MIN + hourly) / 2
+        intervals = pd.Series(pd.array(
+            [3.0] + [0.0] * 8 + [plausible] + [3.0], dtype="Float64"
+        ))
+        assert len(frozen_spans(intervals, upper_bound=MAX_PER_5MIN)) == 1, (
+            "the grid threshold calls it impossible"
+        )
+        assert len(frozen_spans(intervals, upper_bound=hourly)) == 0, (
+            "at its own cadence an hour of consumption is plausible"
+        )
+
+    def test_the_column_threshold_is_still_a_threshold(self):
+        """The bound grows with the reporting interval but does not vanish: a
+        value beyond what an hour can hold is still a catch-up."""
+        from etdmap.data_model import scale_upper_bound
+        from etdmap.flags import frozen_spans
+
+        hourly = scale_upper_bound(MAX_PER_5MIN, 12.0)
+        intervals = pd.Series(pd.array(
+            [3.0] + [0.0] * 8 + [hourly * 2] + [3.0], dtype="Float64"
+        ))
+        assert len(frozen_spans(intervals, upper_bound=hourly)) == 1
+
+    def test_no_cadence_table_raises(self):
+        """Judging every household at the grid bound is what nulls a coarsely
+        reporting one, so it is refused rather than defaulted to."""
         from etdtransform.bounds import column_bound, fill_bound
-        assert column_bound(self._frame(), DIFF, pd.DataFrame()) == MAX_PER_5MIN
-        assert fill_bound(self._frame(), DIFF, pd.DataFrame()) == MAX_PER_5MIN
+        with pytest.raises(ValueError, match="no cadence table"):
+            column_bound(self._frame(), DIFF, pd.DataFrame())
+        with pytest.raises(ValueError, match="no cadence table"):
+            fill_bound(self._frame(), DIFF, pd.DataFrame())

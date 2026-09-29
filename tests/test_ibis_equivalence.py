@@ -14,6 +14,17 @@ import pytest
 import ibis
 
 from etdtransform.impute import calculate_average_diff, calculate_average_diff_ibis
+from conftest import cadence_table
+
+
+def _cadence(frame, diff_columns):
+    """The cadence both paths are judged at, from the frame they share."""
+    from etdmap.data_model import cumulative_column
+
+    return cadence_table(
+        frame, [cumulative_column(c) or c for c in diff_columns]
+    )
+
 
 pytestmark = pytest.mark.unit
 
@@ -101,8 +112,14 @@ def test_ibis_memtable_preserves_nulls(diff_fixture_df):
 def test_calculate_average_diff_ibis_matches_pandas(diff_fixture_df):
     """Ibis and pandas paths agree on avg_diff values and null positions."""
     tbl = ibis.memtable(diff_fixture_df)
-    result_pd = calculate_average_diff(diff_fixture_df, "ProjectIdBSV", DIFF_COLS)
-    result_ibis = calculate_average_diff_ibis(tbl, "ProjectIdBSV", DIFF_COLS)
+    result_pd = calculate_average_diff(
+        diff_fixture_df, "ProjectIdBSV", DIFF_COLS,
+        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
+    )
+    result_ibis = calculate_average_diff_ibis(
+        tbl, "ProjectIdBSV", DIFF_COLS,
+        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
+    )
 
     sort_avg = ["ProjectIdBSV", "ReadingDate"]
     sort_ub = ["ProjectIdBSV"]
@@ -125,7 +142,10 @@ def test_calculate_average_diff_ibis_matches_pandas(diff_fixture_df):
 def test_outlier_households_excluded(diff_fixture_df):
     """Outlier households must sit above the upper bound and be excluded."""
     tbl = ibis.memtable(diff_fixture_df)
-    result = calculate_average_diff_ibis(tbl, "ProjectIdBSV", DIFF_COLS)
+    result = calculate_average_diff_ibis(
+        tbl, "ProjectIdBSV", DIFF_COLS,
+        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
+    )
 
     outlier_ids = [_P1_OUTLIER, _P2_OUTLIER]
     for col in DIFF_COLS:
@@ -152,8 +172,14 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
         "ZonopwekVerbruikDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
     })
 
-    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_pd = calculate_average_diff(
+        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
+    result_ibis = calculate_average_diff_ibis(
+        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
 
     avg_pd = result_pd["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
     avg_ib = result_ibis["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
@@ -187,8 +213,14 @@ def test_empty_project_edge_cases():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_pd   = calculate_average_diff(
+        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
+    result_ibis = calculate_average_diff_ibis(
+        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
         ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]
@@ -274,9 +306,13 @@ def test_flagged_values_excluded_in_both_paths():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_pd = calculate_average_diff(
+        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"]
+        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
     )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
@@ -313,8 +349,14 @@ def test_all_null_diffs_edge_case():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
-    result_ibis = calculate_average_diff_ibis(ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"])
+    result_pd   = calculate_average_diff(
+        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
+    result_ibis = calculate_average_diff_ibis(
+        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+    )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
         ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]

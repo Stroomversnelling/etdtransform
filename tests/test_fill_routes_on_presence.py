@@ -22,6 +22,7 @@ from etdtransform.vectorized_impute import (
     process_gap_and_cumulative_groups,
     process_imputation_vectorized,
 )
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -52,12 +53,12 @@ def _frame(averages, end=CUMULATIVE[-1]):
 
 
 def _impute(averages, end=CUMULATIVE[-1]):
-    prepared = process_gap_and_cumulative_groups(
-        _frame(averages, end), diff_col=DIFF, cum_col=CUM
-    )
+    frame = _frame(averages, end)
+    prepared = process_gap_and_cumulative_groups(frame, diff_col=DIFF, cum_col=CUM)
     return process_imputation_vectorized(
         prepared, diff_col=DIFF, cum_col=CUM, avg_col=AVG,
         impute_type_col=ITYPE, is_imputed_col=IMPUTED,
+        cadence=cadence_table(frame, [CUM]),
     )
 
 

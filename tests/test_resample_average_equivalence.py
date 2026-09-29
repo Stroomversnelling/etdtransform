@@ -87,9 +87,15 @@ def _ibis_average(frame, cadence, drop_na=True):
     )
     coarsest = max(cadence["cadence_minutes"].dropna())
     max_slots = max(1, int(round(float(coarsest) / GRID)))
+    # One slot per window neutralises the presence gates: a household covers a
+    # window it delivered for and covers nothing else, and a slot's minimum
+    # never exceeds its own contributors. What is compared here is the
+    # resampling, which the two paths reach by different routes. Agreement with
+    # the gates applied is tested in test_minimum_household_presence.py.
     avg, coverage, duty = _resample_average_ibis(
         prepared, IV, "ProjectIdBSV", GRID,
         max_slots=max_slots, total_slots=total_slots,
+        window_minutes=GRID,
     )
     if drop_na:
         avg = avg[avg[f"{IV}_avg"].notna()]

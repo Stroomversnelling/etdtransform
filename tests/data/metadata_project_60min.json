@@ -221,7 +221,7 @@
         },
         "ElektriciteitsgebruikTotaalWarmtepomp": {
             "statistics": {
-                "min": "7.56333010285",
+                "min": "7.563330102847051",
                 "max": "11.422510704619999",
                 "null_count": 0
             }
@@ -495,7 +495,7 @@
         "ElektriciteitsgebruikBooster": {
             "statistics": {
                 "min": "1.8123663234600003",
-                "max": "16808.493599852532",
+                "max": "16808.49353317375",
                 "null_count": 0
             }
         },

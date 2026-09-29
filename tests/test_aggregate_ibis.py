@@ -19,6 +19,7 @@ from etdtransform.aggregate import (
     aggregate_hh_data_duckdb,
     impute_hh_data_5min_chunked,
 )
+from conftest import cadence_table
 
 pytestmark = pytest.mark.integration
 
@@ -555,6 +556,26 @@ def _write_impute_source(agg_dir: str, household_ids: list, project_id: int = 1)
     )
 
 
+def _write_cadence(mapped_dir: str, household_ids, columns, minutes=5) -> None:
+    """Write the cadence sidecar a mapped folder carries.
+
+    The chunked pipeline reads it to scale each column's threshold, so a mapped
+    folder without one is not a folder it can be run against.
+    """
+    from etdmap.mapping_helpers import write_column_cadence
+
+    write_column_cadence(
+        [
+            {"HuisIdBSV": int(h), "column": c, "cadence_minutes": minutes,
+             "cadence_source": "declared", "cadence_detected": minutes,
+             "confidence": 1.0, "n_readings": _IMPUTE_ROWS}
+            for h in household_ids
+            for c in columns
+        ],
+        mapped_dir,
+    )
+
+
 def _write_impute_artifacts(agg_dir: str, dates, project_id: int = 1) -> None:
     """Write minimal avg_diffs.parquet and household_diff_max_bounds.parquet."""
     avg = pd.DataFrame({
@@ -582,6 +603,7 @@ class TestChunkedImpute:
         dates    = pd.date_range("2023-01-01", periods=_IMPUTE_ROWS, freq="5min")
         _write_impute_source(dirs["aggregate"], household_ids)
         _write_impute_artifacts(dirs["aggregate"], dates)
+        _write_cadence(dirs["mapped"], household_ids, [_IMPUTE_CUM_COL])
 
         # Must not raise
         impute_hh_data_5min_chunked(
@@ -605,6 +627,7 @@ class TestChunkedImpute:
         dates      = pd.date_range("2023-01-01", periods=_IMPUTE_ROWS, freq="5min")
         _write_impute_source(dirs["aggregate"], household_ids)
         _write_impute_artifacts(dirs["aggregate"], dates)
+        _write_cadence(dirs["mapped"], household_ids, [_IMPUTE_CUM_COL])
 
         impute_hh_data_5min_chunked(
             source_path=os.path.join(dirs["aggregate"], "household_default.parquet"),
@@ -696,7 +719,10 @@ class TestAvgDiffsAlignment:
             f"{diff_col}_household_max":    pd.array([1.0], dtype="Float64"),
             f"{diff_col}_upper_bound": pd.array([2.0], dtype="Float64"),
         })
-        result_df, _, _ = impute_and_normalize(df, [cum_col], "ProjectIdBSV", max_bound)
+        result_df, _, _ = impute_and_normalize(
+            df, [cum_col], "ProjectIdBSV", max_bound,
+            cadence=cadence_table(df, [cum_col]),
+        )
 
         for i in [1, 2, 3, 4]:
             assert pd.isna(result_df.loc[i, diff_col]), (

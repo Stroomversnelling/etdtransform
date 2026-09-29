@@ -28,6 +28,7 @@ from etdmap.mapping_helpers import (
     _treat_frozen_spans,
 )
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -79,7 +80,9 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
 def _treated_and_imputed(df):
     rows = _detect_frozen_spans_for_household(df, 1)
     _treat_frozen_spans(df, rows)
-    out, _, _ = impute_and_normalize(df.copy(), [CUM], "ProjectIdBSV", None)
+    out, _, _ = impute_and_normalize(
+        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+    )
     return out, rows
 
 
@@ -256,11 +259,20 @@ class TestRoundTripWithFlags:
         )
 
     def test_invented_covers_every_value_that_was_put_there(self):
-        """A reconstruction wanting only real readings filters on INVENTED, so
-        anything that invents a value has to be in it."""
+        """A reconstruction wanting only values the pipeline did not write
+        filters on INVENTED, so anything that writes a value has to be in it."""
         from etdmap.flags import MappingFlag
         assert MappingFlag.FILLED_DOWN in MappingFlag.INVENTED
         assert MappingFlag.FILLED_ZERO in MappingFlag.INVENTED
-        assert MappingFlag.FROZEN_SPAN in MappingFlag.INVENTED
-        # CATCHUP is deliberately NOT invented: it marks where a real reading was.
+        assert MappingFlag.NULLED in MappingFlag.INVENTED
+        assert MappingFlag.FIRST_ZERO in MappingFlag.INVENTED
+
+    def test_a_span_is_observed_rather_than_written(self):
+        """FROZEN_SPAN and CATCHUP say what the meter did, so neither invents a
+        value. A project average still has to exclude both, which it does
+        through NOT_A_MEASUREMENT."""
+        from etdmap.flags import MappingFlag
+        assert MappingFlag.FROZEN_SPAN not in MappingFlag.INVENTED
         assert MappingFlag.CATCHUP not in MappingFlag.INVENTED
+        assert MappingFlag.FROZEN_SPAN in MappingFlag.NOT_A_MEASUREMENT
+        assert MappingFlag.CATCHUP in MappingFlag.NOT_A_MEASUREMENT

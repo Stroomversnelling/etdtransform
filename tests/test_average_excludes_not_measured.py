@@ -31,6 +31,7 @@ from etdmap.mapping_helpers import (
 )
 from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import impute_and_normalize
+from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -87,7 +88,9 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
     rows = _detect_frozen_spans_for_household(df, hh)
     assert rows, "the fixture must produce a detected span"
     _treat_frozen_spans(df, rows)
-    out, _, _ = impute_and_normalize(df.copy(), [CUM], "ProjectIdBSV", None)
+    out, _, _ = impute_and_normalize(
+        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+    )
     return out
 
 
@@ -121,7 +124,8 @@ def _project(n_clean=19, with_span=1):
 
 def _average(df):
     result = calculate_average_diff(
-        df, "ProjectIdBSV", [DIFF], cadence=pd.DataFrame()
+        df, "ProjectIdBSV", [DIFF],
+        cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )[DIFF]
     avg = result["avg_diff"].sort_values("ReadingDate")[f"{DIFF}_avg"].astype(float)
     # Slot 0 is zero for every household -- a diff series has no previous
