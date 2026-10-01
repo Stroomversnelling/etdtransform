@@ -32,7 +32,7 @@ def _frame(cumulative, diffs, averages):
 
 def _impute(frame):
     filled, gap_stats, _ = impute_and_normalize(
-        frame, [CUM], "ProjectIdBSV", pd.DataFrame(),
+        frame, [CUM], "ProjectIdBSV",
         cadence=cadence_table(frame, [CUM]),
     )
     return filled, gap_stats
@@ -68,11 +68,29 @@ class TestTheStatsDescribeTheFill:
         expected = float(filled[CUM].max()) - float(filled[CUM].min())
         assert float(stats.iloc[0]["cum_col_min_max_diff"]) == pytest.approx(expected)
 
-    def test_imputed_counts_the_cells_carrying_a_type(self, conserved):
+    def test_imputed_counts_the_cells_a_value_was_written_into(self, conserved):
+        """Four interval cells arrived empty and all four were filled, so all
+        four count. What must not be counted is a cell left empty, which still
+        carries NOT_FILLED -- counting types is what made `imputed` equal
+        `missing` on every row of both household sidecars."""
         filled, stats = conserved
-        assert int(stats.iloc[0]["imputed"]) == int(
-            filled[f"{DIFF}_impute_type"].notna().sum()
-        )
+        assert int(stats.iloc[0]["imputed"]) == 4
+        assert filled[DIFF].notna().all(), "the fixture fills its whole gap"
+
+    def test_imputed_and_imputed_na_partition_missing(self, conserved):
+        _, stats = conserved
+        row = stats.iloc[0]
+        assert int(row["imputed"]) + int(row["imputed_na"]) == int(row["missing"])
+
+    def test_a_fully_filled_gap_leaves_nothing_empty(self, conserved):
+        _, stats = conserved
+        assert int(stats.iloc[0]["imputed_na"]) == 0
+
+    def test_percentage_imputed_is_not_a_hundred_by_construction(self, conserved):
+        """It is derived from `imputed`, so the old count made it meaningless."""
+        _, stats = conserved
+        row = stats.iloc[0]
+        assert int(row["imputed"]) < len(conserved[0])
 
     def test_bitwise_methods_is_the_or_of_methods(self, conserved):
         _, stats = conserved
@@ -85,6 +103,37 @@ class TestTheStatsDescribeTheFill:
     def test_the_method_recorded_is_the_one_the_fill_used(self, conserved):
         filled, stats = conserved
         assert int(stats.iloc[0]["bitwise_methods"]) & ImputeType.SCALED_FILL.value
+
+
+class TestAnUnfillableGapIsCounted:
+    """The defect these counts had: `GasgebruikDiff` held 38.8M empty cells
+    while its sidecar row said every missing cell was filled."""
+
+    @pytest.fixture()
+    def no_average(self):
+        """A gap with no closing reading and no project average, so nothing can
+        establish a level and the cells stay empty."""
+        return _impute(_frame(
+            cumulative=[100.0, pd.NA, pd.NA, pd.NA],
+            diffs=[0.0, pd.NA, pd.NA, pd.NA],
+            averages=[pd.NA] * 4,
+        ))
+
+    def test_the_empty_cells_are_reported_as_empty(self, no_average):
+        filled, stats = no_average
+        still_empty = int(filled[DIFF].isna().sum())
+        assert still_empty > 0, "the fixture must leave cells empty"
+        assert int(stats.iloc[0]["imputed_na"]) == still_empty
+
+    def test_imputed_does_not_claim_them(self, no_average):
+        _, stats = no_average
+        row = stats.iloc[0]
+        assert int(row["imputed"]) < int(row["missing"])
+
+    def test_they_still_partition_missing(self, no_average):
+        _, stats = no_average
+        row = stats.iloc[0]
+        assert int(row["imputed"]) + int(row["imputed_na"]) == int(row["missing"])
 
 
 class TestDeviationReportsConservation:

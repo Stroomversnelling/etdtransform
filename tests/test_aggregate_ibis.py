@@ -577,18 +577,13 @@ def _write_cadence(mapped_dir: str, household_ids, columns, minutes=5) -> None:
 
 
 def _write_impute_artifacts(agg_dir: str, dates, project_id: int = 1) -> None:
-    """Write minimal avg_diffs.parquet and household_diff_max_bounds.parquet."""
+    """Write a minimal avg_diffs.parquet."""
     avg = pd.DataFrame({
         "ProjectIdBSV":   pd.array([project_id] * len(dates), dtype="Int64"),
         "ReadingDate":    dates,
         _IMPUTE_AVG_COL:  pd.array([0.5] * len(dates), dtype="Float64"),
     })
     avg.to_parquet(os.path.join(agg_dir, "avg_diffs.parquet"), engine="pyarrow")
-
-    # max_bound is passed to impute_and_normalize but not read inside it.
-    pd.DataFrame({"ProjectIdBSV": pd.array([], dtype="Int64")}).to_parquet(
-        os.path.join(agg_dir, "household_diff_max_bounds.parquet"), engine="pyarrow"
-    )
 
 
 class TestChunkedImpute:
@@ -665,16 +660,8 @@ class TestAvgDiffsAlignment:
             "ColBDiff_avg": pd.array([0.4, 0.5, 0.6], dtype="Float64"),
         })
         avg_diff_dict = {
-            "ColADiff": {
-                "avg_diff": avg_A,
-                "upper_bounds": pd.DataFrame(),
-                "household_max_with_bounds": pd.DataFrame(),
-            },
-            "ColBDiff": {
-                "avg_diff": avg_B,
-                "upper_bounds": pd.DataFrame(),
-                "household_max_with_bounds": pd.DataFrame(),
-            },
+            "ColADiff": {"avg_diff": avg_A},
+            "ColBDiff": {"avg_diff": avg_B},
         }
         result = concatenate_avg_diff_columns(avg_diff_dict, "ProjectIdBSV")
 
@@ -713,14 +700,8 @@ class TestAvgDiffsAlignment:
             diff_col: pd.array([0.5, pd.NA, pd.NA, pd.NA, pd.NA], dtype="Float64"),
             avg_col:  pd.array([pd.NA, pd.NA, pd.NA, pd.NA, pd.NA], dtype="Float64"),
         })
-        max_bound = pd.DataFrame({
-            "ProjectIdBSV":            pd.array([1], dtype="Int64"),
-            "HuisIdBSV":               pd.array([1], dtype="Int64"),
-            f"{diff_col}_household_max":    pd.array([1.0], dtype="Float64"),
-            f"{diff_col}_upper_bound": pd.array([2.0], dtype="Float64"),
-        })
         result_df, _, _ = impute_and_normalize(
-            df, [cum_col], "ProjectIdBSV", max_bound,
+            df, [cum_col], "ProjectIdBSV",
             cadence=cadence_table(df, [cum_col]),
         )
 

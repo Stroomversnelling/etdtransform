@@ -73,7 +73,7 @@ def _series(catchup: float) -> pd.DataFrame:
 
 def _impute(df: pd.DataFrame) -> pd.DataFrame:
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
     )
     return out
 
@@ -217,12 +217,6 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     avg = result[DIFF]["avg_diff"]
     first = float(avg.loc[avg.ReadingDate == dates[0], f"{DIFF}_avg"].iloc[0])
     assert first == pytest.approx(3.0, abs=1e-9)
-
-    bounds = result[DIFF]["household_max_with_bounds"]
-    excluded = bounds.loc[
-        bounds[f"{DIFF}_household_max"] >= bounds[f"{DIFF}_upper_bound"], "HuisIdBSV"
-    ]
-    assert 99 in set(excluded)
 
 
 def test_project_average_rejects_physically_impossible_value():

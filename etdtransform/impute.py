@@ -8,6 +8,7 @@ from etdmap.data_model import (
     cumulative_column,
     interval_column,
     monotonic_interval_columns,
+    scale_bounds,
     thresholds_dict,
 )
 
@@ -20,6 +21,7 @@ from etdtransform.presence import (
     WINDOW_MINUTES,
     apply_presence_filter,
     window_minutes_for_column,
+    window_presence_frame,
 )
 
 from etdtransform.bounds import (
@@ -84,6 +86,77 @@ def assert_averageable(diff_columns) -> None:
         )
 
 
+def assert_bounds_not_inverted(diff_col, cadence) -> None:
+    """Stop when the scaled lower bound of *diff_col* lands above its upper bound.
+
+    The two bounds reach a reporting cadence by different rules: the floor in
+    proportion to the interval, the peak by the shape the threshold declares. A
+    lower bound above the upper one admits no value at all, so the column would
+    be emptied wherever that cadence applies.
+
+    Every cadence recorded for the column is checked, together with the declared
+    pair, which is what a household with no recorded cadence is judged against.
+    Metadata only, so this costs nothing per row.
+    """
+    declared = thresholds_dict.get(diff_col, {})
+    cadences = sorted(
+        set(cadence_minutes_by_household(diff_col, cadence).values())
+    )
+
+    for cadence_minutes in [None, *cadences]:
+        lower, upper = scale_bounds(declared, cadence_minutes)
+        if pd.isna(lower) or pd.isna(upper) or lower <= upper:
+            continue
+
+        at = (
+            "the declared interval"
+            if cadence_minutes is None
+            else f"a cadence of {cadence_minutes} minute(s)"
+        )
+        raise ValueError(
+            f"{diff_col}: scaled lower bound {lower} is above scaled upper "
+            f"bound {upper} at {at}, so no value can satisfy both. "
+            f"Check the variable, rule and physical-model metadata for an "
+            f"inconsistency."
+        )
+
+
+def _coverage_duty_by_project(avg, col, project_id_column) -> pd.DataFrame:
+    """One row per project: how much of the average exists, and how much of it moves.
+
+    *coverage* is the share of the project's slots the average has a value for.
+    *duty* is, of those, the share carrying consumption rather than a measured
+    zero. A column can be fully covered and almost entirely idle, so the two
+    answer different questions and the fill order needs both.
+
+    Computed from the returned average frame rather than from either path's own
+    intermediates, so the pandas and ibis paths cannot drift apart on it.
+    """
+    average = f"{col}_avg"
+    frame = avg[[project_id_column, average]].copy()
+    frame["_present"] = frame[average].notna()
+    frame["_consuming"] = frame["_present"] & (frame[average] > 0)
+
+    out = (
+        frame.groupby(project_id_column, dropna=False)
+        .agg(
+            slots=(average, "size"),
+            present=("_present", "sum"),
+            consuming=("_consuming", "sum"),
+        )
+        .reset_index()
+    )
+    out["column"] = col
+    out["coverage"] = (out["present"] / out["slots"]).astype("Float64")
+    out["duty"] = (
+        (out["consuming"] / out["present"]).where(out["present"] > 0, 0.0)
+    ).astype("Float64")
+    return out[
+        [project_id_column, "column", "slots", "present", "consuming",
+         "coverage", "duty"]
+    ]
+
+
 def calculate_average_diff(
     df: pd.DataFrame,
     project_id_column: str,
@@ -123,19 +196,11 @@ def calculate_average_diff(
     dict
         A dictionary where keys are column names and values are dictionaries containing:
         - 'avg_diff': DataFrame with average differences
-        - 'upper_bounds': DataFrame with upper bounds for outlier exclusion
-        - 'household_max_with_bounds': DataFrame with household maximum values and bounds
         - 'n_discarded': how many values were discarded for exceeding the
           column threshold
         - 'n_flagged': how many values were excluded as invented or mistimed
         - 'coverage': the share of slots the average has a value for
         - 'duty': of those, the share carrying consumption
-
-    Notes
-    -----
-    This function uses a 95th percentile threshold to exclude outliers when calculating
-    averages. The threshold is doubled to create an upper bound for inclusion in the
-    average calculation.
 
     Warnings
     --------
@@ -157,46 +222,10 @@ def calculate_average_diff(
     if grid_minutes is None:
         grid_minutes = dataset_grid_minutes()
 
-    def safe_quantile(group, col_name):
-        filtered_group = group[group[col_name] > 1e-8]
-        if filtered_group.empty:
-            return pd.Series({col_name: pd.NA}, dtype="Float64")
-        else:
-            return pd.Series({col_name: filtered_group[col_name].quantile(0.95)})
-
-    # per Diff column max per house
-    logging.info("Calculating max values per household.")
-    household_max = (
-        df.groupby([project_id_column, "HuisIdBSV"])[diff_columns].max().reset_index()
-    )
-    household_max.columns = [project_id_column, "HuisIdBSV"] + [
-        f"{col}_household_max" for col in diff_columns
-    ]
-
-    for col in diff_columns:
-        household_max[f"{col}_household_max"] = household_max[f"{col}_household_max"].astype(
-            "Float64",
-        )
-
     avg_diff_dict = {}
 
     for col in diff_columns:
         logging.info(f"Handling column: {col}")
-
-        logging.info(f"Calculating the 95th percentile (upper bound) for {col}.")
-        upper_bounds = (
-            household_max.groupby(project_id_column)
-            .apply(safe_quantile, f"{col}_household_max")
-            .reset_index()
-        )
-        upper_bounds.columns = [project_id_column, f"{col}_upper_bound"]
-        upper_bounds[f"{col}_upper_bound"] = upper_bounds[
-            f"{col}_upper_bound"
-        ].multiply(2)
-
-        household_max_with_bounds = household_max[
-            [project_id_column, "HuisIdBSV", f"{col}_household_max"]
-        ].merge(upper_bounds, on=project_id_column, how="left")
 
         logging.info(f"Filtering the dataframe for {col}.")
         # The cumulative variable supplies the volume where it has readings, so
@@ -245,6 +274,7 @@ def calculate_average_diff(
         if not (isinstance(bound, pd.Series) or pd.isna(bound)):
             bound = pd.Series(bound, index=df_filtered.index)
         if isinstance(bound, pd.Series):
+            assert_bounds_not_inverted(col, cadence)
             out_of_bounds = (df_filtered[col] > bound).fillna(False)
             n_discarded = int(out_of_bounds.sum())
             if n_discarded:
@@ -268,7 +298,7 @@ def calculate_average_diff(
         window_minutes = window_minutes_for_column(
             cadence_minutes_by_household(col, cadence).values()
         )
-        values, presence_stats = apply_presence_filter(
+        values, presence_stats, window_presence = apply_presence_filter(
             df_filtered, col, project_id_column, window_minutes=window_minutes
         )
         df_filtered = df_filtered.assign(**{col: values})
@@ -287,6 +317,7 @@ def calculate_average_diff(
             float((avg_diff.loc[present, f"{col}_avg"] > 0).mean())
             if int(present.sum()) else 0.0
         )
+        coverage_duty = _coverage_duty_by_project(avg_diff, col, project_id_column)
         impute_na = avg_diff[col + "_avg"].isna().sum()
         if impute_na > 0:
             logging.error(
@@ -295,13 +326,13 @@ def calculate_average_diff(
 
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
-            "upper_bounds": upper_bounds,
-            "household_max_with_bounds": household_max_with_bounds,
             "n_discarded": n_discarded,
             "n_flagged": n_flagged,
             "coverage": coverage,
             "duty": duty,
+            "coverage_duty": coverage_duty,
             "presence": presence_stats,
+            "window_presence": window_presence,
         }
 
     return avg_diff_dict
@@ -342,7 +373,6 @@ def calculate_average_diff_ibis(
         The grid the data sits on, as in calculate_average_diff.
     """
     import ibis
-    import ibis.selectors as s
 
     logging.info("Calculating Diff column averages (Ibis).")
     assert_averageable(diff_columns)
@@ -357,9 +387,6 @@ def calculate_average_diff_ibis(
         cadence = load_column_cadence()
     if grid_minutes is None:
         grid_minutes = dataset_grid_minutes()
-
-    hh_max_agg = {f"{col}_household_max": tbl[col].cast("Float64").max() for col in diff_columns}
-    household_max = tbl.group_by([project_id_column, "HuisIdBSV"]).aggregate(**hh_max_agg)
 
     # Properties of the frame rather than of any column, so they are computed
     # once here instead of once per column inside the loop below.
@@ -388,6 +415,10 @@ def calculate_average_diff_ibis(
         if _guard_agg else {}
     )
 
+    # Every household contributes, so this is the same list for every column and
+    # is resolved once rather than per column.
+    included_ids = tbl.select("HuisIdBSV").distinct().execute()["HuisIdBSV"].tolist()
+
     avg_diff_dict = {}
 
     for col in diff_columns:
@@ -395,42 +426,18 @@ def calculate_average_diff_ibis(
         assert_no_negative_interval(
             col, _guards.get(f"_min_{diff_columns.index(col)}")
         )
-        max_col = f"{col}_household_max"
         n_discarded = 0
         n_flagged = 0
         coverage = 0.0
         duty = 0.0
-
-        # 95th percentile of per-household max (near-zero excluded), doubled -> upper bound.
-        # All projects appear in ub_tbl; projects with no qualifying households get NULL so
-        # that the return dict matches the pandas version's safe_quantile(-> pd.NA) behaviour.
-        filtered_max = household_max.filter(household_max[max_col] > 1e-8)
-        ub_inner = filtered_max.group_by(project_id_column).aggregate(
-            **{f"{col}_upper_bound": filtered_max[max_col].quantile(0.95) * 2}
-        )
-        all_projects = household_max.select(project_id_column).distinct()
-        ub_tbl = all_projects.left_join(ub_inner, project_id_column).select(
-            ~s.endswith("_right")
-        )
-
-        # Join upper bounds back to get include/exclude status per household
-        joined = (
-            household_max
-            .left_join(ub_tbl, project_id_column)
-            .select(~s.endswith("_right"))
-        )
-        # Every household contributes. The bound above is computed because it
-        # is reported, not to exclude anyone.
-        included_ids = (
-            joined.select("HuisIdBSV").distinct().execute()["HuisIdBSV"].tolist()
-        )
+        window_presence = None
 
         if not included_ids:
-            # No households qualify (all-zero or all-null diffs, or all above upper bound).
-            # Return an empty avg_diff with the correct schema rather than calling isin([])
-            # which is undefined behaviour in some SQL backends.
+            # No households at all. Return an empty avg_diff with the correct
+            # schema rather than calling isin([]), which is undefined behaviour
+            # in some SQL backends.
             logging.warning(
-                f"No households qualified for column `{col}`; avg_diff will be empty."
+                f"No households to average for column `{col}`; avg_diff will be empty."
             )
             avg_diff = pd.DataFrame(
                 {
@@ -475,6 +482,7 @@ def calculate_average_diff_ibis(
             # The threshold is scaled to each household's cadence.
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
+                assert_bounds_not_inverted(col, cadence)
                 scaled_bound = _per_household(
                     included["HuisIdBSV"],
                     column_bound_by_household(col, cadence),
@@ -524,7 +532,7 @@ def calculate_average_diff_ibis(
             prepared = included.mutate(
                 _value=source, _minutes=minutes, _on_cumulative=on_cumulative
             )
-            avg_diff, coverage, duty = _resample_average_ibis(
+            avg_diff, coverage, duty, window_presence = _resample_average_ibis(
                 prepared, col, project_id_column, grid_minutes,
                 max_slots=_max_slots, total_slots=_total_slots,
                 window_minutes=window_minutes_for_column(
@@ -538,18 +546,16 @@ def calculate_average_diff_ibis(
                 f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
-        # household_max is a measurement column, so it is promoted to Float64 to
-        # match the explicit cast the pandas path applies to the same column.
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
-            "upper_bounds": _to_nullable(ub_tbl.execute()),
-            "household_max_with_bounds": _to_nullable(
-                joined.execute(), float_cols=[max_col]
-            ),
             "n_discarded": n_discarded,
             "n_flagged": n_flagged,
             "coverage": coverage,
             "duty": duty,
+            "coverage_duty": _coverage_duty_by_project(
+                avg_diff, col, project_id_column
+            ),
+            "window_presence": window_presence,
         }
 
     return avg_diff_dict
@@ -560,8 +566,7 @@ def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.Da
 
     int32/int64 cannot hold pd.NA so they are always promoted to Int64.
     float64 supports NaN but is promoted to Float64 only for explicitly
-    nominated measurement columns, keeping non-measurement floats (e.g.
-    upper_bound, which safe_quantile returns as plain float) unchanged so
+    nominated measurement columns, keeping non-measurement floats unchanged so
     that dtypes match the pandas path exactly.
     """
     for c in df.select_dtypes(include=["int32", "int64"]).columns:
@@ -697,7 +702,7 @@ def _resample_average_ibis(
             prepared.select(project_id_column, "ReadingDate").distinct().execute()
         )
         blank[f"{diff_col}_avg"] = pd.array([pd.NA] * len(blank), dtype="Float64")
-        return _match_reading_date_dtype(blank), 0.0, 0.0
+        return _match_reading_date_dtype(blank), 0.0, 0.0, None
 
     offsets = ibis.memtable(
         pd.DataFrame({"_offset": pd.array(range(span), dtype="Int64")})
@@ -732,6 +737,26 @@ def _resample_average_ibis(
     ).aggregate(_delivered=_._per_slot.count())
 
     coverage_keys = [project_id_column, "HuisIdBSV", "_window"]
+
+    # The counts the eligibility gate below judges, exported per household and
+    # window. One small execute per column: (household, window) rows, not data
+    # rows. The judgements themselves are derived in window_presence_frame so
+    # both averaging implementations share one definition.
+    presence_counts = _to_nullable(
+        held.left_join(delivered, coverage_keys)
+        .select(~s_selectors.endswith("_right"))
+        .execute()
+    )
+    presence_counts = presence_counts.rename(
+        columns={"_held": "n_slots", "_delivered": "n_delivered"}
+    )
+    presence_counts["n_delivered"] = (
+        presence_counts["n_delivered"].fillna(0).astype("Int64")
+    )
+    window_presence = window_presence_frame(
+        presence_counts, diff_col, float(window), project_id_column
+    )
+
     eligible = (
         delivered.inner_join(held, coverage_keys)
         .select(~s_selectors.endswith("_right"))
@@ -807,30 +832,7 @@ def _resample_average_ibis(
         float((avg.loc[present, f"{diff_col}_avg"] > 0).mean())
         if int(present.sum()) else 0.0
     )
-    return avg, coverage, duty
-
-
-def concatenate_household_max_with_bounds(avg_diff_dict, project_id_column):
-    """
-    Concatenate household maximum values and bounds for all columns.
-
-    Each column may cover a different subset of (project, household) pairs
-    (e.g. one supplier vs another). An outer merge on the key columns is used
-    so that households missing a column receive pd.NA rather than being
-    silently assigned another column's values via positional alignment.
-    """
-    result_df = None
-    for col, data in avg_diff_dict.items():
-        df_col = data["household_max_with_bounds"][
-            [project_id_column, "HuisIdBSV", f"{col}_household_max", f"{col}_upper_bound"]
-        ]
-        if result_df is None:
-            result_df = df_col
-        else:
-            result_df = result_df.merge(
-                df_col, on=[project_id_column, "HuisIdBSV"], how="outer"
-            )
-    return result_df
+    return avg, coverage, duty, window_presence
 
 
 def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
@@ -1142,17 +1144,15 @@ def prepare_diff_averages_for_impute(
         A tuple containing:
         - diff_columns: list of difference column names
         - diffs: DataFrame with average differences
-        - max_bound: DataFrame with household maximum and bound information
 
     Notes
     -----
     This function performs the following steps:
     1. Sorts the DataFrame if not already sorted.
     2. Calculates average differences for each cumulative column.
-    3. Combines average differences and household maximum/bound information.
-    4. Saves the results to parquet files for later use.
+    3. Saves the result to parquet for later use.
 
-    The resulting files are saved in the directory specified by
+    The resulting file is saved in the directory specified by
     etdtransform.options.aggregate_folder_path.
 
     """
@@ -1165,23 +1165,16 @@ def prepare_diff_averages_for_impute(
     avg_diff_dict = calculate_average_diff(df, project_id_column, diff_columns)
     logging.info("Combining average diff columns.")
     diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
-    logging.info("Combining household diff maximum and bounds used for diff columns.")
-    max_bound = concatenate_household_max_with_bounds(avg_diff_dict, project_id_column)
 
     logging.info("Saving average diff columns in avg_diffs.parquet")
     diffs.to_parquet(
         os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
         engine="pyarrow",
     )
-    logging.info(
-        "Saving household diff max and bounds used in household_diff_max_bounds.parquet",
-    )
-    max_bound.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
-        engine="pyarrow",
-    )
+    write_coverage_duty(avg_diff_dict)
+    write_window_presence(avg_diff_dict)
 
-    return diff_columns, diffs, max_bound
+    return diff_columns, diffs
 
 
 def prepare_diff_averages_for_impute_ibis(
@@ -1209,7 +1202,7 @@ def prepare_diff_averages_for_impute_ibis(
     Returns
     -------
     tuple
-        (diff_columns, diffs, max_bound) -- same structure as
+        (diff_columns, diffs) -- same structure as
         prepare_diff_averages_for_impute.
     """
     diff_columns = get_diff_columns(cumulative_columns)
@@ -1220,23 +1213,73 @@ def prepare_diff_averages_for_impute_ibis(
     logging.info("Combining average diff columns.")
     diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
 
-    logging.info("Combining household diff maximum and bounds used for diff columns.")
-    max_bound = concatenate_household_max_with_bounds(avg_diff_dict, project_id_column)
-
     logging.info("Saving average diff columns in avg_diffs.parquet")
     diffs.to_parquet(
         os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
         engine="pyarrow",
     )
-    logging.info(
-        "Saving household diff max and bounds used in household_diff_max_bounds.parquet",
-    )
-    max_bound.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
-        engine="pyarrow",
-    )
+    write_coverage_duty(avg_diff_dict)
+    write_window_presence(avg_diff_dict)
 
-    return diff_columns, diffs, max_bound
+    return diff_columns, diffs
+
+
+def write_coverage_duty(avg_diff_dict, aggregate_folder_path=None) -> pd.DataFrame:
+    """Write avg_coverage_duty.parquet beside avg_diffs.parquet.
+
+    One row per project and column. The fill orders its columns by how much of
+    the average exists and how much of it moves, and that ordering has to be the
+    same on a re-run as it was on the run that produced the averages, so it is
+    read from an artifact rather than recomputed from whatever is in memory.
+    """
+    frames = [
+        data["coverage_duty"]
+        for data in avg_diff_dict.values()
+        if data.get("coverage_duty") is not None
+    ]
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    if aggregate_folder_path is None:
+        aggregate_folder_path = etdtransform.options.aggregate_folder_path
+    path = os.path.join(str(aggregate_folder_path), "avg_coverage_duty.parquet")
+    logging.info(
+        f"Saving coverage and duty for {out['column'].nunique()} column(s) over "
+        f"{len(out)} (project, column) pair(s) in avg_coverage_duty.parquet"
+    )
+    out.to_parquet(path, engine="pyarrow", index=False)
+    return out
+
+
+def write_window_presence(avg_diff_dict, aggregate_folder_path=None) -> pd.DataFrame:
+    """Write avg_window_presence.parquet beside avg_diffs.parquet.
+
+    One row per project, household, column and presence window: the counts the
+    two presence gates judged and the judgements derived from them. The gates
+    remove values without recording which household fell short where, so a
+    thin average could not be traced to the households and windows behind it;
+    this artifact is that record.
+    """
+    frames = [
+        data["window_presence"]
+        for data in avg_diff_dict.values()
+        if data.get("window_presence") is not None
+    ]
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    if aggregate_folder_path is None:
+        aggregate_folder_path = etdtransform.options.aggregate_folder_path
+    path = os.path.join(str(aggregate_folder_path), "avg_window_presence.parquet")
+    logging.info(
+        f"Saving window presence for {out['column'].nunique()} column(s) over "
+        f"{len(out)} (project, household, window) row(s) in "
+        f"avg_window_presence.parquet"
+    )
+    out.to_parquet(path, engine="pyarrow", index=False)
+    return out
 
 
 def read_diffs():
@@ -1272,7 +1315,9 @@ def process_and_impute(
     cumulative_columns: list,
     sorted=False,
     diffs_calculated=False,
-    optimized=False,
+    volume_reports=None,
+    constraints=None,
+    coverage_duty=None,
 ):
     """
     Process and impute missing values in the dataset.
@@ -1293,8 +1338,6 @@ def process_and_impute(
         Whether the DataFrame is already sorted. Default is False.
     diffs_calculated : bool, optional
         Whether differences have already been calculated. Default is False.
-    optimized : bool, optional
-        Whether to use optimized imputation methods. Default is False.
 
     Returns
     -------
@@ -1311,7 +1354,7 @@ def process_and_impute(
     1. Sorts the DataFrame if not already sorted.
     2. Loads or calculates differences.
     3. Merges average differences into the household DataFrame.
-    4. Applies imputation methods (either optimized or standard).
+    4. Applies imputation methods.
     5. Calculates and saves imputation statistics.
     6. Provides warnings for high imputation percentages.
 
@@ -1330,12 +1373,8 @@ def process_and_impute(
     if diffs_calculated:
         logging.info("Loading average diffs from file...")
         diffs = read_diffs()
-        max_bound = pd.read_parquet(
-            os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
-            dtype_backend="numpy_nullable",
-        )
     else:
-        diff_columns, diffs, max_bound = prepare_diff_averages_for_impute(
+        diff_columns, diffs = prepare_diff_averages_for_impute(
             df=df,
             project_id_column=project_id_column,
             cumulative_columns=cumulative_columns,
@@ -1349,29 +1388,13 @@ def process_and_impute(
 
     logging.info("Merge completed.")
 
-    if optimized:
-        optimized_label = "_optimized"
-        df, imputation_gap_stats_df, imputation_reading_date_stats_df = (
-            impute_and_normalize_optimized(
-                df,
-                cumulative_columns,
-                project_id_column,
-                max_bound,
-            )
+    df, imputation_gap_stats_df, imputation_reading_date_stats_df = (
+        impute_and_normalize(
+            df, cumulative_columns, project_id_column,
+            volume_reports=volume_reports,
+            constraints=constraints,
+            coverage_duty=coverage_duty,
         )
-    else:
-        optimized_label = ""
-        df, imputation_gap_stats_df, imputation_reading_date_stats_df = (
-            impute_and_normalize(df, cumulative_columns, project_id_column, max_bound)
-        )
-
-    logging.info("Saving imputation gap statistics...")
-    imputation_gap_stats_df.to_parquet(
-        os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            f"impute_gap_stats{optimized_label}.parquet",
-        ),
-        engine="pyarrow",
     )
 
     logging.info("Summarizing imputation_gap_stats_df per house and column")
@@ -1387,6 +1410,17 @@ def process_and_impute(
             "imputed_na",
             "methods",
             "bitwise_methods",
+        ]
+        # The household factor and its inputs, so a factor that scaled a fill
+        # can be read in the data it produced.
+        + [
+            name
+            for name in (
+                "house_impute_factor", "house_factor_is_fallback",
+                "house_diff_median", "project_avg_median",
+                "comparable_counts", "total_counts",
+            )
+            if name in imputation_gap_stats_df.columns
         ]
     ].reset_index()
 
@@ -1547,8 +1581,7 @@ def prepare_diff_averages_sharded(
 ):
     """
     Sharded version of the avg-diffs stage: compute the imputation estimation
-    inputs (avg_diffs.parquet + household_diff_max_bounds.parquet) directly
-    from the SHARDED mapped data.
+    input (avg_diffs.parquet) directly from the SHARDED mapped data.
 
     I/O shell only -- the computation is the SAME prepare_diff_averages_for_impute_ibis
     the legacy path uses, fed a lazy table built from mapped_household_table

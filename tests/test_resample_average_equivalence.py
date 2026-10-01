@@ -92,7 +92,7 @@ def _ibis_average(frame, cadence, drop_na=True):
     # never exceeds its own contributors. What is compared here is the
     # resampling, which the two paths reach by different routes. Agreement with
     # the gates applied is tested in test_minimum_household_presence.py.
-    avg, coverage, duty = _resample_average_ibis(
+    avg, coverage, duty, _presence = _resample_average_ibis(
         prepared, IV, "ProjectIdBSV", GRID,
         max_slots=max_slots, total_slots=total_slots,
         window_minutes=GRID,

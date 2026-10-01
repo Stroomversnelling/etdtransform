@@ -81,7 +81,7 @@ def _treated_and_imputed(df):
     rows = _detect_frozen_spans_for_household(df, 1)
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
     )
     return out, rows
 

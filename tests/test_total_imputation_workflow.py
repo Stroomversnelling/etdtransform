@@ -93,17 +93,21 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
     diffs_calculated = True
     # should create new files
     path_avg_diffs = os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet")
-    path_max_bound = os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet")    
     assert os.path.isfile(path_avg_diffs)
-    assert os.path.isfile(path_max_bound)
 
     logging.info("Imputing data.")
     # "impute"
+    # This workflow pins its outputs against expected files recorded before
+    # the constraint rules existed, so it runs the explicit comparison mode:
+    # the pin proves the pre-constraint behaviour is unchanged. The
+    # constrained behaviour has its own producers and the empty-vs-full
+    # package comparison in the estate acceptance.
     df_imputed = impute_hh_data_5min(
             df,
             cum_cols=cum_cols_list,
             sorted=True,
             diffs_calculated=diffs_calculated,
+            use_constraints=False,
         )
     # should create the following files
     hh_agg_diff_path = os.path.join(

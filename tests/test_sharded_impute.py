@@ -154,16 +154,6 @@ class TestShardedChainEquivalence:
             legacy.sort_values(key).reset_index(drop=True),
         )
 
-    def test_max_bounds_equal(self, sharded_stage3, ibis_pipeline):
-        sharded = _read_parquet(sharded_stage3 / "household_diff_max_bounds.parquet")
-        legacy = _read_parquet(ibis_pipeline / "household_diff_max_bounds.parquet")
-        cols = list(legacy.columns)
-        sort_by = [c for c in ("ProjectIdBSV", "column") if c in cols] or cols[:1]
-        pd.testing.assert_frame_equal(
-            sharded.sort_values(sort_by).reset_index(drop=True)[cols],
-            legacy.sort_values(sort_by).reset_index(drop=True),
-        )
-
     def test_imputed_values_equal(self, sharded_stage3, ibis_pipeline):
         parts = sorted((sharded_stage3 / "household_imputed").glob(
             "HuisIdBSV=*/HuisBatchIdBSV=*/part.parquet"))
@@ -185,9 +175,8 @@ class TestShardedChainEquivalence:
             check_dtype=True,
         )
 
-    def test_gap_stats_and_summaries_equal(self, sharded_stage3, ibis_pipeline):
+    def test_summaries_equal(self, sharded_stage3, ibis_pipeline):
         for name, key in [
-            ("impute_gap_stats.parquet", ["HuisIdBSV", "column"]),
             ("impute_summary_household.parquet", ["HuisIdBSV", "column"]),
             ("impute_summary_project.parquet", ["ProjectIdBSV", "column"]),
         ]:
@@ -233,7 +222,7 @@ class TestBatchSafetyGuards:
     def _agg_with_artifacts(self, tmp_path, src_agg):
         agg = tmp_path / "agg"
         (agg / "sharded").mkdir(parents=True)
-        for name in ("avg_diffs.parquet", "household_diff_max_bounds.parquet"):
+        for name in ("avg_diffs.parquet",):
             shutil.copyfile(src_agg / name, agg / "sharded" / name)
         return agg
 

@@ -119,6 +119,82 @@ def slot_minimum(n_eligible, shape=SUFFICIENCY_SHAPE, fraction=SUFFICIENCY_FRACT
     return int(min(int(shape), ceil(float(fraction) * int(n_eligible))))
 
 
+def window_presence_frame(
+    counts,
+    column,
+    window_minutes,
+    project_id_column,
+    household_column="HuisIdBSV",
+    min_coverage=MIN_WINDOW_COVERAGE,
+    shape=SUFFICIENCY_SHAPE,
+    fraction=SUFFICIENCY_FRACTION,
+):
+    """One row per (project, household, window): the counts the presence gates
+    judged, and the judgements derived from them.
+
+    *counts* carries *project_id_column*, *household_column*, ``_window`` (the
+    :func:`window_index` value) and the two raw counts ``n_slots`` and
+    ``n_delivered``. Everything else -- eligibility, the per-window household
+    tallies and the slot minimum -- is derived here, so the two averaging
+    implementations that supply counts share one definition of the judgements.
+
+    ``n_contributing`` tallies the eligible households that delivered at least
+    one slot of the window. At the default coverage minimum it equals
+    ``n_eligible``; the two part when the minimum is lowered.
+    """
+    out = counts.copy()
+    out["n_slots"] = out["n_slots"].astype("Int64")
+    out["n_delivered"] = out["n_delivered"].astype("Int64")
+    out["eligible"] = (
+        ((out["n_delivered"] / out["n_slots"]) >= min_coverage)
+        .fillna(False)
+        .astype("boolean")
+    )
+    window_keys = [project_id_column, "_window"]
+    out["n_eligible"] = (
+        out.groupby(window_keys, sort=False)["eligible"]
+        .transform("sum")
+        .astype("Int64")
+    )
+    contributing = out["eligible"] & (out["n_delivered"] > 0)
+    out["n_contributing"] = (
+        contributing.groupby([out[project_id_column], out["_window"]], sort=False)
+        .transform("sum")
+        .astype("Int64")
+    )
+    out["slot_minimum"] = pd.array(
+        [slot_minimum(n, shape, fraction) for n in out["n_eligible"]],
+        dtype="Int64",
+    )
+    # The inverse of window_index: windows count int(window_minutes)-minute
+    # steps from the epoch.
+    out["window_start"] = pd.to_datetime(
+        out["_window"].astype("int64") * int(window_minutes), unit="m"
+    )
+    out["window_minutes"] = pd.array(
+        [float(window_minutes)] * len(out), dtype="Float64"
+    )
+    out["column"] = column
+    ordered = [
+        "column",
+        project_id_column,
+        household_column,
+        "window_start",
+        "window_minutes",
+        "n_slots",
+        "n_delivered",
+        "eligible",
+        "n_eligible",
+        "n_contributing",
+        "slot_minimum",
+    ]
+    return (
+        out[ordered]
+        .sort_values([project_id_column, household_column, "window_start"])
+        .reset_index(drop=True)
+    )
+
+
 def apply_presence_filter(
     frame,
     column,
@@ -132,9 +208,10 @@ def apply_presence_filter(
 ):
     """Blank the values a project average may not be taken over.
 
-    Returns ``(values, stats)``: *column* with the excluded values replaced by
-    pd.NA, and a dict describing what the two gates removed. *frame* is not
-    modified.
+    Returns ``(values, stats, window_presence)``: *column* with the excluded
+    values replaced by pd.NA, a dict describing what the two gates removed,
+    and the :func:`window_presence_frame` of the counts the gates judged.
+    *frame* is not modified.
 
     A value is kept when its (household, window) covered the window and its
     (project, slot) has enough eligible households delivering for it. Both
@@ -182,6 +259,17 @@ def apply_presence_filter(
     delivered = work[column].notna()
     values = work[column].where(keep, pd.NA)
 
+    counts = (
+        work.assign(_delivered=delivered)
+        .groupby([project_id_column, household_column, "_window"], sort=False)
+        .agg(n_slots=("_delivered", "size"), n_delivered=("_delivered", "sum"))
+        .reset_index()
+    )
+    window_presence = window_presence_frame(
+        counts, column, window_minutes, project_id_column, household_column,
+        min_coverage, shape, fraction,
+    )
+
     stats = {
         "n_windows": int(work["_window"].nunique()),
         "window_minutes": float(window_minutes),
@@ -206,4 +294,4 @@ def apply_presence_filter(
             f"from slots with too few contributors; {stats['n_kept']} kept."
         )
 
-    return values.astype("Float64"), stats
+    return values.astype("Float64"), stats, window_presence

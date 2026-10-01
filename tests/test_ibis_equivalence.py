@@ -122,7 +122,6 @@ def test_calculate_average_diff_ibis_matches_pandas(diff_fixture_df):
     )
 
     sort_avg = ["ProjectIdBSV", "ReadingDate"]
-    sort_ub = ["ProjectIdBSV"]
 
     for col in DIFF_COLS:
         avg_pd = result_pd[col]["avg_diff"].sort_values(sort_avg).reset_index(drop=True)
@@ -133,28 +132,6 @@ def test_calculate_average_diff_ibis_matches_pandas(diff_fixture_df):
             f"{col}: avg_diff null positions differ between pandas and Ibis"
         )
         pd.testing.assert_frame_equal(avg_pd, avg_ib, check_like=True, rtol=1e-5)
-
-        ub_pd = result_pd[col]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True)
-        ub_ib = result_ibis[col]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True)
-        pd.testing.assert_frame_equal(ub_pd, ub_ib, check_like=True, rtol=1e-5)
-
-
-def test_outlier_households_excluded(diff_fixture_df):
-    """Outlier households must sit above the upper bound and be excluded."""
-    tbl = ibis.memtable(diff_fixture_df)
-    result = calculate_average_diff_ibis(
-        tbl, "ProjectIdBSV", DIFF_COLS,
-        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
-    )
-
-    outlier_ids = [_P1_OUTLIER, _P2_OUTLIER]
-    for col in DIFF_COLS:
-        bounds = result[col]["household_max_with_bounds"]
-        outlier_rows = bounds[bounds["HuisIdBSV"].isin(outlier_ids)]
-        assert not outlier_rows.empty, f"Outlier rows missing for {col}"
-        assert (
-            outlier_rows[f"{col}_household_max"] > outlier_rows[f"{col}_upper_bound"]
-        ).all(), f"Outlier not above upper bound for {col}"
 
 
 def test_nulls_excluded_from_mean(diff_fixture_df):
@@ -223,23 +200,7 @@ def test_empty_project_edge_cases():
     )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]
-        hmb = result["ZonopwekVerbruikDiff"]["household_max_with_bounds"]
         avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
-
-        # Both projects must appear in upper_bounds
-        assert set(ub["ProjectIdBSV"].dropna()) >= {2}, f"{label}: project 2 missing from upper_bounds"
-        assert 1 in ub["ProjectIdBSV"].values, f"{label}: project 1 missing from upper_bounds"
-
-        # Project 1 upper_bound must be null (no qualifying households)
-        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_upper_bound"]
-        assert p1_ub.isna().all(), f"{label}: project 1 upper_bound should be null, got {p1_ub.values}"
-
-        # Project 2 upper_bound must be non-null and positive
-        p2_ub = ub.loc[ub["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_upper_bound"]
-        assert p2_ub.notna().all() and (p2_ub > 0).all(), (
-            f"{label}: project 2 upper_bound should be positive, got {p2_ub.values}"
-        )
 
         # avg_diff must have rows for project 2 only (project 1 excluded)
         # Project 1 is all-zero, so it has no average to report -- but its
@@ -266,17 +227,8 @@ def test_empty_project_edge_cases():
             f"{label}: project 2 should still have its 3 slots"
         )
 
-        # household_max_with_bounds must include all households
-        assert set(hmb["HuisIdBSV"]) == {1, 2}, f"{label}: unexpected households in hmb: {set(hmb['HuisIdBSV'])}"
-
-    # The two paths must agree exactly on upper_bounds and avg_diff
-    sort_ub  = ["ProjectIdBSV"]
+    # The two paths must agree exactly on avg_diff
     sort_avg = ["ProjectIdBSV", "ReadingDate"]
-    pd.testing.assert_frame_equal(
-        result_pd["ZonopwekVerbruikDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
-        result_ibis["ZonopwekVerbruikDiff"]["upper_bounds"].sort_values(sort_ub).reset_index(drop=True),
-        check_like=True, rtol=1e-5,
-    )
     pd.testing.assert_frame_equal(
         result_pd["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
         result_ibis["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
@@ -359,11 +311,8 @@ def test_all_null_diffs_edge_case():
     )
 
     for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        ub = result["ZonopwekVerbruikDiff"]["upper_bounds"]
         avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
-        p1_ub = ub.loc[ub["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_upper_bound"]
-        assert p1_ub.isna().all(), f"{label}: all-null project upper_bound should be null"
         assert len(avg) == len(dates), (
             f"{label}: expected one row per slot, got {len(avg)}"
         )

@@ -627,17 +627,35 @@ from etdmap.storage import (  # noqa: F401  (re-exports)
 
 def source_table(path, household_ids=None) -> "ibis.Expr":
     """
-    Lazy ibis/DuckDB table over ANY stage source: a single parquet file or a
-    hive shard directory (hive partition ids become columns). The one
-    engine-bound wrapper on top of etdmap.storage's format detection.
+    Lazy ibis/DuckDB table over a stage source: a single parquet file or a hive
+    shard directory (hive partition ids become columns). The one engine-bound
+    wrapper on top of etdmap.storage's layout detection.
 
     ``household_ids`` restricts a sharded source to those households' shard
     directories, so the reader never opens the rest.
+
+    A directory whose partitions live under ``sharded/`` resolves to them, so
+    the stage folder and that subdirectory read the same and the flat files
+    beside them are never swept in.
+
+    Raises ``ValueError`` for a flat directory. It carries the household id only
+    in its file names, which this reader cannot see, so the lazy table would
+    have no ``HuisIdBSV`` and nothing would say so. ``read_source_frame`` reads
+    that layout and injects the ids, which is the same choice
+    ``mapped_household_table`` already makes.
     """
-    from etdmap.storage import source_read_targets
+    from etdmap.storage import source_layout, source_read_targets
 
     p = str(path)
-    if source_is_sharded(p):
+    layout = source_layout(p)
+    if layout == "flat":
+        raise ValueError(
+            f"{p} is a flat directory of per-household files. A lazy table over "
+            f"it would carry no HuisIdBSV. Use "
+            f"etdmap.storage.read_source_frame, or point at the sharded "
+            f"artifact."
+        )
+    if layout == "sharded":
         targets = source_read_targets(p, household_ids=household_ids)
         targets = (
             targets.replace("\\", "/") if isinstance(targets, str)

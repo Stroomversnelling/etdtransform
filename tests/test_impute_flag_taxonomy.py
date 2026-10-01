@@ -14,47 +14,22 @@ import pytest
 
 from etdtransform.vectorized_impute import ImputeType
 
-SIGNALS = {
-    ImputeType.NEGATIVE_GAP_JUMP,
-    ImputeType.NEAR_ZERO_GAP_JUMP,
-    ImputeType.UNIFORM_FILL,
-    ImputeType.SCALED_FILL,
-    ImputeType.ZERO_END_VALUE,
-    ImputeType.POSITIVE_END_VALUE,
-    ImputeType.NO_END_VALUE,
-    ImputeType.NO_CUMULATIVE_VALUE,
-    # An alias of THRESHOLD_VIOLATED in practice, and deprecated for that
-    # reason; still a condition rather than something imputation did.
-    ImputeType.THRESHOLD_ADJUSTED,
-    ImputeType.ONLY_CLOSING_READING,
-    ImputeType.ONLY_OPENING_READING,
-    ImputeType.THRESHOLD_VIOLATED,
-}
-ACTIONS = {
-    ImputeType.ZERO_FILL,
-    ImputeType.UNSCALED_AVERAGE,
-    ImputeType.HOUSEHOLD_SCALED_AVERAGE,
-    ImputeType.NOT_FILLED,
-    ImputeType.NULLED,
-    ImputeType.NULLED_POST_IMPUTATION,
-}
-
 
 def _single_bits():
     return {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
 
 
 class TestTheTaxonomyIsComplete:
-    def test_every_member_is_classified(self):
-        missing = sorted(m.name for m in _single_bits() - SIGNALS - ACTIONS)
-        assert not missing, (
-            f"ImputeType members classified as neither signal nor action: "
-            f"{missing}. Add each to a group in this file."
-        )
+    def test_flag_kind_answers_for_every_member(self):
+        """Every single-bit member is in exactly one of the SIGNALS and ACTIONS
+        composites, which is what lets flag_kind answer without raising. The
+        composites on the class are the only statement of the split; whether
+        each individual flag sits in the right one is proven by the behavioural
+        test its producer must have, not by a second list here."""
+        from etdmap.flags import flag_kind
 
-    def test_no_member_is_in_two_groups(self):
-        both = sorted(m.name for m in SIGNALS & ACTIONS)
-        assert not both, f"members in both signal and action: {both}"
+        for member in _single_bits():
+            assert flag_kind(member) in ("signal", "action"), member.name
 
 
 class TestFilledIsTheComplementOfNotFilled:
@@ -63,7 +38,9 @@ class TestFilledIsTheComplementOfNotFilled:
 
     def test_filled_is_the_value_writing_actions(self):
         assert ImputeType.FILLED == (
-            ImputeType.ZERO_FILL
+            ImputeType.UNIFORM_FILL
+            | ImputeType.SCALED_FILL
+            | ImputeType.ZERO_FILL
             | ImputeType.UNSCALED_AVERAGE
             | ImputeType.HOUSEHOLD_SCALED_AVERAGE
         )
@@ -76,6 +53,8 @@ class TestFilledIsTheComplementOfNotFilled:
         assert not (ImputeType.FILLED & ImputeType.NULLED_POST_IMPUTATION)
 
     @pytest.mark.parametrize("method", [
+        ImputeType.UNIFORM_FILL,
+        ImputeType.SCALED_FILL,
         ImputeType.ZERO_FILL,
         ImputeType.UNSCALED_AVERAGE,
         ImputeType.HOUSEHOLD_SCALED_AVERAGE,
@@ -101,8 +80,9 @@ class TestTheThresholdPassIsSeparate:
     exclusive triple and does not clear what imputation recorded."""
 
     def test_threshold_violated_is_a_signal_not_an_action(self):
-        assert ImputeType.THRESHOLD_VIOLATED in SIGNALS
-        assert ImputeType.THRESHOLD_VIOLATED not in ACTIONS
+        from etdmap.flags import flag_kind
+
+        assert flag_kind(ImputeType.THRESHOLD_VIOLATED) == "signal"
 
     def test_a_filled_cell_the_threshold_nulled_keeps_both(self):
         recorded = (
@@ -121,8 +101,8 @@ class TestValuesAreStable:
     of what the data means and cannot move once written.
 
     The values themselves are not restated here. They are configuration, recorded
-    in etdworkflow's generated flags.json and beside every data folder, where a
-    change is reviewed as a diff. Transcribing them into this file would mean
+    in the ``flags.json`` written beside every data folder, where a change is
+    reviewed as a diff. Transcribing them into this file would mean
     editing it whenever the configuration legitimately changed, which checks
     nothing. What is checked here is the property that makes the recording
     trustworthy: appending is the only way a member arrives."""
@@ -166,15 +146,6 @@ class TestTheCategoriesAreDeclaredNotDescribed:
                 f"{'both' if in_signals else 'neither'} category"
             )
 
-    def test_the_declared_categories_match_this_file(self):
-        for group, expected, label in (
-            (ImputeType.SIGNALS, SIGNALS, "SIGNALS"),
-            (ImputeType.ACTIONS, ACTIONS, "ACTIONS"),
-        ):
-            assert {m.name for m in _single_bits() if m & group} == {
-                m.name for m in expected
-            }, f"{label} on the class disagrees with the list in this file"
-
     def test_the_categories_do_not_overlap(self):
         assert not (ImputeType.SIGNALS & ImputeType.ACTIONS)
 
@@ -183,3 +154,32 @@ class TestTheCategoriesAreDeclaredNotDescribed:
         either would select cells nothing was written to."""
         assert not (ImputeType.FILLED & ImputeType.SIGNALS)
         assert not (ImputeType.IMPUTED_VALUE & ImputeType.SIGNALS)
+
+class TestEveryMemberHasAMeaning:
+    """DESCRIPTIONS beside the class is the one place a flag's meaning lives.
+    A member without one ships a bit nobody can read; a stale key describes a
+    flag that does not exist."""
+
+    def test_every_single_bit_is_described(self):
+        from etdtransform.flags import DESCRIPTIONS
+
+        missing = sorted(
+            m.name for m in _single_bits() if m.name not in DESCRIPTIONS
+        )
+        assert not missing, f"members with no description: {missing}"
+
+    def test_no_description_names_a_missing_member(self):
+        from etdtransform.flags import DESCRIPTIONS
+
+        stale = sorted(set(DESCRIPTIONS) - {m.name for m in _single_bits()})
+        assert not stale, f"descriptions for members that do not exist: {stale}"
+
+    def test_the_mapping_class_is_held_to_the_same_bar(self):
+        from etdmap.flags import DESCRIPTIONS as MAPPING
+        from etdmap.flags import MappingFlag
+
+        members = {
+            m.name for m in MappingFlag
+            if m.name and bin(m.value).count("1") == 1
+        }
+        assert members == set(MAPPING)

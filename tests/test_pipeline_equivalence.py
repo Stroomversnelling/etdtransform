@@ -20,7 +20,7 @@ Aggregation  : aggregate_hh_data_5min (pandas)
 
 Diffs        : prepare_diff_averages_for_impute (pandas)
                prepare_diff_averages_for_impute_ibis (ibis)
-               -> avg_diffs.parquet, household_diff_max_bounds.parquet
+               -> avg_diffs.parquet
 
 Imputation   : impute_hh_data_5min (pandas)
                impute_hh_data_5min_chunked (chunked pandas + parquet streaming)
@@ -141,16 +141,11 @@ class TestAggregationEquivalence:
 # ---------------------------------------------------------------------------
 
 class TestDiffsEquivalence:
-    """avg_diffs.parquet and household_diff_max_bounds.parquet: pandas vs ibis."""
+    """avg_diffs.parquet: pandas vs ibis."""
 
     def test_avg_diffs_ibis_matches_pandas(self, pandas_pipeline, ibis_pipeline):
         p = _load(pandas_pipeline / "avg_diffs.parquet", ("ProjectIdBSV", "ReadingDate"))
         i = _load(ibis_pipeline / "avg_diffs.parquet", ("ProjectIdBSV", "ReadingDate"))
-        _assert_frames_equal(p, i, "pandas", "ibis")
-
-    def test_max_bounds_ibis_matches_pandas(self, pandas_pipeline, ibis_pipeline):
-        p = _load(pandas_pipeline / "household_diff_max_bounds.parquet", ("HuisIdBSV",))
-        i = _load(ibis_pipeline / "household_diff_max_bounds.parquet", ("HuisIdBSV",))
         _assert_frames_equal(p, i, "pandas", "ibis")
 
 

@@ -89,7 +89,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
     assert rows, "the fixture must produce a detected span"
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", None, cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
     )
     return out
 

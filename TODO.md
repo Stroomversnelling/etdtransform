@@ -40,5 +40,4 @@ is deterministic given the state on disk.
 Action: generate the mapped fixture per session into a temporary location
 rather than a shared checked-in directory, so no run can leave another one
 broken. This is also the prerequisite for running the suite in parallel
-(pytest-xdist) -- see
-`etdworkflow/docs/refactoring/testing-framework-improvements.md`.
+(pytest-xdist).

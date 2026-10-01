@@ -3,16 +3,19 @@
 These are unit tests on the fill branches, not fixture runs. Each builds the
 smallest frame that forces one branch and asserts on the impute type it writes.
 
-Two flags per filled cell. The members up to THRESHOLD_ADJUSTED name the
-condition that led to the fill; the members after it name the action taken.
-`_types` asserts on the whole value, so a condition paired with the wrong
-action fails.
+Two flags per filled cell: a signal naming the condition that led to the fill
+and an action naming what was done -- the split is the SIGNALS and ACTIONS
+composites on the class. `_types` asserts on the whole value, so a condition
+paired with the wrong action fails.
 
 The threshold pass runs after imputation and ORs THRESHOLD_ADJUSTED onto
 whatever the fill recorded, so every fixture keeps its filled values under the
 column's declared maximum (1.5 for ElektriciteitNetgebruikDiff) except the one
 test that is about the threshold pass itself.
 """
+
+import ast
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -31,17 +34,14 @@ AVG = f"{DIFF}_avg"
 IMPUTED = f"{DIFF}_is_imputed"
 ITYPE = f"{DIFF}_impute_type"
 
-# The signal / action / modifier split is defined once, in
-# test_impute_flag_taxonomy.py. This file asserts that each member is actually
-# produced by the code, so it imports the classification rather than repeating
-# it -- two lists would drift.
-from test_impute_flag_taxonomy import ACTIONS, SIGNALS  # noqa: E402
+# The signal / action split lives on the class itself, as the SIGNALS and
+# ACTIONS composites. This file asserts that each member is actually produced
+# by the code, so it derives the member set rather than keeping a copy -- a
+# second list would drift.
 from conftest import cadence_table
 
-CONDITIONS = SIGNALS
-
-# Recorded by _expect as each test asserts; read by the contract test below.
-SEEN: set[ImputeType] = set()
+ALL_FLAGS = {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
+CONDITIONS = {m for m in ALL_FLAGS if m & ImputeType.SIGNALS}
 
 
 def _frame(cumulative, averages, diffs=None, household=1):
@@ -70,11 +70,10 @@ def _types(out, rows):
 
 
 def _expect(out, rows, *members):
-    """Assert the exact impute type on `rows` and record the members covered."""
+    """Assert the exact impute type on `rows`."""
     value = 0
     for member in members:
         value |= member.value
-        SEEN.add(member)
     assert _types(out, rows) == {value}, (
         f"expected {' | '.join(m.name for m in members)} ({value}), "
         f"got {_types(out, rows)}"
@@ -242,7 +241,6 @@ class TestActionsWithoutAConditionOfTheirOwn:
         assert len(unfilled) > 0, "expected at least one unfilled gap cell"
         for value in out.loc[unfilled, ITYPE]:
             assert int(value) & ImputeType.NOT_FILLED.value
-        SEEN.add(ImputeType.NOT_FILLED)
 
     def test_the_threshold_pass_records_the_condition_and_its_action(self):
         """Out of bounds is the condition; substituting the average is the
@@ -260,8 +258,6 @@ class TestActionsWithoutAConditionOfTheirOwn:
             # pass has no household factor to scale it by. It is now the only
             # producer of this flag.
             assert value & ImputeType.UNSCALED_AVERAGE.value
-        SEEN.add(ImputeType.THRESHOLD_VIOLATED)
-        SEEN.add(ImputeType.UNSCALED_AVERAGE)
 
     def test_the_threshold_pass_records_a_blanking_separately(self):
         """With no average to substitute, the pass blanks the value. That is a
@@ -274,8 +270,6 @@ class TestActionsWithoutAConditionOfTheirOwn:
             assert any(
                 t & ImputeType.NULLED_POST_IMPUTATION.value for t in types
             ), "a blanked cell was not marked NULLED_POST_IMPUTATION"
-        SEEN.add(ImputeType.NULLED_POST_IMPUTATION)
-        SEEN.add(ImputeType.NULLED)
 
     def test_a_fill_over_the_maximum_is_marked_adjusted(self):
         """1.5 is the declared maximum for this column; a jump of 12.0 over
@@ -286,19 +280,90 @@ class TestActionsWithoutAConditionOfTheirOwn:
             if int(v) & ImputeType.THRESHOLD_ADJUSTED.value
         ]
         assert adjusted, "values over the maximum were not marked THRESHOLD_ADJUSTED"
-        SEEN.add(ImputeType.THRESHOLD_ADJUSTED)
+
+
+# Files whose subject is the vocabulary itself: they name members to check
+# the class, not the behaviour, so a mention there is not a test of the flag.
+STRUCTURAL_TEST_FILES = {"test_impute_flag_taxonomy.py"}
+
+
+def _members_mentioned_in_tests(class_name):
+    """Member names referenced as `<class_name>.<MEMBER>` in any test file.
+
+    A flag a producer test asserts on is necessarily named there, so a member
+    no test file even mentions has no test. This is an inventory check only --
+    that the assertion behind a mention is a real one is each producer test's
+    own job.
+    """
+    mentioned = set()
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        if path.name in STRUCTURAL_TEST_FILES:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == class_name
+            ):
+                mentioned.add(node.attr)
+    return mentioned
+
+
+# Vocabulary declared ahead of its producer: the meaning is fixed in
+# DESCRIPTIONS, but nothing writes the flag yet. A member leaves this set the
+# moment a producer test names it -- the honesty test below fails and says so.
+# NULLED: the value-blanking action of the imputation's exclusive triple
+# (FILLED, NOT_FILLED, NULLED); every live blanking today happens in mapping
+# or in the threshold pass, which record themselves differently.
+UNPRODUCED = {"NULLED"}
 
 
 class TestEveryMemberIsCovered:
-    """Contract guard: a flag added to ImputeType without a test here fails."""
+    """Contract guard: a flag added to ImputeType with no test anywhere fails.
 
-    def test_the_two_groups_account_for_every_member(self):
-        members = {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
-        assert members == SIGNALS | ACTIONS, (
-            "ImputeType gained or lost a member; classify it in "
-            "test_impute_flag_taxonomy.py and give it a test here"
+    The producer tests live in more than one file -- fills here, threshold and
+    bound behaviour in their own files -- so coverage is collected by scanning
+    every test file, not by recording within this one. Declared-ahead
+    vocabulary sits in UNPRODUCED instead of staying red: both tests here are
+    green in the steady state, and each direction of drift fails exactly one
+    of them.
+    """
+
+    def test_every_member_with_a_producer_is_tested(self):
+        mentioned = _members_mentioned_in_tests("ImputeType")
+        missing = sorted(
+            m.name for m in ALL_FLAGS
+            if m.name not in mentioned and m.name not in UNPRODUCED
+        )
+        assert not missing, f"ImputeType members with no test: {missing}"
+
+    def test_the_unproduced_list_is_honest(self):
+        """A member both declared unproduced and tested is one whose producer
+        has arrived: remove it from UNPRODUCED rather than let the exception
+        outlive its reason."""
+        mentioned = _members_mentioned_in_tests("ImputeType")
+        arrived = sorted(UNPRODUCED & mentioned)
+        assert not arrived, (
+            f"now produced and tested -- remove from UNPRODUCED: {arrived}"
         )
 
-    def test_every_member_was_asserted_on(self):
-        missing = sorted(m.name for m in (SIGNALS | ACTIONS) - SEEN)
-        assert not missing, f"ImputeType members with no test: {missing}"
+    def test_the_unproduced_list_names_real_members(self):
+        unknown = sorted(UNPRODUCED - {m.name for m in ALL_FLAGS})
+        assert not unknown, (
+            f"UNPRODUCED names members that do not exist: {unknown}"
+        )
+
+    def test_declared_but_unused_members_are_reported(self):
+        """Always passes; reminds the runner, in the run's warnings summary,
+        which members are declared but expected not to be in use. A quiet
+        exception is one nobody re-examines."""
+        if UNPRODUCED:
+            import warnings
+
+            warnings.warn(
+                "ImputeType members declared but expected not to be in use "
+                f"(no producer, so no tests): {sorted(UNPRODUCED)}",
+                UserWarning,
+                stacklevel=1,
+            )

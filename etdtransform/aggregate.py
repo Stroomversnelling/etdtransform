@@ -486,8 +486,8 @@ def impute_hh_data_5min(
     cum_cols=cumulative_columns,
     sorted=False,
     diffs_calculated=False,
-    optimized=False,
     reconstruct_in_pandas: bool = True,
+    use_constraints: bool = True,
 ):
     """
     Impute missing values in household data and save results.
@@ -502,8 +502,6 @@ def impute_hh_data_5min(
         Whether the data is already sorted, by default False
     diffs_calculated : bool, optional
         Whether differences are already calculated, by default False
-    optimized : bool, optional
-        Whether to use optimized processing, by default False
     reconstruct_in_pandas : bool, optional
         Whether to reconstruct cumulative columns (*Original, cumsum, *Check) in
         pandas before writing to parquet.  Set to False when the caller will do
@@ -538,6 +536,7 @@ def impute_hh_data_5min(
     #     min_valid_ratio=.4
     #     )
 
+    _volume_reports: list = []
     (
         df,
         imputation_summary_house,
@@ -549,7 +548,11 @@ def impute_hh_data_5min(
         cumulative_columns=cum_cols,
         sorted=sorted,
         diffs_calculated=diffs_calculated,
-        optimized=optimized,
+        volume_reports=_volume_reports,
+        constraints=_constraints_for_run(use_constraints),
+        coverage_duty=_read_coverage_duty(
+            etdtransform.options.aggregate_folder_path
+        ),
     )
 
     diff_columns = [
@@ -572,16 +575,11 @@ def impute_hh_data_5min(
 
     # df.drop(columns=diff_columns)
 
-    if optimized:
-        optimized_label = "_optimized"
-    else:
-        optimized_label = ""
-
     logging.info("Saving files.")
     df.to_parquet(
         os.path.join(
             etdtransform.options.aggregate_folder_path,
-            f"household_imputed{optimized_label}.parquet",
+            "household_imputed.parquet",
         ),
         engine="pyarrow",
     )
@@ -589,30 +587,34 @@ def impute_hh_data_5min(
     aggregated_diff.to_parquet(
         os.path.join(
             etdtransform.options.aggregate_folder_path,
-            f"household_aggregated_diff{optimized_label}.parquet",
+            "household_aggregated_diff.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_house.to_parquet(
         os.path.join(
             etdtransform.options.aggregate_folder_path,
-            f"impute_summary_household{optimized_label}.parquet",
+            "impute_summary_household.parquet",
         ),
         engine="pyarrow",
     )
     imputation_summary_project.to_parquet(
         os.path.join(
             etdtransform.options.aggregate_folder_path,
-            f"impute_summary_project{optimized_label}.parquet",
+            "impute_summary_project.parquet",
         ),
         engine="pyarrow",
+    )
+
+    _write_volume_reports(
+        _volume_reports, etdtransform.options.aggregate_folder_path
     )
 
     if imputation_reading_date_stats_df:
         imputation_reading_date_stats_df.to_parquet(
             os.path.join(
                 etdtransform.options.aggregate_folder_path,
-                f"impute_summary_reading_date{optimized_label}.parquet",
+                "impute_summary_reading_date.parquet",
             ),
             engine="pyarrow",
         )
@@ -620,6 +622,132 @@ def impute_hh_data_5min(
     logging.info("Done")
 
     return df
+
+
+_VOLUME_SUMS = (
+    "total_routed",
+    "total_final",
+    "deviation",
+    "redistributed_volume",
+    "uniform_residual_volume",
+    "unplaced_volume",
+    "unanchored_removed_volume",
+)
+_VOLUME_COUNTS = (
+    "cells_clipped",
+    "cells_absorbed",
+    "cells_residual",
+    "cells_not_filled",
+    "gap_length",
+)
+
+
+
+#: Per-chunk wall-time budget for the imputation shells, in seconds. The
+#: documented pre-phase-1 baseline is ~8 minutes per 50-household chunk
+#: (docs/performance/full-estate-pipeline-timing-2026-09-29.md in the
+#: workflow repository); a chunk beyond this budget is announced loudly so a
+#: regression is visible on the FIRST chunk of a run, not after it.
+CHUNK_BUDGET_SECONDS = 720.0
+
+
+class _ChunkTimer:
+    """Times each chunk of an imputation shell and projects the whole run.
+
+    Logs every chunk's wall time with a running projection, and warns --
+    once, loudly -- as soon as the average chunk exceeds the budget, naming
+    the projected total. The guard exists so a slow run announces itself at
+    chunk one rather than being discovered from the outside half-way in.
+    """
+
+    def __init__(self, n_chunks, log_prefix, budget_seconds=None):
+        import time as _time
+
+        self._time = _time
+        self.n_chunks = n_chunks
+        self.log_prefix = log_prefix
+        self.budget = (
+            CHUNK_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+        )
+        self.durations: list = []
+        self._warned = False
+        self._started = None
+
+    def start(self):
+        self._started = self._time.perf_counter()
+
+    def finish(self):
+        elapsed = self._time.perf_counter() - self._started
+        self.durations.append(elapsed)
+        done = len(self.durations)
+        average = sum(self.durations) / done
+        projected = average * self.n_chunks
+        logging.info(
+            f"{self.log_prefix} Chunk {done}/{self.n_chunks} took "
+            f"{elapsed:.0f}s (avg {average:.0f}s/chunk, projected total "
+            f"{projected / 60:.0f}m)."
+        )
+        if not self._warned and average > self.budget:
+            self._warned = True
+            logging.warning(
+                f"{self.log_prefix} Chunk time {average:.0f}s exceeds the "
+                f"{self.budget:.0f}s budget (documented baseline ~480s per "
+                f"50-household chunk). Projected total {projected / 60:.0f}m "
+                f"-- investigate before letting the run finish; see "
+                f"docs/performance/full-estate-pipeline-timing-2026-09-29.md."
+            )
+
+
+def _write_volume_reports(volume_reports, output_folder, log_prefix="[impute]"):
+    """Write the fill's per-gap volume report and its two rollups.
+
+    impute_volume_gap.parquet holds one row per (household, column, gap) as
+    the fill collected it; impute_volume_household.parquet rolls up per
+    (project, household, column) and impute_volume_project.parquet per
+    (project, column). Volume sums take min_count=1 throughout, so a grain
+    with no values reports pd.NA rather than a zero.
+    """
+    from etdtransform.flags import ImputeType
+
+    non_empty = [
+        frame for frame in (volume_reports or [])
+        if frame is not None and not frame.empty
+    ]
+    if not non_empty:
+        logging.info(f"{log_prefix} No gap volumes to report.")
+        return
+    gaps = pd.concat(non_empty, ignore_index=True)
+
+    logging.info(
+        f"{log_prefix} Saving gap volume report: {len(gaps)} gap(s) over "
+        f"{gaps['column'].nunique()} column(s), plus two rollups."
+    )
+    gaps.to_parquet(
+        os.path.join(str(output_folder), "impute_volume_gap.parquet"),
+        engine="pyarrow",
+        index=False,
+    )
+
+    for filename, keys in (
+        ("impute_volume_household.parquet", ["ProjectIdBSV", "HuisIdBSV", "column"]),
+        ("impute_volume_project.parquet", ["ProjectIdBSV", "column"]),
+    ):
+        grouped = gaps.groupby(keys, dropna=False)
+        rollup = grouped.agg(
+            n_gaps=("gap", "size"),
+            **{name: (name, lambda s: s.sum(min_count=1)) for name in _VOLUME_SUMS},
+            **{name: (name, "sum") for name in _VOLUME_COUNTS},
+        ).reset_index()
+        rollup["n_gaps_infeasible"] = grouped["impute_type_bits"].agg(
+            lambda s: int((
+                (s.fillna(0).astype("int64") & ImputeType.INFEASIBLE_GAP.value) != 0
+            ).sum())
+        ).to_numpy()
+        rollup.to_parquet(
+            os.path.join(str(output_folder), filename),
+            engine="pyarrow",
+            index=False,
+        )
 
 
 def _finalize_impute_outputs(
@@ -630,12 +758,17 @@ def _finalize_impute_outputs(
     imputed_schema_names,
     cum_cols,
     log_prefix: str = "[impute]",
+    volume_reports=None,
 ) -> None:
     """
     Shared step-4+5 finalizer for both imputation shells: combine gap stats,
-    write impute_gap_stats + household/project summaries, and compute the
+    write the household and project summaries, and compute the
     post-imputation household_aggregated_diff (DuckDB over the finished
     output -- monolith path or hive glob, via ``imputed_read_sql``).
+
+    The combined gap stats stay in memory. They were also written as
+    impute_gap_stats.parquet, which duplicated impute_summary_household.parquet
+    at the same grain and on every shared column.
 
     Extracted VERBATIM from the legacy chunked shell so the two paths produce
     identical artifacts (protected by test_total_imputation_workflow).
@@ -658,20 +791,28 @@ def _finalize_impute_outputs(
         imputation_gap_stats_df["methods"]
     )
 
-    imputation_gap_stats_df.to_parquet(
-        os.path.join(str(output_folder), "impute_gap_stats.parquet"),
-        engine="pyarrow",
-    )
+    _write_volume_reports(volume_reports, output_folder, log_prefix)
 
     total_records_df = pd.DataFrame(
         [{"HuisIdBSV": k, "total_records": v} for k, v in total_records.items()]
     )
+    # The household factor and its inputs travel with the summary: a factor that
+    # scaled a fill has to be readable in the data it produced.
+    _factor_columns = [
+        name
+        for name in (
+            "house_impute_factor", "house_factor_is_fallback",
+            "house_diff_median", "project_avg_median",
+            "comparable_counts", "total_counts",
+        )
+        if name in imputation_gap_stats_df.columns
+    ]
     summary_house = (
         imputation_gap_stats_df[[
             "ProjectIdBSV", "HuisIdBSV", "column", "diff_col_total",
             "cum_col_min_max_diff", "missing", "imputed", "imputed_na",
             "methods", "bitwise_methods",
-        ]]
+        ] + _factor_columns]
         .merge(total_records_df, on="HuisIdBSV")
     )
     summary_house["percentage_imputed"] = (
@@ -736,7 +877,38 @@ def _finalize_impute_outputs(
         )
 
 
-def _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound):
+def _chunk_ids_by_project(all_ids, project_of, chunk_size):
+    """Household ids in chunks that never straddle a project.
+
+    A chunk is only a memory window -- it decides how many households are held
+    at once, not how any of them are imputed. But the fill reads a project
+    average and reports per project, so a chunk holding halves of two projects
+    holds two unrelated populations and nothing in the run is grouped the way
+    the numbers are.
+
+    The cap still applies inside each project, so a project larger than
+    *chunk_size* still yields several chunks and the memory bound holds. A
+    household whose project is unknown is kept, in a group of its own, rather
+    than dropped.
+    """
+    groups: dict = {}
+    for household_id in all_ids:
+        groups.setdefault(project_of.get(household_id), []).append(household_id)
+
+    chunks = []
+    # None last, so an unknown project never splits a real one's chunks.
+    for project in sorted(groups, key=lambda p: (p is None, p)):
+        ids = sorted(groups[project])
+        chunks.extend(
+            ids[i:i + chunk_size] for i in range(0, len(ids), chunk_size)
+        )
+    return chunks
+
+
+def _impute_chunk_core(
+    chunk_df, cum_cols, diffs, volume_reports=None,
+    constraints=None, coverage_duty=None,
+):
     """
     Shared per-chunk imputation core: sort -> merge project diffs ->
     impute_and_normalize -> reconstruct cumulative columns.
@@ -755,7 +927,10 @@ def _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound):
     chunk_df = chunk_df.merge(diffs, on=["ProjectIdBSV", "ReadingDate"], how="left")
 
     chunk_df, gap_stats_chunk, _ = impute_and_normalize(
-        chunk_df, list(cum_cols), "ProjectIdBSV", max_bound
+        chunk_df, list(cum_cols), "ProjectIdBSV",
+        volume_reports=volume_reports,
+        constraints=constraints,
+        coverage_duty=coverage_duty,
     )
 
     # Rebuild cumulative columns from imputed Diff columns per household.
@@ -767,12 +942,36 @@ def _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound):
     return chunk_df, gap_stats_chunk
 
 
+
+def _read_coverage_duty(folder):
+    """The fill-order table beside avg_diffs, or None where a run predates it."""
+    path = os.path.join(str(folder), "avg_coverage_duty.parquet")
+    if os.path.exists(path):
+        return pd.read_parquet(path, dtype_backend="numpy_nullable")
+    return None
+
+
+def _constraints_for_run(use_constraints):
+    """The packaged rule table, or None for an explicit comparison run."""
+    if not use_constraints:
+        logging.warning(
+            "Imputing WITHOUT constraints: comparison mode against "
+            "pre-constraint checkpoints. Production runs narrow with the "
+            "synced rules."
+        )
+        return None
+    from etdtransform.constraints import packaged_constraints
+
+    return packaged_constraints()
+
+
 def impute_mapped_households_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cum_cols=None,
     household_ids=None,
     chunk_size: int = 50,
+    use_constraints: bool = True,
 ) -> None:
     """
     Sharded version of impute_hh_data_5min_chunked (stage 3).
@@ -783,16 +982,15 @@ def impute_mapped_households_sharded(
     ProjectIdBSV is joined from the index; Meenemen inclusion comes
     from the index at read time (the stage-2 filter's sharded replacement).
 
-    Inputs read from ``aggregate_folder_path``: avg_diffs.parquet and
-    household_diff_max_bounds.parquet (same artifacts the legacy shell uses --
-    identical inputs keep the two paths comparable).
+    Input read from ``aggregate_folder_path``: avg_diffs.parquet (the same
+    artifact the legacy shell uses -- identical inputs keep the two paths
+    comparable).
 
     Output: hive shards under
     ``<aggregate_folder_path>/sharded/household_imputed/HuisIdBSV=<n>/HuisBatchIdBSV=<p>/part.parquet``
     (ids in the path, not the files). The writer owns and clears its output
-    directory -- re-runs are idempotent. Gap stats are written to
-    ``<aggregate_folder_path>/sharded/impute_gap_stats.parquet``; the legacy
-    summary derivations stay with the legacy shell for now (tracked).
+    directory -- re-runs are idempotent. The legacy summary derivations stay
+    with the legacy shell for now (tracked).
     """
     import glob as glob_mod
     import shutil
@@ -818,23 +1016,6 @@ def impute_mapped_households_sharded(
         all_ids = sorted(int(x) for x in household_ids)
     else:
         all_ids = included_household_ids(mapped_folder_path)
-    chunks = [all_ids[i:i + chunk_size] for i in range(0, len(all_ids), chunk_size)]
-    logging.info(
-        f"[sharded impute] {len(all_ids)} households -> {len(chunks)} chunk(s) of {chunk_size}"
-    )
-
-    # Estimation inputs from the SHARDED pipeline's artifact area (produced by
-    # prepare_diff_averages_sharded) -- the sharded chain is self-contained under
-    # <aggregate>/sharded/.
-    sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
-    diffs = pd.read_parquet(
-        os.path.join(sharded_agg, "avg_diffs.parquet"),
-        dtype_backend="numpy_nullable",
-    )
-    max_bound = pd.read_parquet(
-        os.path.join(sharded_agg, "household_diff_max_bounds.parquet"),
-        dtype_backend="numpy_nullable",
-    )
 
     index_df, _ = read_index(mapped_folder_path)
     if "HuisBatchIdBSV" not in index_df.columns:
@@ -855,14 +1036,44 @@ def impute_mapped_households_sharded(
         (int(x) for x in household_batch_projects["ProjectIdBSV"]),
     ))
 
+    # Chunking needs one project per household, and the project is per batch
+    # (above), so a multi-batch household could sit under two. The smallest
+    # project id is a deterministic representative, and it only picks the
+    # household's memory window -- imputation groups each row on its batch's
+    # own project either way.
+    household_projects = index_df[["HuisIdBSV", "ProjectIdBSV"]].dropna()
+    project_of_household = {
+        int(h): int(p)
+        for h, p in household_projects.groupby("HuisIdBSV")["ProjectIdBSV"].min().items()
+    }
+    chunks = _chunk_ids_by_project(all_ids, project_of_household, chunk_size)
+    logging.info(
+        f"[sharded impute] {len(all_ids)} households -> {len(chunks)} chunk(s) "
+        f"(cap {chunk_size}, no chunk straddles a project)"
+    )
+
+    # Estimation inputs from the SHARDED pipeline's artifact area (produced by
+    # prepare_diff_averages_sharded) -- the sharded chain is self-contained under
+    # <aggregate>/sharded/.
+    sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
+    diffs = pd.read_parquet(
+        os.path.join(sharded_agg, "avg_diffs.parquet"),
+        dtype_backend="numpy_nullable",
+    )
+    _constraints = _constraints_for_run(use_constraints)
+    _coverage_duty = _read_coverage_duty(sharded_agg)
+
     out_root = os.path.join(str(aggregate_folder_path), "sharded", "household_imputed")
     if os.path.isdir(out_root):
         shutil.rmtree(out_root)
 
     all_gap_stats: list = []
+    _volume_reports: list = []
+    _chunk_timer = _ChunkTimer(len(chunks), "[sharded impute]")
     total_records: dict = {}
     for i, chunk_ids in enumerate(chunks):
         logging.info(f"[sharded impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
+        _chunk_timer.start()
         chunk_df = read_mapped_households(chunk_ids, mapped_folder_path=mapped_folder_path)
 
         # Computational batch-safety guard (independent of the index
@@ -876,7 +1087,10 @@ def impute_mapped_households_sharded(
             dtype="Int64",
         )
 
-        chunk_df, gap_stats_chunk = _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound)
+        chunk_df, gap_stats_chunk = _impute_chunk_core(
+            chunk_df, cum_cols, diffs, volume_reports=_volume_reports,
+            constraints=_constraints, coverage_duty=_coverage_duty,
+        )
         all_gap_stats.append(gap_stats_chunk)
         for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
             total_records[int(hid)] = int(cnt)
@@ -894,6 +1108,7 @@ def impute_mapped_households_sharded(
                 compression="snappy",
             )
         del chunk_df
+        _chunk_timer.finish()
 
     # Step 4+5 via the shared finalizer, into the sharded artifact area; the
     # aggregated diff reads the hive glob of the imputed shards.
@@ -912,6 +1127,7 @@ def impute_mapped_households_sharded(
         imputed_schema_names=schema_names,
         cum_cols=cum_cols,
         log_prefix="[sharded impute]",
+        volume_reports=_volume_reports,
     )
     logging.info(f"[sharded impute] Done -> {out_root}")
 
@@ -921,6 +1137,7 @@ def impute_hh_data_5min_chunked(
     chunk_size: int = 50,
     cum_cols=cumulative_columns,
     household_ids=None,
+    use_constraints: bool = True,
 ):
     """
     Chunked variant of impute_hh_data_5min.
@@ -930,8 +1147,8 @@ def impute_hh_data_5min_chunked(
     household_imputed.parquet via PyArrow ParquetWriter.  RAM footprint is
     bounded by chunk_size rather than the full dataset.
 
-    Requires avg_diffs.parquet and household_diff_max_bounds.parquet to already
-    exist -- run prepare_diff_averages_for_impute / prepare_diff_averages_for_impute_ibis first.
+    Requires avg_diffs.parquet to already exist -- run
+    prepare_diff_averages_for_impute / prepare_diff_averages_for_impute_ibis first.
 
     Parameters
     ----------
@@ -973,25 +1190,48 @@ def impute_hh_data_5min_chunked(
             ["HuisIdBSV"].dropna().unique()
         )
     n_hh = len(all_ids)
-    chunks = [all_ids[i:i + chunk_size] for i in range(0, n_hh, chunk_size)]
-    logging.info(f"[chunked impute] {n_hh} households -> {len(chunks)} chunks of {chunk_size}")
+    # Chunking needs one project per household (see _chunk_ids_by_project).
+    # The source carries the project per row; a household appearing under two
+    # projects (different batches) takes the smallest id as a deterministic
+    # representative -- that only picks its memory window, imputation groups
+    # each row on its own project either way.
+    if "ProjectIdBSV" in _schema_cols:
+        project_rows = pd.read_parquet(
+            source_path,
+            columns=["HuisIdBSV", "ProjectIdBSV"],
+            dtype_backend="numpy_nullable",
+        ).dropna()
+        project_of_household = {
+            int(h): int(p)
+            for h, p in project_rows.groupby("HuisIdBSV")["ProjectIdBSV"].min().items()
+        }
+    else:
+        # No project column, no grouping to respect: every id lands in the
+        # helper's unknown group and the chunks are plain windows.
+        project_of_household = {}
+    chunks = _chunk_ids_by_project(all_ids, project_of_household, chunk_size)
+    logging.info(
+        f"[chunked impute] {n_hh} households -> {len(chunks)} chunks "
+        f"(cap {chunk_size}, no chunk straddles a project)"
+    )
 
     # Step 2: load pre-computed diffs (small files, always required)
     logging.info("[chunked impute] Loading pre-computed diff averages...")
     diffs = read_diffs()
-    max_bound = pd.read_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "household_diff_max_bounds.parquet"),
-        dtype_backend="numpy_nullable",
-    )
+    _constraints = _constraints_for_run(use_constraints)
+    _coverage_duty = _read_coverage_duty(etdtransform.options.aggregate_folder_path)
 
     out_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_imputed.parquet")
     writer: "pq.ParquetWriter | None" = None
     all_gap_stats: list = []
+    _volume_reports: list = []
+    _chunk_timer = _ChunkTimer(len(chunks), "[chunked impute]")
     total_records: dict = {}
 
     # Step 3: impute each chunk
     for i, chunk_ids in enumerate(chunks):
         logging.info(f"[chunked impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
+        _chunk_timer.start()
 
         # Read ALL source columns -- pass-through columns are preserved unchanged so
         # household_imputed.parquet has the same schema as household_default.parquet.
@@ -1001,7 +1241,10 @@ def impute_hh_data_5min_chunked(
             dtype_backend="numpy_nullable",
         )
 
-        chunk_df, gap_stats_chunk = _impute_chunk_core(chunk_df, cum_cols, diffs, max_bound)
+        chunk_df, gap_stats_chunk = _impute_chunk_core(
+            chunk_df, cum_cols, diffs, volume_reports=_volume_reports,
+            constraints=_constraints, coverage_duty=_coverage_duty,
+        )
 
         all_gap_stats.append(gap_stats_chunk)
         for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
@@ -1012,6 +1255,7 @@ def impute_hh_data_5min_chunked(
             writer = pq.ParquetWriter(out_path, chunk_table.schema, compression="snappy")
         writer.write_table(chunk_table)
         del chunk_df
+        _chunk_timer.finish()
 
     if writer:
         writer.close()
@@ -1025,6 +1269,7 @@ def impute_hh_data_5min_chunked(
         imputed_schema_names=pq.read_schema(out_path).names,
         cum_cols=cum_cols,
         log_prefix="[chunked impute]",
+        volume_reports=_volume_reports,
     )
 
     logging.info("[chunked impute] Done.")
@@ -1176,7 +1421,7 @@ def add_calculated_columns_to_hh_data_ibis(
     from etdmap.storage import source_is_sharded
     from etdtransform.load_data import source_table
 
-    source_is_dir = source_is_sharded(source_path)
+    source_is_shards = source_is_sharded(source_path)
 
     def _read_source_table():
         return source_table(source_path)
@@ -1185,7 +1430,7 @@ def add_calculated_columns_to_hh_data_ibis(
     tbl = _read_source_table()
     parquet_col_set = set(tbl.columns)
 
-    if source_is_dir:
+    if source_is_shards:
         # Batch-safety guard at this compute entry point: duplicate
         # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
         from etdtransform.impute import _assert_batch_safe_ibis
@@ -1825,11 +2070,11 @@ def resample_hh_data_duckdb(
     )
     from etdtransform.load_data import source_table
 
-    source_is_dir = source_is_sharded(source_path)
+    source_is_shards = source_is_sharded(source_path)
     source_schema_names = _schema_names_of(source_path)
     _schema_types = source_schema_types(source_path)
     _src_sql = source_sql(source_path)
-    if source_is_dir:
+    if source_is_shards:
         # Batch-safety guard at this compute entry point: duplicate
         # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
         from etdtransform.impute import _assert_batch_safe_ibis
@@ -1894,7 +2139,7 @@ def resample_hh_data_duckdb(
 
     # The batch id rides along when the source carries it (hive shards);
     # grouping by it does not change the grain while households are 1:1.
-    _batch_id = ["HuisBatchIdBSV"] if source_is_dir else []
+    _batch_id = ["HuisBatchIdBSV"] if source_is_shards else []
     id_cols = ["HuisIdBSV"] + _batch_id + ["ProjectIdBSV", "ReadingDate"]
     _group_ids_sql = ", ".join(["HuisIdBSV"] + _batch_id + ["ProjectIdBSV"])
 

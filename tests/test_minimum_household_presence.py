@@ -208,7 +208,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
 
     def test_a_project_where_everyone_covers_the_day_keeps_everything(self):
         frame = _frame({h: _day() for h in range(1, 5)})
-        values, stats = self._filtered(frame)
+        values, stats, _presence = self._filtered(frame)
         assert values.notna().all()
         assert stats["n_dropped_ineligible"] == 0
         assert stats["n_dropped_insufficient"] == 0
@@ -216,7 +216,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
     def test_a_household_that_did_not_cover_the_day_is_dropped(self):
         frame = _frame({1: _day(), 2: _day(), 3: _day(), 4: [1.0] * 12
                         + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        values, stats = self._filtered(frame)
+        values, stats, _presence = self._filtered(frame)
         assert stats["n_dropped_ineligible"] == 12
         dropped = frame["HuisIdBSV"] == 4
         assert values[dropped].isna().all()
@@ -224,7 +224,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
     def test_the_others_are_untouched(self):
         frame = _frame({1: _day(), 2: _day(), 3: _day(), 4: [1.0] * 12
                         + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        values, _ = self._filtered(frame)
+        values, _, _presence = self._filtered(frame)
         assert values[frame["HuisIdBSV"] != 4].notna().all()
 
     def test_a_slot_with_too_few_contributors_is_dropped(self):
@@ -237,7 +237,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
         third = _day()
         third[100] = pd.NA
         frame = _frame({1: _day(), 2: thin, 3: thinner, 4: third})
-        values, stats = self._filtered(frame)
+        values, stats, _presence = self._filtered(frame)
         assert stats["n_dropped_insufficient"] == 1
         at_slot = frame["ReadingDate"] == frame["ReadingDate"].unique()[100]
         assert values[at_slot].isna().all()
@@ -245,7 +245,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
     def test_nothing_is_filled_in_where_a_value_was_dropped(self):
         frame = _frame({1: _day(), 2: _day(), 3: _day(), 4: [1.0] * 12
                         + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        values, _ = self._filtered(frame)
+        values, _, _presence = self._filtered(frame)
         assert values.isna().sum() >= frame[COL].isna().sum()
 
     def test_the_frame_is_not_modified(self):
@@ -256,13 +256,13 @@ class TestTheFilterRemovesRatherThanSubstitutes:
 
     def test_the_result_is_a_nullable_float(self):
         frame = _frame({1: _day()})
-        values, _ = self._filtered(frame)
+        values, _, _presence = self._filtered(frame)
         assert values.dtype == "Float64"
 
     def test_the_stats_account_for_every_delivered_value(self):
         frame = _frame({1: _day(), 2: _day(), 3: _day(), 4: [1.0] * 12
                         + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        _, stats = self._filtered(frame)
+        _, stats, _presence = self._filtered(frame)
         assert stats["n_delivered"] == (
             stats["n_kept"]
             + stats["n_dropped_ineligible"]
@@ -271,13 +271,13 @@ class TestTheFilterRemovesRatherThanSubstitutes:
 
     def test_the_stats_report_the_window(self):
         frame = _frame({1: _day() + _day()})
-        _, stats = self._filtered(frame)
+        _, stats, _presence = self._filtered(frame)
         assert stats["n_windows"] == 2
         assert stats["window_minutes"] == float(WINDOW_MINUTES)
 
     def test_the_stats_report_how_many_household_windows_qualified(self):
         frame = _frame({1: _day(), 2: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        _, stats = self._filtered(frame)
+        _, stats, _presence = self._filtered(frame)
         assert stats["household_windows"] == 2
         assert stats["eligible_household_windows"] == 1
 
@@ -289,7 +289,7 @@ class TestProjectsAreJudgedSeparately:
         thin[50] = pd.NA
         two = _frame({5: thin, 6: thin, 7: thin, 8: thin}, project=2)
         frame = pd.concat([one, two], ignore_index=True)
-        values, _ = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, _, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
         at_slot = frame["ReadingDate"] == frame["ReadingDate"].unique()[50]
         assert values[at_slot & (frame["ProjectIdBSV"] == 1)].notna().all()
         assert values[at_slot & (frame["ProjectIdBSV"] == 2)].isna().all()
@@ -300,13 +300,13 @@ class TestAThinProjectLosesItsAverage:
         """One eligible household needs itself, so a project of one is not
         silenced -- but it is also not padded out to look like more."""
         frame = _frame({1: _day()})
-        values, stats = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, stats, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
         assert values.notna().all()
         assert stats["n_dropped_insufficient"] == 0
 
     def test_a_single_household_project_that_stops_reporting_loses_the_day(self):
         frame = _frame({1: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        values, _ = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, _, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
         assert values.isna().all()
 
 

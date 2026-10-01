@@ -29,12 +29,14 @@ from etdtransform.aggregate import aggregate_hh_data_duckdb
 pytestmark = pytest.mark.integration
 
 def _copy_index_reviewed(mapped: Path, dst: Path) -> None:
-    """Copy the fixture index with Meenemen set True: the fixture ships in
-    the first-mapping state (Meenemen empty), but these tests represent a
-    REVIEWED dataset -- the aggregation's Meenemen gate must pass."""
+    """Copy the fixture index with Meenemen set: the fixture ships in the
+    first-mapping state (Meenemen empty), but these tests represent a
+    REVIEWED dataset -- the aggregation's Meenemen gate must pass. A reviewed
+    inclusion also declares its grid, so the fixture's undeclared-grid batch
+    stays excluded rather than acquiring a frequency it never declared."""
     idx = pd.read_parquet(mapped / "index.parquet",
                           dtype_backend="numpy_nullable")
-    idx["Meenemen"] = pd.array([True] * len(idx), dtype="boolean")
+    idx["Meenemen"] = idx["Gegevensfrequentie"].notna().astype("boolean")
     idx.to_parquet(dst / "index.parquet")
 
 
@@ -105,11 +107,37 @@ class TestStage2ReadLayer:
         pd.testing.assert_frame_equal(df_flat, df_shard)
 
     def test_multi_batch_household_raises(self, tmp_path, mapped_dataset):
+        """A household with two INCLUDED batches must stop the run: the index
+        is what includes a batch, so the overlap is declared there, and no
+        stage may silently blend two batches of one household."""
         shard_dir = tmp_path / "sharded_mapped"
         _copy_sharded(mapped_dataset, shard_dir)
-        # Duplicate household 1's shard under a second batch id.
-        src = next((shard_dir / "sharded" / "HuisIdBSV=1").glob("HuisBatchIdBSV=*"))
-        dup = shard_dir / "sharded" / "HuisIdBSV=1" / "HuisBatchIdBSV=999"
+        src = next((shard_dir / "sharded" / "HuisIdBSV=2").glob("HuisBatchIdBSV=*"))
+        dup = shard_dir / "sharded" / "HuisIdBSV=2" / "HuisBatchIdBSV=999"
+        shutil.copytree(src, dup)
+        idx = pd.read_parquet(
+            shard_dir / "index.parquet", dtype_backend="numpy_nullable"
+        )
+        second = idx[idx["HuisIdBSV"] == 2].copy()
+        second["HuisBatchIdBSV"] = pd.array([999], dtype="Int64")
+        pd.concat([idx, second], ignore_index=True).to_parquet(
+            shard_dir / "index.parquet"
+        )
+
+        with pytest.raises(HouseBatchOverlapError):
+            _run_aggregate(shard_dir, tmp_path / "out")
+
+    def test_a_disk_batch_the_index_does_not_include_stops_the_run(
+        self, tmp_path, mapped_dataset
+    ):
+        """A second batch directory on disk for an included household, with
+        no index row behind it, is a registry/disk mismatch. The run stops
+        loudly rather than picking a directory or blending the two -- which
+        of them is right is a reconciliation question, not the reader's."""
+        shard_dir = tmp_path / "sharded_mapped"
+        _copy_sharded(mapped_dataset, shard_dir)
+        src = next((shard_dir / "sharded" / "HuisIdBSV=2").glob("HuisBatchIdBSV=*"))
+        dup = shard_dir / "sharded" / "HuisIdBSV=2" / "HuisBatchIdBSV=999"
         shutil.copytree(src, dup)
 
         with pytest.raises(HouseBatchOverlapError):

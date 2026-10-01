@@ -49,7 +49,7 @@ from etdmap.data_model import (
     scale_bounds,
     thresholds_dict,
 )
-from etdmap.flags import MappingFlag, flag_column
+from etdmap.flags import MappingFlag, _as_limit, flag_column
 from etdmap.index_helpers import frequency_to_minutes
 
 
@@ -291,6 +291,61 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
             f"cadence; declared {bound}, scaled up to {float(scaled.max())}."
         )
     return scaled
+
+
+def clip_to_bounds(values, lo, hi):
+    """
+    Push *values* into ``[lo, hi]`` and report what that required.
+
+    Every route that writes an imputed value goes through here, so one
+    definition of "in range" serves them all rather than each carrying its own.
+
+    Either bound is a scalar for the whole column or one value per row: a
+    cadence-scaled bound varies by household, and a rule-derived bound varies by
+    row, being a formula in that row's other cells. An absent bound is no bound,
+    per row as well as per column.
+
+    Parameters
+    ----------
+    values : pd.Series
+        Nullable ``Float64``. A missing value stays missing and is not marked.
+    lo, hi : float, pd.Series, pd.NA or None
+        The range. ``pd.NA`` on a side leaves that side unbounded.
+
+    Returns
+    -------
+    tuple of (pd.Series, pd.Series, pd.Series)
+        The clipped values, then two boolean masks: *moved* where a value was
+        brought to a bound, and *empty* where the range allows nothing because
+        *lo* came out above *hi*. The masks carry no NA, so a caller can map
+        them straight onto its own flags. They never overlap: an empty range
+        writes nothing, which is a different finding from moving a value.
+
+    Notes
+    -----
+    Flags are deliberately not set here. Mapping records a ``MappingFlag`` and
+    imputation an ``ImputeType`` for the same events, so the categories stay
+    with the caller and this function stays testable without either.
+    """
+    inf = float("inf")
+    lower = _as_limit(lo, -inf, values.index)
+    upper = _as_limit(hi, inf, values.index)
+
+    # Series.clip would propagate a NA threshold into the result; an absent
+    # bound means no bound.
+    empty = _mask(lower > upper, values.index)
+    below = _mask(values < lower, values.index) & ~empty
+    above = _mask(values > upper, values.index) & ~empty
+
+    out = values.mask(below, lower).mask(above, upper).mask(empty, pd.NA)
+    return out.astype("Float64"), below | above, empty
+
+
+def _mask(condition, index):
+    """A comparison as a plain boolean mask. NA is not a finding, so it is False."""
+    if isinstance(condition, pd.Series):
+        return condition.reindex(index).fillna(False).astype(bool)
+    return pd.Series(bool(condition) if condition is not pd.NA else False, index=index)
 
 
 def fill_bound(df, diff_col, cadence, is_imputed_col=None, bound_key="Max"):
