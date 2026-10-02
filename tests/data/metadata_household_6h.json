@@ -207,22 +207,22 @@
         },
         "TerugleveringTotaalNetto": {
             "statistics": {
-                "min": "87.00622911090001",
-                "max": "128.2754190798",
+                "min": "38.6282013883",
+                "max": "68.12497690770002",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalNetto": {
             "statistics": {
-                "min": "88.33224692800005",
-                "max": "130.6413011371",
+                "min": "39.9319987002",
+                "max": "67.69634909979999",
                 "null_count": 0
             }
         },
         "Netuitwisseling": {
             "statistics": {
-                "min": "-28.7384000562",
-                "max": "26.114700004099998",
+                "min": "-24.348579911700007",
+                "max": "22.139826202800002",
                 "null_count": 0
             }
         },
@@ -249,22 +249,22 @@
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-76.72169938860002",
-                "max": "-15.2760197568",
+                "min": "-69.6161559996",
+                "max": "-19.142425142999997",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-94.21209935860003",
-                "max": "-49.315438511599986",
+                "min": "-36.211034709100005",
+                "max": "-3.5720162103000006",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "4.6643479417",
-                "max": "62.921729300900004",
+                "min": "11.046372535900005",
+                "max": "55.66344345549999",
                 "null_count": 0
             }
         },

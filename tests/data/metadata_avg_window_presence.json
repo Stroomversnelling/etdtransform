@@ -1,0 +1,83 @@
+{
+    "num_rows": 21900,
+    "num_columns": 11,
+    "column_details": {
+        "column": {
+            "statistics": {
+                "min": "ElektriciteitsgebruikBoilervatDiff",
+                "max": "GasgebruikDiff",
+                "null_count": 0
+            }
+        },
+        "ProjectIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "2",
+                "null_count": 0
+            }
+        },
+        "HuisIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "window_start": {
+            "statistics": {
+                "min": "2023-01-01 00:00:00",
+                "max": "2023-12-31 00:00:00",
+                "null_count": 0
+            }
+        },
+        "window_minutes": {
+            "statistics": {
+                "min": "1440.0",
+                "max": "1440.0",
+                "null_count": 0
+            }
+        },
+        "n_slots": {
+            "statistics": {
+                "min": "288",
+                "max": "288",
+                "null_count": 0
+            }
+        },
+        "n_delivered": {
+            "statistics": {
+                "min": "272",
+                "max": "288",
+                "null_count": 0
+            }
+        },
+        "eligible": {
+            "statistics": {
+                "min": "False",
+                "max": "True",
+                "null_count": 0
+            }
+        },
+        "n_eligible": {
+            "statistics": {
+                "min": "4",
+                "max": "5",
+                "null_count": 0
+            }
+        },
+        "n_contributing": {
+            "statistics": {
+                "min": "4",
+                "max": "5",
+                "null_count": 0
+            }
+        },
+        "slot_minimum": {
+            "statistics": {
+                "min": "2",
+                "max": "3",
+                "null_count": 0
+            }
+        }
+    }
+}

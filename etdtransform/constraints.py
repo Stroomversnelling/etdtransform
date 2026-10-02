@@ -102,6 +102,145 @@ def compile_constraints(
     return table
 
 
+def apparaat_set_key(variables) -> str:
+    """Canonical key for an absent-device set.
+
+    Sorted variable names joined with ``|``; the empty string is the empty
+    set. One definition, shared by the sync (which writes the set-keyed
+    constraint table) and the run-time selection (which reads it), so the
+    two can never serialize the same set differently.
+    """
+    return "|".join(sorted(str(v) for v in variables))
+
+
+def specialize_catalog_for_absent(catalog: pd.DataFrame, absent_vars) -> pd.DataFrame:
+    """The catalog with a household set's absent devices substituted at 0.
+
+    This is the derived-model machinery of the missing-meter design (actions
+    document, action 8): absence is resolved ONCE at compile time, zero IN
+    the expression, never per row. For each absent device variable the
+    substitution covers the variable itself and its data-model-linked pair
+    (the interval form of a cumulative and vice versa), because catalog
+    expressions name the Diff forms while declarations carry the cumulative
+    device names.
+
+    Per catalog row:
+
+    - a row whose ``lhs`` is itself absent is DROPPED -- a nonexistent meter
+      is never a derivation target;
+    - a row naming no absent variable is returned untouched (no sympy, so it
+      stays byte-identical to the input row);
+    - otherwise the absent symbols are substituted at 0 and the expression
+      simplified; ``rhs_vars`` keeps the surviving names in their original
+      order and ``rhs_var_count`` follows;
+    - a row whose expression reduces to a constant is DROPPED: pinning a
+      target from metadata alone would let absence specify a value, and
+      absence may only widen (the doctrine); the declared bounds remain the
+      only thing entitled to bound such a target.
+
+    Runs at sync time; the fill never calls this.
+    """
+    import sympy as sp
+    from sympy.parsing.sympy_parser import parse_expr
+
+    try:
+        from etdmap.data_model import cumulative_column, interval_column
+    except Exception:  # pragma: no cover - etdmap always present in practice
+        def interval_column(name):
+            return None
+
+        def cumulative_column(name):
+            return None
+
+    absent = set()
+    for name in absent_vars:
+        absent.add(str(name))
+        for linked in (interval_column(str(name)), cumulative_column(str(name))):
+            if linked:
+                absent.add(linked)
+
+    if not absent or catalog.empty:
+        return catalog.copy()
+
+    zeros = {sp.Symbol(name): 0 for name in absent}
+    records = []
+    for idx in catalog.index:
+        row = catalog.loc[idx]
+        if str(row["lhs"]) in absent:
+            continue
+        rhs_vars = [str(v) for v in row["rhs_vars"]]
+        if not (set(rhs_vars) & absent):
+            records.append(row.to_dict())
+            continue
+        expression = parse_expr(str(row["rhs_text"])).subs(zeros)
+        expression = sp.simplify(expression)
+        if not expression.free_symbols:
+            continue
+        surviving = {symbol.name for symbol in expression.free_symbols}
+        updated = row.to_dict()
+        updated["rhs_text"] = str(expression)
+        updated["rhs_vars"] = [v for v in rhs_vars if v in surviving]
+        if "rhs_var_count" in updated:
+            updated["rhs_var_count"] = len(updated["rhs_vars"])
+        records.append(updated)
+
+    out = pd.DataFrame(records, columns=list(catalog.columns))
+    if "rhs_var_count" in out.columns:
+        out["rhs_var_count"] = out["rhs_var_count"].astype("Int64")
+    return out.reset_index(drop=True)
+
+
+_APPARAAT_SETS_CACHE: dict = {}
+
+
+def apparaat_set_by_household(metadata_path=None) -> dict:
+    """``HuisIdBSV -> canonical apparaat-set key`` from the BSV metadata.
+
+    The Grist household table's ``ApparaatOntbrekend`` declarations flow
+    through ``build_bsv_metadata`` into the BSV metadata CSV; this reads
+    them once per path and resolves each household to the key of its
+    specialized constraint table (``apparaat_set_key``). Mirrors how
+    ``physical_model_by_project`` resolves the model: the set decides which
+    compiled rules apply, so a stale metadata file (no declaration column)
+    raises rather than defaulting every household to the full model.
+    """
+    if metadata_path is None:
+        import etdmap
+
+        metadata_path = getattr(etdmap.options, "bsv_metadata_file", None)
+        if not metadata_path:
+            raise ValueError(
+                "bsv_metadata_file is not configured; the constraint "
+                "selection needs it to resolve each household's "
+                "ApparaatOntbrekend set."
+            )
+
+    cache_key = str(metadata_path)
+    if cache_key in _APPARAAT_SETS_CACHE:
+        return _APPARAAT_SETS_CACHE[cache_key]
+
+    from etdmap.data_model import parse_device_declaration
+
+    metadata = pd.read_csv(metadata_path, dtype_backend="numpy_nullable")
+    if "ApparaatOntbrekend" not in metadata.columns:
+        raise ValueError(
+            f"{metadata_path} has no ApparaatOntbrekend column -- the BSV "
+            f"metadata predates the device declarations. Run "
+            f"sync_data_model.py (or build_bsv_metadata.py) to rebuild it."
+        )
+
+    resolved: dict = {}
+    for _, row in metadata.iterrows():
+        household_id = row.get("HuisIdBSV")
+        if pd.isna(household_id):
+            continue
+        resolved[int(household_id)] = apparaat_set_key(
+            parse_device_declaration(row.get("ApparaatOntbrekend"))
+        )
+    _APPARAAT_SETS_CACHE[cache_key] = resolved
+    return resolved
+
+
 def _is_bounded(declared: dict | None) -> bool:
     if declared is None:
         return False
@@ -248,6 +387,7 @@ def build_constraint_package(
     cadence_minutes: int,
     thresholds: dict | None = None,
     physical_model: str | None = None,
+    apparaat_set: str = "",
 ) -> ConstraintPackage:
     """Bounds, clusters and callables for one grid cadence.
 
@@ -259,6 +399,15 @@ def build_constraint_package(
     model appears in its ``physical_models`` list. ``None`` keeps every rule,
     which is only right for a caller that has already scoped its rows.
 
+    ``apparaat_set`` selects ONE specialized table when the frame carries the
+    ``apparaat_set`` column, defaulting to ``""`` -- the none-absent base
+    table. Sets are never unioned: each specialized table holds the rules with
+    that set's device terms substituted to zero, so mixing tables applies the
+    tightest specialized narrowing to households that have all their devices
+    (measured on the 2026-10-01 artifact: ElektriciteitsgebruikTotaalWarmtepomp
+    0..1.6 collapsing to 0..0.96). A frame already scoped to a single set is
+    accepted as it is, so the fill's own pre-filter keeps working.
+
     Raises ``ValueError`` when a rule and the thresholds contradict each other,
     which is a configuration error rather than a data condition.
     """
@@ -266,6 +415,20 @@ def build_constraint_package(
         from etdmap.data_model import thresholds_dict
 
         thresholds = thresholds_dict
+
+    if "apparaat_set" in constraints.columns and not constraints.empty:
+        present = set(constraints["apparaat_set"].astype(str))
+        if len(present) > 1:
+            constraints = constraints[
+                constraints["apparaat_set"].astype(str) == str(apparaat_set)
+            ]
+            if constraints.empty:
+                raise ValueError(
+                    f"No compiled constraint table for apparaat-set "
+                    f"{str(apparaat_set)!r}; the artifact holds "
+                    f"{sorted(present)!r}. Re-run the data model sync, which "
+                    f"writes one table per declared set."
+                )
 
     if physical_model is not None and not constraints.empty:
         constraints = constraints[

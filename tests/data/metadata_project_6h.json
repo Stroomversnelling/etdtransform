@@ -200,22 +200,22 @@
         },
         "TerugleveringTotaalNetto": {
             "statistics": {
-                "min": "99.98574074474001",
-                "max": "115.79210954762",
+                "min": "48.40970685751999",
+                "max": "59.124309908559994",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalNetto": {
             "statistics": {
-                "min": "99.91639462355998",
-                "max": "115.6915446331",
+                "min": "48.098074228979996",
+                "max": "59.640630385920005",
                 "null_count": 0
             }
         },
         "Netuitwisseling": {
             "statistics": {
-                "min": "-10.367615035959998",
-                "max": "12.801078271340003",
+                "min": "-9.400092278939997",
+                "max": "8.40797838172",
                 "null_count": 0
             }
         },
@@ -242,22 +242,22 @@
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-61.52181514993892",
-                "max": "-33.97775976449999",
+                "min": "-57.574795639759984",
+                "max": "-36.42574455184",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-81.58046159264",
-                "max": "-64.8694085256",
+                "min": "-26.0785076437",
+                "max": "-11.98222844564",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "22.647534792980004",
-                "max": "46.55725029436",
+                "min": "25.55849232562",
+                "max": "43.272840893140014",
                 "null_count": 0
             }
         },
@@ -495,7 +495,7 @@
         "ElektriciteitsgebruikBooster": {
             "statistics": {
                 "min": "11.105796977020002",
-                "max": "16808.49353317375",
+                "max": "16808.493452885366",
                 "null_count": 0
             }
         },

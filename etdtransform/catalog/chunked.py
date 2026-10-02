@@ -613,6 +613,21 @@ def build_chunked(
     cache_dir = Path(cache_dir)
     t_start = time.perf_counter()
 
+    # A rule marked not_physical is a bookkeeping identity (e.g. a tariff
+    # sum), never a physical relation: the caller excludes those before the
+    # build, and this guard makes sure none slip through into derivations
+    # or, downstream, into constraints.
+    leaked = [
+        r.get("lhs", "<unnamed>") for r in rules if r.get("not_physical")
+    ]
+    if leaked:
+        raise ValueError(
+            f"[build_chunked] {len(leaked)} not_physical rule(s) reached the "
+            f"catalog build: {leaked}. These must be excluded by the caller "
+            f"(the sync does this); a not_physical rule never enters "
+            f"derivations or constraints."
+        )
+
     models = discover_models(rules)
     log(f"[build_chunked] models n={len(models)} list={models}")
 

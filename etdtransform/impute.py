@@ -34,7 +34,7 @@ from etdtransform.bounds import (
 )
 
 import etdtransform
-from etdtransform.vectorized_impute import impute_and_normalize
+from etdtransform.vectorized_impute import impute_and_normalize, without_tariff_splits
 
 #: Findings that disqualify a value from shaping a project average: it was
 #: written by the pipeline rather than measured, or it was measured over a
@@ -318,11 +318,6 @@ def calculate_average_diff(
             if int(present.sum()) else 0.0
         )
         coverage_duty = _coverage_duty_by_project(avg_diff, col, project_id_column)
-        impute_na = avg_diff[col + "_avg"].isna().sum()
-        if impute_na > 0:
-            logging.error(
-                f"Average column `{col}_avg` has {impute_na} missing impute values.",
-            )
 
         avg_diff_dict[col] = {
             "avg_diff": avg_diff,
@@ -538,12 +533,6 @@ def calculate_average_diff_ibis(
                 window_minutes=window_minutes_for_column(
                     cadence_minutes_by_household(col, cadence).values()
                 ),
-            )
-
-        impute_na = avg_diff[f"{col}_avg"].isna().sum()
-        if impute_na > 0:
-            logging.error(
-                f"Average column `{col}_avg` has {impute_na} missing impute values.",
             )
 
         avg_diff_dict[col] = {
@@ -1109,9 +1098,14 @@ def get_diff_columns(cumulative_columns: list):
     This function is used to create names for columns that will store the differences
     between consecutive cumulative values.
 
+    Tariff splits (Hoog/Laag) are dropped here: this is the single choke
+    point the averaging twins build their diff set from, and the discrete
+    alternating splits are not physically averageable -- only the combined
+    root (delivered at mapping) is averaged. See
+    :func:`etdtransform.vectorized_impute.without_tariff_splits`.
     """
     return [
-        interval_column(col) for col in cumulative_columns
+        interval_column(col) for col in without_tariff_splits(cumulative_columns)
         if interval_column(col) is not None
     ]
 

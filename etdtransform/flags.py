@@ -1,9 +1,12 @@
-"""The imputation stage's flag vocabulary.
+"""The per-cell flag vocabulary for the stages after mapping.
 
-``ImputeType`` records, per cell, what the fill found and what it did. It is
-written into every dataset the stage produces, so it is the vocabulary a reader
-needs rather than an implementation detail of the fill -- which is why it lives
-here and not in the module that happens to write it.
+``ImputeType`` records, per cell, what the fill found and what it did, plus
+what the calculated stage did to a derived cell. It is written into every
+dataset those stages produce, so it is the vocabulary a reader needs rather
+than an implementation detail of either -- which is why it lives here and not
+in the module that happens to write it. The calculated stage shares this class
+rather than declaring its own: three members do not justify a second
+vocabulary a reader has to learn and a comparison has to decode separately.
 
 ``SIGNALS`` and ``ACTIONS`` are the categorisation, and the composites on the
 class are the reference: nothing should keep a second copy of which flag is
@@ -95,6 +98,22 @@ class ImputeType(IntFlag):
 
     DELIVERED_OUTSIDE_RULE_BOUND = auto()
 
+    JITTER_CANDIDATE = auto()
+
+    # --- appended: actions, written by the calculated stage ---
+
+    CALCULATED = auto()
+
+    # --- appended: signals, written by the calculated stage ---
+
+    CALCULATED_THRESHOLD_VIOLATED = auto()
+
+    CALCULATED_OUTSIDE_RULE_BOUND = auto()
+
+    CALCULATED_RULE_BOUND_FROM_IMPUTED = auto()
+
+    CALCULATED_UNDEFINED = auto()
+
     # --- composites ---
 
     SIGNALS = (
@@ -114,6 +133,11 @@ class ImputeType(IntFlag):
         | INFEASIBLE_BOUNDS_SOFT
         | INFEASIBLE_GAP
         | DELIVERED_OUTSIDE_RULE_BOUND
+        | JITTER_CANDIDATE
+        | CALCULATED_THRESHOLD_VIOLATED
+        | CALCULATED_OUTSIDE_RULE_BOUND
+        | CALCULATED_RULE_BOUND_FROM_IMPUTED
+        | CALCULATED_UNDEFINED
     )
     ACTIONS = (
         UNIFORM_FILL
@@ -127,6 +151,7 @@ class ImputeType(IntFlag):
         | CLIPPED
         | CLIPPED_REDISTRIBUTION
         | UNIFORM_RESIDUAL
+        | CALCULATED
     )
 
     FILLED = (
@@ -191,5 +216,33 @@ DESCRIPTIONS = {
     "DELIVERED_OUTSIDE_RULE_BOUND": (
         "A delivered value outside the bound the rules narrow its row to, and "
         "inside the bound its own column declares."
+    ),
+    "JITTER_CANDIDATE": (
+        "An empty bound whose contradiction is at metering resolution -- a "
+        "candidate measurement-jitter conflict, marked for assessment."
+    ),
+    "CALCULATED": (
+        "The value was produced by evaluating a catalog formula, not "
+        "measured. Which formula, per household, is the calculated stage's "
+        "derivation_plan and household_derivation sidecars."
+    ),
+    "CALCULATED_THRESHOLD_VIOLATED": (
+        "A calculated value outside its own column's threshold, scaled to the "
+        "cadence that column reports at."
+    ),
+    "CALCULATED_UNDEFINED": (
+        "Every input was present and the formula still could not produce a "
+        "value -- a ratio whose denominator is zero. Distinct from a missing "
+        "input: the data is there and the formula does not apply to the row."
+    ),
+    "CALCULATED_RULE_BOUND_FROM_IMPUTED": (
+        "The rule bound this calculated cell was judged against rests partly "
+        "on cells the fill wrote. Absent alongside "
+        "CALCULATED_OUTSIDE_RULE_BOUND means the contradiction stands on "
+        "measurements alone, which is the stronger signal."
+    ),
+    "CALCULATED_OUTSIDE_RULE_BOUND": (
+        "A calculated value outside the bound the rules narrow its row to "
+        "using the other values known in that row."
     ),
 }

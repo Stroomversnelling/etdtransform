@@ -1,6 +1,6 @@
 {
     "num_rows": 210240,
-    "num_columns": 12,
+    "num_columns": 8,
     "column_details": {
         "ProjectIdBSV": {
             "statistics": {
@@ -14,34 +14,6 @@
                 "min": "2023-01-01 00:00:00",
                 "max": "2023-12-31 23:55:00",
                 "null_count": 0
-            }
-        },
-        "ElektriciteitNetgebruikHoogDiff_avg": {
-            "statistics": {
-                "min": "0.06812342720950255",
-                "max": "1.4441407893726137",
-                "null_count": 2
-            }
-        },
-        "ElektriciteitNetgebruikLaagDiff_avg": {
-            "statistics": {
-                "min": "0.03257741944253212",
-                "max": "1.4285218737422838",
-                "null_count": 2
-            }
-        },
-        "ElektriciteitTerugleveringHoogDiff_avg": {
-            "statistics": {
-                "min": "0.06050638692177017",
-                "max": "1.441292041755878",
-                "null_count": 2
-            }
-        },
-        "ElektriciteitTerugleveringLaagDiff_avg": {
-            "statistics": {
-                "min": "0.04353653442085488",
-                "max": "1.4233789070909553",
-                "null_count": 2
             }
         },
         "GasgebruikDiff_avg": {

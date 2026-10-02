@@ -15,8 +15,19 @@ def sympy_to_ibis(expr, table):
     column expressions overload Python's arithmetic operators (+, -, *, /),
     the result is an ibis column expression suitable for table.mutate().
 
-    Null handling: each input column is wrapped in fill_null(0) before the
-    calculation, matching the fillna=True default in the pandas adaptive path.
+    Null handling: none. A null input yields a null result, because ibis
+    arithmetic propagates it. A derived value whose input is unknown is
+    unknown, and substituting zero states the opposite -- it reports a
+    measured quantity of nothing. That substitution produced negative gross
+    consumption wherever solar production was missing while the export
+    register advanced: ``ElektriciteitNetgebruikDiff -
+    ElektriciteitTerugleveringDiff + ZonopwekBruto`` with a zero for the
+    missing solar term returns minus the exported amount.
+
+    A column that genuinely means zero when absent -- a device that is not
+    installed -- is filled by name through ``fillna_vars`` in
+    ``add_calculated_columns_to_hh_data_ibis``, before availability analysis.
+    Filling here as well overrode that list and filled everything.
 
     Parameters
     ----------
@@ -38,10 +49,51 @@ def sympy_to_ibis(expr, table):
     import sympy as sp
     if not expr.free_symbols:
         return ibis.literal(float(expr))
+
+    numerator, denominator = expr.as_numer_denom()
+    if denominator == 1:
+        return _lambdify_over_columns(expr, table)
+
+    # A ratio whose denominator is zero is undefined, and pd.NA is how this
+    # pipeline says undefined. Without nullif the engine returns inf or NaN --
+    # a VALUE that passes notnull() and poisons every later sum and mean.
+    # ZelfgebruikPercentage divides by solar production, which is genuinely
+    # zero every night: 21,652,383 of its 39,840,815 estate cells were NaN.
+    # as_numer_denom folds a sum of ratios onto one denominator, so nulling
+    # that product covers each of them.
+    return (
+        _lambdify_over_columns(numerator, table)
+        / _lambdify_over_columns(denominator, table).nullif(0)
+    )
+
+
+def _lambdify_over_columns(expr, table):
+    """Evaluate a SymPy expression against *table*'s columns."""
+    import sympy as sp
+
+    if not expr.free_symbols:
+        return ibis.literal(float(expr))
     symbols = sorted(expr.free_symbols, key=str)
     f = sp.lambdify([str(s) for s in symbols], expr)
-    ibis_cols = [table[str(s)].fill_null(0) for s in symbols]
-    return f(*ibis_cols)
+    return f(*[table[str(s)] for s in symbols])
+
+
+def undefined_where(expr, table):
+    """When *expr* has all its inputs and still cannot produce a value.
+
+    Today that means one thing: a ratio with a zero denominator. It is a
+    different finding from a missing input -- the data is all there and the
+    formula does not apply to the row -- so it earns its own flag rather than
+    being folded into the same pd.NA.
+
+    Returns None when the expression cannot be undefined, so a caller can skip
+    the work rather than evaluate a constant false over every row.
+    """
+    _, denominator = expr.as_numer_denom()
+    if denominator == 1 or not denominator.free_symbols:
+        return None
+    built = _lambdify_over_columns(denominator, table)
+    return built.notnull() & (built == 0)
 
 
 
@@ -64,35 +116,36 @@ def add_calculated_columns_imputed_data(df, fillna = True):
 
     Notes
     -----
-    - This function assumes that the input DataFrame contains the necessary
-      columns such as 'ElektriciteitTerugleveringLaagDiff',
-      'ElektriciteitTerugleveringHoogDiff', 'ElektriciteitNetgebruikLaagDiff',
-      'ElektriciteitNetgebruikHoogDiff', 'ElektriciteitsgebruikWarmtepompDiff',
+    - This function assumes that the input DataFrame contains the combined
+      tariff root columns 'ElektriciteitTerugleveringDiff' and
+      'ElektriciteitNetgebruikDiff' (delivered at mapping by
+      ``combine_tariff_registers``), plus 'ElektriciteitsgebruikWarmtepompDiff',
       'ElektriciteitsgebruikBoosterDiff', 'ElektriciteitsgebruikBoilervatDiff',
       'ElektriciteitsgebruikWTWDiff', 'ElektriciteitsgebruikRadiatorDiff',
       and 'Zon-opwekTotaalDiff'.
-    - The function assumes that missing values can be treated a 0s, typically after
-      data cleaning and imputation.
-    - The function fills missing values in each column with 0 before performing
-      calculations to ensure that the operations do not fail due to missing data.
+    - The three Netto composites derive from the tariff ROOTS with strict NA
+      propagation: a missing root yields NA, never a silent zero. (Until
+      2026-10-01 they were built as ``LaagDiff.fillna(0)+HoogDiff.fillna(0)``,
+      which fabricated 0.0 composites for suppliers delivering only roots.)
+    - For the remaining composites, *fillna* keeps its old meaning: missing
+      values are treated as 0 before the sums.
     """
 
+    # The Netto composites come from the combined tariff roots in BOTH
+    # branches: the root is delivered data wherever either split was, and no
+    # data is never zero consumption.
+    logging.info("Calculating TerugleveringTotaalNetto")
+    df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringDiff"]
+
+    logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
+    df["ElektriciteitsgebruikTotaalNetto"] = df["ElektriciteitNetgebruikDiff"]
+
+    logging.info("Calculating Netuitwisseling")
+    df["Netuitwisseling"] = (
+        df["ElektriciteitsgebruikTotaalNetto"] - df["TerugleveringTotaalNetto"]
+    )
+
     if fillna:
-
-        logging.info("Calculating TerugleveringTotaalNetto")
-        df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"].fillna(
-            0,
-        ) + df["ElektriciteitTerugleveringHoogDiff"].fillna(0)
-        logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
-
-        df["ElektriciteitsgebruikTotaalNetto"] = df[
-            "ElektriciteitNetgebruikLaagDiff"
-        ].fillna(0) + df["ElektriciteitNetgebruikHoogDiff"].fillna(0)
-
-        logging.info("Calculating Netuitwisseling")
-        df["Netuitwisseling"] = df["ElektriciteitsgebruikTotaalNetto"].fillna(0) - df[
-            "TerugleveringTotaalNetto"
-        ].fillna(0)
 
         logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
         df["ElektriciteitsgebruikTotaalWarmtepomp"] = (
@@ -128,20 +181,6 @@ def add_calculated_columns_imputed_data(df, fillna = True):
             "ElektriciteitsgebruikTotaalNetto"
         ].fillna(0) + df["Zelfgebruik"].fillna(0)
     else:
-        logging.info("Calculating TerugleveringTotaalNetto")
-        df["TerugleveringTotaalNetto"] = df["ElektriciteitTerugleveringLaagDiff"]
-        + df["ElektriciteitTerugleveringHoogDiff"]
-        logging.info("Calculating ElektriciteitsgebruikTotaalNetto")
-
-        df["ElektriciteitsgebruikTotaalNetto"] = df[
-            "ElektriciteitNetgebruikLaagDiff"
-        ] + df["ElektriciteitNetgebruikHoogDiff"]
-
-        logging.info("Calculating Netuitwisseling")
-        df["Netuitwisseling"] = df["ElektriciteitsgebruikTotaalNetto"] - df[
-            "TerugleveringTotaalNetto"
-        ]
-
         logging.info("Calculating ElektriciteitsgebruikTotaalWarmtepomp")
         df["ElektriciteitsgebruikTotaalWarmtepomp"] = df[
             "ElektriciteitsgebruikWarmtepompDiff"
@@ -182,7 +221,7 @@ def add_calculated_columns_adaptive(
     df: pd.DataFrame,
     catalog_df: pd.DataFrame = None,
     target_columns=None,
-    fillna: bool = True,
+    fillna: bool = False,
     completeness_threshold: float = 0.95,
 ) -> pd.DataFrame:
     """
@@ -206,7 +245,13 @@ def add_calculated_columns_adaptive(
         Columns to derive.  When None, derives all catalog lhs targets that are
         not already available for each household.
     fillna : bool
-        Fill NaN values in RHS columns with 0 before computing.
+        Fill missing values in the right-hand-side columns with 0 before
+        computing. Default False: a derived value whose input is unknown is
+        unknown, and pandas nullable dtypes propagate pd.NA through the
+        arithmetic on their own. Setting True states that every missing input
+        was a measured zero, which is how negative gross consumption was
+        produced for households whose solar reading was absent while their
+        export register advanced.
     completeness_threshold : float
         Minimum non-null fraction for a column to be considered available.
     """

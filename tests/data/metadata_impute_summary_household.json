@@ -1,14 +1,7 @@
 {
-    "num_rows": 100,
-    "num_columns": 13,
+    "num_rows": 60,
+    "num_columns": 12,
     "column_details": {
-        "index": {
-            "statistics": {
-                "min": "0",
-                "max": "99",
-                "null_count": 0
-            }
-        },
         "ProjectIdBSV": {
             "statistics": {
                 "min": "1",
@@ -25,7 +18,7 @@
         },
         "column": {
             "statistics": {
-                "min": "ElektriciteitNetgebruikHoogDiff",
+                "min": "ElektriciteitsgebruikBoilervatDiff",
                 "max": "GasgebruikDiff",
                 "null_count": 0
             }
@@ -44,52 +37,52 @@
                 "null_count": 0
             }
         },
-        "missing": {
+        "house_impute_factor": {
             "statistics": {
-                "min": "0",
-                "max": "105119",
-                "null_count": 0
+                "min": "0.9950015964106812",
+                "max": "1.004048216825713",
+                "null_count": 30
             }
         },
-        "imputed": {
+        "house_factor_is_fallback": {
             "statistics": {
-                "min": "0",
-                "max": "105119",
-                "null_count": 0
+                "min": "False",
+                "max": "True",
+                "null_count": 30
             }
         },
-        "imputed_na": {
+        "house_diff_median": {
             "statistics": {
-                "min": "0",
-                "max": "0",
-                "null_count": 0
+                "min": "0.1591076083",
+                "max": "0.160631548",
+                "null_count": 50
             }
         },
-        "element": {
+        "project_avg_median": {
             "statistics": {
-                "min": "4",
-                "max": "17032",
-                "null_count": 70
+                "min": "0.1598808613071469",
+                "max": "0.1600484651307852",
+                "null_count": 50
             }
         },
-        "bitwise_methods": {
+        "comparable_counts": {
             "statistics": {
                 "min": "0",
-                "max": "26312",
-                "null_count": 0
+                "max": "104122",
+                "null_count": 30
+            }
+        },
+        "total_counts": {
+            "statistics": {
+                "min": "105120",
+                "max": "105120",
+                "null_count": 30
             }
         },
         "total_records": {
             "statistics": {
                 "min": "105120",
                 "max": "105120",
-                "null_count": 0
-            }
-        },
-        "percentage_imputed": {
-            "statistics": {
-                "min": "-0.0",
-                "max": "99.99904870624049",
                 "null_count": 0
             }
         }

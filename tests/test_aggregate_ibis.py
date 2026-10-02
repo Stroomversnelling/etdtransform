@@ -525,9 +525,12 @@ class TestAggregateDuckdb:
 # impute_hh_data_5min_chunked tests
 # ===========================================================================
 
-_IMPUTE_CUM_COL  = "ElektriciteitNetgebruikLaag"
-_IMPUTE_DIFF_COL = "ElektriciteitNetgebruikLaagDiff"
-_IMPUTE_AVG_COL  = "ElektriciteitNetgebruikLaagDiff_avg"
+# The combined root, not a Hoog/Laag split: splits are excluded from the
+# fill since 2026-10-01 (without_tariff_splits), and these tests exercise
+# the chunked read/impute plumbing, not tariff semantics.
+_IMPUTE_CUM_COL  = "ElektriciteitNetgebruik"
+_IMPUTE_DIFF_COL = "ElektriciteitNetgebruikDiff"
+_IMPUTE_AVG_COL  = "ElektriciteitNetgebruikDiff_avg"
 _IMPUTE_ROWS     = 20
 
 
@@ -600,11 +603,16 @@ class TestChunkedImpute:
         _write_impute_artifacts(dirs["aggregate"], dates)
         _write_cadence(dirs["mapped"], household_ids, [_IMPUTE_CUM_COL])
 
-        # Must not raise
+        # Must not raise. The synthetic households have no BSV metadata
+        # entry, so the apparaat-set registry is injected explicitly (empty
+        # set = the none-absent base constraint table) rather than letting
+        # the selection guard default -- constraints stay ON, which is what
+        # this regression needs to exercise.
         impute_hh_data_5min_chunked(
             source_path=os.path.join(dirs["aggregate"], "household_default.parquet"),
             chunk_size=3,
             cum_cols=[_IMPUTE_CUM_COL],
+            apparaat_sets={h: "" for h in household_ids},
         )
 
         out = pd.read_parquet(
@@ -627,6 +635,7 @@ class TestChunkedImpute:
         impute_hh_data_5min_chunked(
             source_path=os.path.join(dirs["aggregate"], "household_default.parquet"),
             chunk_size=2,
+            apparaat_sets={h: "" for h in household_ids},
             cum_cols=[_IMPUTE_CUM_COL],
             household_ids=keep_ids,
         )

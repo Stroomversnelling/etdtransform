@@ -83,6 +83,7 @@ file_names = [
     "impute_summary_household.parquet",
     "impute_summary_project.parquet",
     "impute_volume_gap.parquet",
+    "impute_volume_gap_accumulator.parquet",
     "impute_volume_household.parquet",
     "impute_volume_project.parquet",
     "project_5min.parquet",

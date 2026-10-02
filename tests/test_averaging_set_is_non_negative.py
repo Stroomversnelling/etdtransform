@@ -44,8 +44,21 @@ AVERAGED = get_diff_columns(cumulative_columns)
 
 
 def test_the_averaging_set_is_not_empty():
-    """A vacuous set would make every other test here pass for nothing."""
-    assert len(AVERAGED) >= 20, f"only {len(AVERAGED)} columns averaged"
+    """A vacuous set would make every other test here pass for nothing.
+
+    The floor is 18 since 2026-10-01: the four Hoog/Laag tariff splits left
+    the averaging set (get_diff_columns drops them -- the combined root is
+    averaged instead; the discrete alternating splits are not physically
+    averageable)."""
+    assert len(AVERAGED) >= 18, f"only {len(AVERAGED)} columns averaged"
+
+
+def test_tariff_splits_are_not_averaged():
+    """The splits' departure is deliberate, so pin it here beside the floor."""
+    from etdmap.data_model import tariff_partner_columns
+
+    leaked = [c for c in AVERAGED if c in tariff_partner_columns]
+    assert leaked == [], f"tariff splits back in the averaging set: {leaked}"
 
 
 @pytest.mark.parametrize("column", AVERAGED)

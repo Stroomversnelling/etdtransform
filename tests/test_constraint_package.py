@@ -400,10 +400,17 @@ class TestAgainstTheCommittedCatalog:
     # interval arithmetic, rather than sign-directed endpoints over the catalog.
     # Both produce exactly this table. A change here means the rules or the
     # thresholds moved; re-run that script and update this if so.
+    #
+    # Updated 2026-10-01 for the not_physical exclusion: the two tariff SPLIT
+    # columns (ElektriciteitTerugleveringHoogDiff / ...LaagDiff), previously
+    # narrowed to (0.0, 0.96), are gone from this table. The tariff-sum rules
+    # that linked a split to the narrowed root are bookkeeping identities, not
+    # physical relations, so they no longer reach the catalog -- nothing
+    # narrows a split and each keeps its own declared bound. The eight
+    # surviving entries are unchanged, which is the point: excluding those
+    # rules moved nothing else.
     NARROWED_AT_FIVE_MINUTES = {
         "ElektriciteitTerugleveringDiff": (0.0, 0.96),
-        "ElektriciteitTerugleveringHoogDiff": (0.0, 0.96),
-        "ElektriciteitTerugleveringLaagDiff": (0.0, 0.96),
         "ElektriciteitsgebruikTotaalBruto": (0.0, 2.46),
         "ElektriciteitsgebruikTotaalGebouwgebonden": (0.0, 2.01),
         "ElektriciteitsgebruikTotaalNetto": (0.0, 1.5),
@@ -451,3 +458,71 @@ class TestAgainstTheCommittedCatalog:
         )
         column = "ElektriciteitNetgebruikDiff"
         assert hourly.bounds[column][1] > package.bounds[column][1]
+
+
+class TestApparaatSetSelection:
+    """A set-keyed table holds one specialized table per declared
+    absent-device set: the same rules with that set's device terms
+    substituted to zero. Selecting ONE is mandatory -- unioning them applies
+    the tightest specialization to households that have all their devices,
+    which would clip legitimate values.
+    """
+
+    def _set_keyed(self):
+        """Two tables: a base rule and a tighter specialized variant."""
+        base = _constraints(
+            ("Total", "PartA + PartB", {"PartA": 1, "PartB": 1}),
+        )
+        base["apparaat_set"] = ""
+        specialized = _constraints(
+            ("Total", "PartA", {"PartA": 1}),
+        )
+        specialized["apparaat_set"] = "DeviceB"
+        return pd.concat([base, specialized], ignore_index=True)
+
+    def _rule_count(self, package):
+        return sum(len(rules) for rules in package.rules_by_target.values())
+
+    def test_default_picks_the_none_absent_base_table(self):
+        package = build_constraint_package(self._set_keyed(), cadence_minutes=5)
+        rules = package.rules_by_target["Total"]
+        assert {v for rule in rules for v in rule.variables} == {"PartA", "PartB"}
+
+    def test_an_explicit_set_picks_that_table(self):
+        package = build_constraint_package(
+            self._set_keyed(), cadence_minutes=5, apparaat_set="DeviceB"
+        )
+        rules = package.rules_by_target["Total"]
+        assert {v for rule in rules for v in rule.variables} == {"PartA"}
+
+    def test_sets_are_never_mixed(self):
+        table = self._set_keyed()
+        base = build_constraint_package(table, cadence_minutes=5)
+        specialized = build_constraint_package(
+            table, cadence_minutes=5, apparaat_set="DeviceB"
+        )
+        # Each package carries one table's rules, never the concatenation.
+        assert self._rule_count(base) == 1
+        assert self._rule_count(specialized) == 1
+
+    def test_an_unknown_set_raises_rather_than_narrowing_nothing(self):
+        with pytest.raises(ValueError, match="No compiled constraint table"):
+            build_constraint_package(
+                self._set_keyed(), cadence_minutes=5, apparaat_set="Absent"
+            )
+
+    def test_a_frame_already_scoped_to_one_set_passes_through(self):
+        """The fill pre-filters by set before building; that frame carries a
+        single non-empty value and must not be filtered against the default."""
+        table = self._set_keyed()
+        scoped = table[table["apparaat_set"] == "DeviceB"]
+        package = build_constraint_package(scoped, cadence_minutes=5)
+        rules = package.rules_by_target["Total"]
+        assert {v for rule in rules for v in rule.variables} == {"PartA"}
+
+    def test_a_table_without_the_column_is_unaffected(self):
+        package = build_constraint_package(
+            _constraints(("Total", "PartA + PartB", {"PartA": 1, "PartB": 1})),
+            cadence_minutes=5,
+        )
+        assert self._rule_count(package) == 1

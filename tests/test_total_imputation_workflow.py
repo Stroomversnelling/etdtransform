@@ -102,6 +102,22 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
     # the pin proves the pre-constraint behaviour is unchanged. The
     # constrained behaviour has its own producers and the empty-vs-full
     # package comparison in the estate acceptance.
+    # Clear post-processing outputs an OLDER code version may have left in
+    # the test folder: the asserts below prove this run does not write them,
+    # which only means something on a clean slate.
+    for _stale in (
+        "household_aggregated_diff.parquet",
+        "impute_summary_project.parquet",
+        "impute_volume_gap.parquet",
+        "impute_volume_household.parquet",
+        "impute_volume_project.parquet",
+    ):
+        _stale_path = os.path.join(
+            etdtransform.options.aggregate_folder_path, _stale
+        )
+        if os.path.isfile(_stale_path):
+            os.remove(_stale_path)
+
     df_imputed = impute_hh_data_5min(
             df,
             cum_cols=cum_cols_list,
@@ -109,22 +125,37 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
             diffs_calculated=diffs_calculated,
             use_constraints=False,
         )
-    # should create the following files
-    hh_agg_diff_path = os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            "household_aggregated_diff.parquet",
-        )
+    # The run writes the slim household summary and the gap accumulator;
+    # household_aggregated_diff, impute_summary_project and the full volume
+    # artifacts are post-processing outputs (etdworkflow/postprocess_reports)
+    # and must NOT appear from the run itself.
     imputation_summary_house_path = os.path.join(
             etdtransform.options.aggregate_folder_path,
             "impute_summary_household.parquet",
         )
-    imputation_summary_project_path = os.path.join(
+    accumulator_path = os.path.join(
             etdtransform.options.aggregate_folder_path,
-            "impute_summary_project.parquet",
+            "impute_volume_gap_accumulator.parquet",
         )
-    assert os.path.isfile(hh_agg_diff_path)
     assert os.path.isfile(imputation_summary_house_path)
-    assert os.path.isfile(imputation_summary_project_path)
+    assert os.path.isfile(accumulator_path)
+    _slim = pd.read_parquet(
+        imputation_summary_house_path, dtype_backend="numpy_nullable"
+    )
+    assert "diff_col_total" in _slim.columns
+    assert "missing" not in _slim.columns, (
+        "the counts half belongs to post-processing, not the in-run file"
+    )
+    for _not_written in (
+        "household_aggregated_diff.parquet",
+        "impute_summary_project.parquet",
+        "impute_volume_gap.parquet",
+        "impute_volume_household.parquet",
+        "impute_volume_project.parquet",
+    ):
+        assert not os.path.isfile(
+            os.path.join(etdtransform.options.aggregate_folder_path, _not_written)
+        ), f"{_not_written} must come from the post-processing step, not the run"
 
     logging.info("Adding calculated columns.")
     # "add calculated columns"

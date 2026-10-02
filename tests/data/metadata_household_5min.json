@@ -208,21 +208,21 @@
         "TerugleveringTotaalNetto": {
             "statistics": {
                 "min": "0.0",
-                "max": "2.9916462276",
+                "max": "1.4999922912",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalNetto": {
             "statistics": {
                 "min": "0.0",
-                "max": "2.9912543719",
+                "max": "1.4999734835",
                 "null_count": 0
             }
         },
         "Netuitwisseling": {
             "statistics": {
-                "min": "-2.7989209461",
-                "max": "2.9433661871999997",
+                "min": "-1.4944190013",
+                "max": "1.4962480663",
                 "null_count": 0
             }
         },
@@ -249,22 +249,22 @@
         },
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
-                "min": "-4.022718794399999",
-                "max": "2.8303962727",
+                "min": "-3.0012669589999996",
+                "max": "1.8268807200999997",
                 "null_count": 0
             }
         },
         "Zelfgebruik": {
             "statistics": {
-                "min": "-2.9245199476000003",
-                "max": "0.9188383903",
+                "min": "-1.4975407093",
+                "max": "0.9544708242",
                 "null_count": 0
             }
         },
         "ElektriciteitsgebruikTotaalBruto": {
             "statistics": {
-                "min": "-2.6901983541",
-                "max": "3.6194586081999995",
+                "min": "-1.4761093032000001",
+                "max": "2.4464492176999997",
                 "null_count": 0
             }
         },
@@ -453,28 +453,28 @@
         "ElektriciteitNetgebruikHoog": {
             "statistics": {
                 "min": "0.0",
-                "max": "78895.9455257523",
+                "max": "78895.9455257535",
                 "null_count": 0
             }
         },
         "ElektriciteitNetgebruikLaag": {
             "statistics": {
                 "min": "0.0",
-                "max": "78912.0224764176",
+                "max": "78912.02247640003",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringHoog": {
             "statistics": {
                 "min": "0.0",
-                "max": "78838.7755294211",
+                "max": "78838.7755294194",
                 "null_count": 0
             }
         },
         "ElektriciteitTerugleveringLaag": {
             "statistics": {
                 "min": "0.0",
-                "max": "79018.3747543238",
+                "max": "79018.37475431486",
                 "null_count": 0
             }
         },
@@ -502,7 +502,7 @@
         "ElektriciteitsgebruikBooster": {
             "statistics": {
                 "min": "0.0",
-                "max": "16791.220791044765",
+                "max": "16791.220389602837",
                 "null_count": 0
             }
         },

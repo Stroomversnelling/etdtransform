@@ -488,7 +488,7 @@
         "ElektriciteitsgebruikBooster_flags": {
             "statistics": {
                 "min": "0",
-                "max": "4096",
+                "max": "4128",
                 "null_count": 0
             }
         },

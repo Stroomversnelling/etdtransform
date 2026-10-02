@@ -136,8 +136,14 @@ class TestAdaptiveDerivation:
         assert (result["C"] == 3.0).all()  # 1 + 2
         assert (result["D"] == 5.0).all()  # 2 + 3
 
-    def test_fillna_zero_for_pdna_rhs_inputs(self):
-        """pd.NA in an RHS column with fillna=True must be treated as 0."""
+    def test_pdna_rhs_input_propagates_by_default(self):
+        """pd.NA in an input column yields pd.NA in the derived column.
+
+        A derived value whose input is unknown is unknown. Treating the
+        missing input as a measured zero is what produced negative gross
+        consumption for households whose solar reading was absent while their
+        export register advanced.
+        """
         n = 100
         # A is 99% non-null (above threshold) so it counts as available
         a_vals = [1.0] * (n - 1) + [pd.NA]
@@ -148,10 +154,25 @@ class TestAdaptiveDerivation:
         })
         result = add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         assert "C" in result.columns
-        # Last row: A=0 (fillna), B=1 -> C=1
-        assert float(result["C"].iloc[-1]) == pytest.approx(1.0), (
-            "pd.NA in A should be treated as 0 when fillna=True"
+        assert pd.isna(result["C"].iloc[-1]), (
+            "pd.NA in A must reach C rather than being read as a zero"
         )
+        # The rows with a value are unaffected.
+        assert float(result["C"].iloc[0]) == pytest.approx(2.0)
+
+    def test_fillna_true_still_substitutes_zero(self):
+        """The old behaviour remains reachable by asking for it explicitly."""
+        n = 100
+        a_vals = [1.0] * (n - 1) + [pd.NA]
+        catalog = _make_catalog(("C", "A + B", ["A", "B"]))
+        df = _make_df({
+            "A": pd.array(a_vals, dtype="Float64"),
+            "B": pd.array([1.0] * n, dtype="Float64"),
+        })
+        result = add_calculated_columns_adaptive(
+            df, catalog, target_columns={"C"}, fillna=True
+        )
+        assert float(result["C"].iloc[-1]) == pytest.approx(1.0)
 
     def test_multi_household_plan_cached(self):
         """Two households with identical available columns share one execution plan."""
@@ -281,6 +302,14 @@ _RAW_DIFF_COLS = [
     "ZonopwekBruto",
 ]
 
+# The combined tariff roots the mapping stage delivers (combine_tariff_registers):
+# root = Hoog + Laag wherever both splits are delivered. The legacy calculated
+# path reads the roots for the Netto composites since 2026-10-01.
+_ROOT_DIFF_COLS = [
+    "ElektriciteitTerugleveringDiff",
+    "ElektriciteitNetgebruikDiff",
+]
+
 _DERIVED_COLS = [
     "TerugleveringTotaalNetto",
     "ElektriciteitsgebruikTotaalNetto",
@@ -294,8 +323,12 @@ _DERIVED_COLS = [
 
 
 def _standard_raw_df(n=50, household_id=1) -> pd.DataFrame:
-    """A DataFrame with all raw Diff cols set to 1.0 (Float64) for one household."""
+    """A DataFrame with all raw Diff cols at 1.0 (Float64) for one household,
+    plus the combined tariff roots at 2.0 -- root = Hoog + Laag, exactly what
+    the mapping combination delivers, so the legacy (root-based) and adaptive
+    paths agree numerically."""
     cols = {c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS}
+    cols.update({c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS})
     return _make_df(cols, n=n, household_id=household_id)
 
 
@@ -363,9 +396,23 @@ class TestOcclusionBackCalculation:
     the derivation path deterministic.  Integration tests use the real catalog and
     verify only the column is derived (not the exact rule path used).
 
-    Known back-calculation identity:
-        ElektriciteitTerugleveringLaagDiff
-            = TerugleveringTotaalNetto - ElektriciteitTerugleveringHoogDiff
+    Known back-calculation identity (the vehicle for the integration tests):
+        ElektriciteitsgebruikBoilervatDiff
+            = ElektriciteitsgebruikTotaalWarmtepomp
+              - ElektriciteitsgebruikWarmtepompDiff
+              - ElektriciteitsgebruikBoosterDiff
+
+    The integration tests used a TARIFF SPLIT
+    (ElektriciteitTerugleveringLaagDiff = TerugleveringTotaalNetto - HoogDiff)
+    until 2026-10-01. The tariff-sum rules are bookkeeping identities, not
+    physical relations, so the not_physical exclusion removed them from the
+    catalog and a split is no longer a catalog target at all -- the mapping
+    stage combines the registers instead. The behaviour under test is
+    unchanged (occlude a component, recover it from its total, let the
+    recovery feed downstream derivations); only the vehicle moved to a
+    heat-pump component, which the catalog genuinely derives. The unit tests
+    below keep their inline catalogs and are unaffected by what the real
+    catalog holds.
     """
 
     # -- Unit: inline catalog, deterministic rule path --
@@ -449,42 +496,51 @@ class TestOcclusionBackCalculation:
 
     def test_occlusion_column_derived_with_real_catalog(self, real_catalog):
         """
-        With the real catalog, occlude ElektriciteitTerugleveringLaagDiff (all pd.NA)
-        and provide TerugleveringTotaalNetto as direct input.
-        The catalog must find a rule that derives LaagDiff from available columns.
+        With the real catalog, occlude ElektriciteitsgebruikBoilervatDiff (all
+        pd.NA) and provide ElektriciteitsgebruikTotaalWarmtepomp as direct
+        input. The catalog must find a rule that derives the component from
+        the available columns.
+
+        Vehicle changed from a tariff split on 2026-10-01 -- see the class
+        docstring; the assertion intent is unchanged.
         """
         n = 50
         df = _make_df(
             {
-                "ElektriciteitTerugleveringHoogDiff": _full_col(n=n, value=3.0),
-                "TerugleveringTotaalNetto": _full_col(n=n, value=5.0),
-                "ElektriciteitTerugleveringLaagDiff": pd.array([pd.NA] * n, dtype="Float64"),
+                "ElektriciteitsgebruikTotaalWarmtepomp": _full_col(n=n, value=5.0),
+                "ElektriciteitsgebruikBoilervatDiff": pd.array([pd.NA] * n, dtype="Float64"),
                 **{c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS
-                   if c not in ("ElektriciteitTerugleveringLaagDiff",
-                                "ElektriciteitTerugleveringHoogDiff")},
+                   if c != "ElektriciteitsgebruikBoilervatDiff"},
+                **{c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS},
             },
             n=n,
         )
         result = add_calculated_columns_adaptive(df, real_catalog)
 
-        assert "ElektriciteitTerugleveringLaagDiff" in result.columns, (
-            "Real catalog must contain a rule to derive ElektriciteitTerugleveringLaagDiff"
+        assert "ElektriciteitsgebruikBoilervatDiff" in result.columns, (
+            "Real catalog must contain a rule to derive "
+            "ElektriciteitsgebruikBoilervatDiff"
         )
-        assert result["ElektriciteitTerugleveringLaagDiff"].notna().any(), (
-            "Derived ElektriciteitTerugleveringLaagDiff must have non-null values"
+        assert result["ElektriciteitsgebruikBoilervatDiff"].notna().any(), (
+            "Derived ElektriciteitsgebruikBoilervatDiff must have non-null values"
         )
 
     def test_occluded_column_enables_downstream_derivation(self, real_catalog):
-        """After back-calculating LaagDiff, downstream summary columns must be present."""
+        """After back-calculating the occluded component, downstream summary
+        columns must be present.
+
+        Vehicle changed from a tariff split on 2026-10-01 -- see the class
+        docstring. The roots are supplied directly, as the mapping
+        combination now delivers them.
+        """
         n = 50
         df = _make_df(
             {
-                "ElektriciteitTerugleveringHoogDiff": _full_col(n=n, value=3.0),
-                "TerugleveringTotaalNetto": _full_col(n=n, value=5.0),
-                "ElektriciteitTerugleveringLaagDiff": pd.array([pd.NA] * n, dtype="Float64"),
+                "ElektriciteitsgebruikTotaalWarmtepomp": _full_col(n=n, value=5.0),
+                "ElektriciteitsgebruikBoilervatDiff": pd.array([pd.NA] * n, dtype="Float64"),
                 **{c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS
-                   if c not in ("ElektriciteitTerugleveringLaagDiff",
-                                "ElektriciteitTerugleveringHoogDiff")},
+                   if c != "ElektriciteitsgebruikBoilervatDiff"},
+                **{c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS},
             },
             n=n,
         )
@@ -498,10 +554,18 @@ class TestOcclusionBackCalculation:
         """
         Full-loop test:
         1. Build df with all raw diff cols at value 1.0.
-        2. Run old approach -> get all derived cols (incl. TerugleveringTotaalNetto = 2.0).
-        3. Occlude ElektriciteitTerugleveringLaagDiff (set to all pd.NA).
-        4. Run adaptive -- it now has TerugleveringTotaalNetto=2.0, HoogDiff=1.0 available.
-        5. Verify derived LaagDiff == 1.0 (the original value: 2.0 - 1.0 = 1.0).
+        2. Run old approach -> get all derived cols (incl.
+           ElektriciteitsgebruikTotaalWarmtepomp = 3.0, the sum of its three
+           components at 1.0 each).
+        3. Occlude ElektriciteitsgebruikBoilervatDiff (set to all pd.NA).
+        4. Run adaptive -- it now has TotaalWarmtepomp=3.0, WarmtepompDiff=1.0
+           and BoosterDiff=1.0 available.
+        5. Verify derived BoilervatDiff == 1.0 (the original value:
+           3.0 - 1.0 - 1.0 = 1.0).
+
+        Vehicle changed from a tariff split on 2026-10-01 -- see the class
+        docstring; the recovered value is still the original 1.0, so the
+        assertion is unchanged.
         """
         n = 50
         # Step 1+2: build full df with old approach
@@ -517,16 +581,17 @@ class TestOcclusionBackCalculation:
 
         # Step 3: occlude the raw component
         df_occluded = df_with_derived.copy()
-        df_occluded["ElektriciteitTerugleveringLaagDiff"] = pd.array(
+        df_occluded["ElektriciteitsgebruikBoilervatDiff"] = pd.array(
             [pd.NA] * n, dtype="Float64"
         )
 
         # Step 4: run adaptive
         result = add_calculated_columns_adaptive(df_occluded, real_catalog)
 
-        # Step 5: verify recovery -- TerugleveringTotaalNetto=2.0, HoogDiff=1.0 -> Laag=1.0
-        assert "ElektriciteitTerugleveringLaagDiff" in result.columns
-        recovered = result["ElektriciteitTerugleveringLaagDiff"].dropna().astype(float)
+        # Step 5: verify recovery -- TotaalWarmtepomp=3.0 minus the two
+        # delivered components at 1.0 each -> BoilervatDiff=1.0
+        assert "ElektriciteitsgebruikBoilervatDiff" in result.columns
+        recovered = result["ElektriciteitsgebruikBoilervatDiff"].dropna().astype(float)
         assert recovered.tolist() == pytest.approx([1.0] * n, rel=1e-6), (
             f"Full-loop recovery: expected 1.0 everywhere, got {recovered.unique().tolist()}"
         )

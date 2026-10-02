@@ -176,23 +176,26 @@ class TestShardedChainEquivalence:
         )
 
     def test_summaries_equal(self, sharded_stage3, ibis_pipeline):
-        for name, key in [
-            ("impute_summary_household.parquet", ["HuisIdBSV", "column"]),
-            ("impute_summary_project.parquet", ["ProjectIdBSV", "column"]),
-        ]:
-            sharded = _read_parquet(sharded_stage3 / name)
-            legacy = _read_parquet(ibis_pipeline / name)
-            cols = [c for c in legacy.columns if c != "methods"]  # set-valued lists
-            pd.testing.assert_frame_equal(
-                sharded[cols].sort_values(key).reset_index(drop=True),
-                legacy[cols].sort_values(key).reset_index(drop=True),
-                check_dtype=False,
-            )
+        # The in-run summary is the slim file (keys, value stats, factor
+        # record); the counts half and the project rollup are post-processing
+        # outputs, compared in etdworkflow's postprocess tests.
+        name, key = "impute_summary_household.parquet", ["HuisIdBSV", "column"]
+        sharded = _read_parquet(sharded_stage3 / name)
+        legacy = _read_parquet(ibis_pipeline / name)
+        cols = [c for c in legacy.columns if c != "methods"]  # set-valued lists
+        pd.testing.assert_frame_equal(
+            sharded[cols].sort_values(key).reset_index(drop=True),
+            legacy[cols].sort_values(key).reset_index(drop=True),
+            check_dtype=False,
+        )
 
-    def test_aggregated_diff_equal(self, sharded_stage3, ibis_pipeline):
-        sharded = _read_parquet(sharded_stage3 / "household_aggregated_diff.parquet")
-        legacy = _read_parquet(ibis_pipeline / "household_aggregated_diff.parquet")
-        key = ["ProjectIdBSV", "ReadingDate"]
+    def test_gap_accumulator_equal(self, sharded_stage3, ibis_pipeline):
+        # household_aggregated_diff left the run (post-processing output);
+        # the per-gap transient accumulator is what both paths must agree on.
+        name = "impute_volume_gap_accumulator.parquet"
+        sharded = _read_parquet(sharded_stage3 / name)
+        legacy = _read_parquet(ibis_pipeline / name)
+        key = ["column", "HuisIdBSV", "gap_start"]
         pd.testing.assert_frame_equal(
             sharded.sort_values(key).reset_index(drop=True)[legacy.columns],
             legacy.sort_values(key).reset_index(drop=True),

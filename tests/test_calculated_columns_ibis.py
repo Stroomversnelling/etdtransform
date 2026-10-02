@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 import sympy as sp
 
-from etdtransform.calculated_columns import sympy_to_ibis
+from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 from etdtransform.calculated_columns import add_calculated_columns_adaptive
 
@@ -34,53 +34,55 @@ def tbl():
 
 
 def _exec(tbl, expr):
+    """The derived column as a list, with None where the result is null.
+
+    None rather than nan, so a propagated null is asserted as a distinct
+    outcome and cannot be confused with a computed zero -- which is the whole
+    point of the contract these tests pin.
+    """
     col = sympy_to_ibis(expr, tbl)
-    return tbl.mutate(_result=col).execute()["_result"].astype(float).tolist()
+    series = tbl.mutate(_result=col).execute()["_result"]
+    return [None if pd.isna(v) else float(v) for v in series]
 
 
 def test_addition(tbl):
-    # A + B with fill_null(0): [1+3, 2+0, 0+5] = [4, 2, 5]
-    result = _exec(tbl, A + B)
-    assert result == pytest.approx([4.0, 2.0, 5.0])
+    # A + B, nulls propagating: [1+3, 2+null, null+5] = [4, null, null]
+    assert _exec(tbl, A + B) == [4.0, None, None]
 
 
 def test_subtraction(tbl):
-    # A - B with fill_null(0): [1-3, 2-0, 0-5] = [-2, 2, -5]
-    result = _exec(tbl, A - B)
-    assert result == pytest.approx([-2.0, 2.0, -5.0])
+    assert _exec(tbl, A - B) == [-2.0, None, None]
 
 
 def test_multiplication(tbl):
-    # A * B with fill_null(0): [1*3, 2*0, 0*5] = [3, 0, 0]
-    result = _exec(tbl, A * B)
-    assert result == pytest.approx([3.0, 0.0, 0.0])
+    # Null times a number is null, NOT zero. Treating the null as zero is what
+    # makes a product look like a measured nothing.
+    assert _exec(tbl, A * B) == [3.0, None, None]
 
 
 def test_division(tbl):
-    # A / C: [1/2, 2/2, 0/2] = [0.5, 1.0, 0.0]
-    result = _exec(tbl, A / C)
-    assert result == pytest.approx([0.5, 1.0, 0.0])
+    # C is never null, so only A's null propagates.
+    assert _exec(tbl, A / C) == [0.5, 1.0, None]
 
 
 def test_grouped_expr_with_parentheses(tbl):
-    # (A + B) * C -- verifies SymPy tree structure preserves grouping
-    # A: [1,2,0], B: [3,0,5], C: [2,2,2]
-    # (1+3)*2=8, (2+0)*2=4, (0+5)*2=10
-    result = _exec(tbl, (A + B) * C)
-    assert result == pytest.approx([8.0, 4.0, 10.0])
+    # Grouping is preserved, and a null anywhere in the tree reaches the result.
+    assert _exec(tbl, (A + B) * C) == [8.0, None, None]
 
 
 def test_constant_factor(tbl):
-    # sp.Rational(1, 2) * A: 0.5 * [1, 2, 0] = [0.5, 1.0, 0.0]
-    result = _exec(tbl, sp.Rational(1, 2) * A)
-    assert result == pytest.approx([0.5, 1.0, 0.0])
+    assert _exec(tbl, sp.Rational(1, 2) * A) == [0.5, 1.0, None]
 
 
-def test_null_input_fills_to_zero(tbl):
-    # When A is null, fill_null(0) makes it 0 -- result is 0, not null
-    # Row 2 (index 2): A=None -> 0, C=2 -> 0*2=0
+def test_null_input_propagates_and_is_not_zero(tbl):
+    # The contract this file exists to pin. A null input yields a null result:
+    # a derived value whose input is unknown is unknown. Substituting zero
+    # states that the quantity was measured as nothing, which produced
+    # negative gross consumption wherever solar production was missing while
+    # the export register advanced.
     result = _exec(tbl, A * C)
-    assert result[2] == pytest.approx(0.0)
+    assert result[2] is None
+    assert result[2] != 0.0
 
 
 def test_constant_expr_no_free_symbols():
@@ -107,11 +109,17 @@ def test_unsupported_op_raises(tbl):
 # ---------------------------------------------------------------------------
 
 def _pandas_result(df, expr):
-    """Apply expr via lambdify + fillna(0), matching the adaptive pandas path."""
+    """Apply expr via lambdify on the nullable Series, as the pandas path does.
+
+    No fill and no conversion to a numpy float array: both would turn pd.NA
+    into a value and hide the thing being compared. Nullable Series arithmetic
+    propagates pd.NA on its own, which is why the pipeline uses it.
+    """
     symbols = sorted(expr.free_symbols, key=str)
     f = sp.lambdify([str(s) for s in symbols], expr)
-    col_data = {str(s): df[str(s)].fillna(0).to_numpy(dtype=float) for s in symbols}
-    return list(f(**col_data))
+    col_data = {str(s): df[str(s)] for s in symbols}
+    series = f(**col_data)
+    return [None if pd.isna(v) else float(v) for v in series]
 
 
 @pytest.mark.parametrize(
@@ -129,16 +137,31 @@ def _pandas_result(df, expr):
     ],
 )
 def test_pandas_ibis_equivalence(tbl, label, expr):
-    """ibis result must match pandas lambdify result for the same expression."""
+    """ibis result must match pandas lambdify result for the same expression.
+
+    Including WHERE the nulls land: the two engines agreeing on the numbers
+    while disagreeing on which cells are unknown would be the same defect in a
+    quieter form.
+    """
     df = tbl.execute()
+    for column in ("A", "B", "C"):
+        df[column] = df[column].astype("Float64")
 
     ibis_result = _exec(tbl, expr)
     pandas_result = _pandas_result(df, expr)
 
-    assert ibis_result == pytest.approx(pandas_result, rel=1e-9), (
-        f"pandas vs ibis mismatch for '{label}': "
-        f"pandas={pandas_result}, ibis={ibis_result}"
-    )
+    assert len(ibis_result) == len(pandas_result)
+    for position, (got, want) in enumerate(zip(ibis_result, pandas_result)):
+        if want is None or got is None:
+            assert got is want, (
+                f"null placement differs for '{label}' at row {position}: "
+                f"pandas={pandas_result}, ibis={ibis_result}"
+            )
+        else:
+            assert got == pytest.approx(want, rel=1e-9), (
+                f"pandas vs ibis mismatch for '{label}' at row {position}: "
+                f"pandas={pandas_result}, ibis={ibis_result}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +301,56 @@ class TestIbisVsPandasMultiSchema:
         # HH 3: Target = A + B = 5 + 6 = 11  (preferred rule, C ignored)
         hh3 = df_out[df_out["HuisIdBSV"] == 3]["Target"].astype(float).tolist()
         assert hh3 == pytest.approx([11.0] * N)
+
+
+# ---------------------------------------------------------------------------
+# Ratios: a zero denominator is undefined, not a value.
+# ---------------------------------------------------------------------------
+
+def _ratio_table():
+    return ibis.memtable(pd.DataFrame({
+        "t": pd.array([1.0, 1.0, 1.0, None], dtype="Float64"),
+        "z": pd.array([2.0, 0.0, None, 5.0], dtype="Float64"),
+    }))
+
+
+RATIO = sp.sympify("(-100*t + 100*z)/z")
+
+
+def test_zero_denominator_yields_null_not_inf_or_nan():
+    # ZelfgebruikPercentage divides by solar production, which is genuinely
+    # zero every night. Before the guard, 21,652,383 of its 39,840,815 estate
+    # cells held NaN -- a value that passes notnull() and poisons every later
+    # sum and mean.
+    table = _ratio_table()
+    built = table.mutate(r=sympy_to_ibis(RATIO, table))
+    counts = built.aggregate(
+        null=built.r.isnull().sum(),
+        nan=(built.r.notnull() & built.r.isnan()).sum(),
+    ).execute().iloc[0]
+    assert int(counts["nan"]) == 0
+    assert int(counts["null"]) == 3  # z==0, z null, t null
+
+
+def test_a_defined_ratio_still_computes():
+    table = _ratio_table()
+    built = table.mutate(r=sympy_to_ibis(RATIO, table)).execute()
+    assert float(built["r"].iloc[0]) == pytest.approx(50.0)
+
+
+def test_undefined_where_marks_only_the_zero_denominator():
+    table = _ratio_table()
+    built = table.mutate(u=undefined_where(RATIO, table)).execute()
+    # Row 1 is z == 0. Rows 2 and 3 are missing inputs, which is a different
+    # finding: the data is absent rather than the formula inapplicable.
+    assert list(built["u"]) == [False, True, False, False]
+
+
+def test_undefined_where_is_none_for_a_non_ratio():
+    # So a caller can skip the work instead of evaluating a constant false
+    # over every row.
+    assert undefined_where(A - B + C, _ratio_table()) is None
+
+
+def test_a_constant_denominator_is_never_undefined():
+    assert undefined_where(sp.sympify("t/2"), _ratio_table()) is None

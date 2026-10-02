@@ -555,20 +555,13 @@ def impute_hh_data_5min(
         ),
     )
 
-    diff_columns = [
-        interval_column(col) for col in cum_cols
-        if interval_column(col) in df.columns
-    ]
-
-    logging.info("Averaging all diffs by project and reading date.")
-
-    aggregated_diff = (
-        df.groupby(["ProjectIdBSV", "ReadingDate"])[diff_columns].mean().reset_index()
-    )
-
     if reconstruct_in_pandas:
         logging.info("Reconstructing cumulative columns from diffs.")
-        df = reconstruct_cumulative_columns(df, cumulative_columns)
+        from etdtransform.vectorized_impute import without_tariff_splits
+
+        df = reconstruct_cumulative_columns(
+            df, without_tariff_splits(cumulative_columns)
+        )
 
     logging.info("Re-arranging columns.")
     # df = rearrange_model_columns(household_df=df)
@@ -584,24 +577,16 @@ def impute_hh_data_5min(
         engine="pyarrow",
     )
 
-    aggregated_diff.to_parquet(
-        os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            "household_aggregated_diff.parquet",
-        ),
-        engine="pyarrow",
-    )
-    imputation_summary_house.to_parquet(
+    # household_aggregated_diff and impute_summary_project are derived by the
+    # end-of-pipeline post-processing step (etdworkflow/postprocess_reports.py)
+    # from the persisted outputs; only the slim household summary -- the part
+    # the outputs cannot reproduce -- is written in-run.
+    imputation_summary_house[
+        _slim_summary_columns(imputation_summary_house)
+    ].to_parquet(
         os.path.join(
             etdtransform.options.aggregate_folder_path,
             "impute_summary_household.parquet",
-        ),
-        engine="pyarrow",
-    )
-    imputation_summary_project.to_parquet(
-        os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            "impute_summary_project.parquet",
         ),
         engine="pyarrow",
     )
@@ -622,6 +607,30 @@ def impute_hh_data_5min(
     logging.info("Done")
 
     return df
+
+
+#: The in-run household summary carries only what the persisted outputs
+#: cannot reproduce: keys, the in-run value stats (pre-threshold
+#: diff_col_total, pre-reconstruction cum_col_min_max_diff), the factor
+#: decision record and total_records. The counts half is derived and
+#: rejoined by etdworkflow/postprocess_reports.py.
+_SLIM_SUMMARY_KEYS = ("ProjectIdBSV", "HuisIdBSV", "column")
+_SLIM_SUMMARY_STATS = ("diff_col_total", "cum_col_min_max_diff")
+_SLIM_SUMMARY_FACTORS = (
+    "house_impute_factor", "house_factor_is_fallback", "house_diff_median",
+    "project_avg_median", "comparable_counts", "total_counts",
+)
+
+
+def _slim_summary_columns(frame) -> list:
+    """The slim in-run summary columns present on *frame*, in canon order."""
+    ordered = (
+        list(_SLIM_SUMMARY_KEYS)
+        + list(_SLIM_SUMMARY_STATS)
+        + list(_SLIM_SUMMARY_FACTORS)
+        + ["total_records"]
+    )
+    return [c for c in ordered if c in frame.columns]
 
 
 _VOLUME_SUMS = (
@@ -699,16 +708,23 @@ class _ChunkTimer:
 
 
 def _write_volume_reports(volume_reports, output_folder, log_prefix="[impute]"):
-    """Write the fill's per-gap volume report and its two rollups.
+    """Write the fill's per-gap TRANSIENT accumulator.
 
-    impute_volume_gap.parquet holds one row per (household, column, gap) as
-    the fill collected it; impute_volume_household.parquet rolls up per
-    (project, household, column) and impute_volume_project.parquet per
-    (project, column). Volume sums take min_count=1 throughout, so a grain
-    with no values reports pd.NA rather than a zero.
+    impute_volume_gap_accumulator.parquet holds one row per (household,
+    column, gap) with only the state that exists nowhere in the persisted
+    outputs: the pre-threshold total_final and per-gap bits (collected
+    before apply_thresholds rewrites values and ORs its own flags), the
+    routed/redistributed/unplaced/removed volumes from the fill's temp
+    columns, and the span keys (gap_start, gap_end) the post-processor
+    joins on. The FULL impute_volume_gap.parquet and its two rollups are
+    assembled by the end-of-pipeline post-processing step
+    (etdworkflow/postprocess_reports.py) from this accumulator plus the
+    persisted flags and values -- the deliberately different name keeps any
+    reader from mistaking the accumulator for the full artifact.
+
+    Volume sums take min_count=1 throughout, so a grain with no values
+    reports pd.NA rather than a zero.
     """
-    from etdtransform.flags import ImputeType
-
     non_empty = [
         frame for frame in (volume_reports or [])
         if frame is not None and not frame.empty
@@ -719,35 +735,15 @@ def _write_volume_reports(volume_reports, output_folder, log_prefix="[impute]"):
     gaps = pd.concat(non_empty, ignore_index=True)
 
     logging.info(
-        f"{log_prefix} Saving gap volume report: {len(gaps)} gap(s) over "
-        f"{gaps['column'].nunique()} column(s), plus two rollups."
+        f"{log_prefix} Saving gap volume accumulator: {len(gaps)} gap(s) over "
+        f"{gaps['column'].nunique()} column(s); the full artifact and its "
+        f"rollups are post-processing."
     )
     gaps.to_parquet(
-        os.path.join(str(output_folder), "impute_volume_gap.parquet"),
+        os.path.join(str(output_folder), "impute_volume_gap_accumulator.parquet"),
         engine="pyarrow",
         index=False,
     )
-
-    for filename, keys in (
-        ("impute_volume_household.parquet", ["ProjectIdBSV", "HuisIdBSV", "column"]),
-        ("impute_volume_project.parquet", ["ProjectIdBSV", "column"]),
-    ):
-        grouped = gaps.groupby(keys, dropna=False)
-        rollup = grouped.agg(
-            n_gaps=("gap", "size"),
-            **{name: (name, lambda s: s.sum(min_count=1)) for name in _VOLUME_SUMS},
-            **{name: (name, "sum") for name in _VOLUME_COUNTS},
-        ).reset_index()
-        rollup["n_gaps_infeasible"] = grouped["impute_type_bits"].agg(
-            lambda s: int((
-                (s.fillna(0).astype("int64") & ImputeType.INFEASIBLE_GAP.value) != 0
-            ).sum())
-        ).to_numpy()
-        rollup.to_parquet(
-            os.path.join(str(output_folder), filename),
-            engine="pyarrow",
-            index=False,
-        )
 
 
 def _finalize_impute_outputs(
@@ -761,21 +757,23 @@ def _finalize_impute_outputs(
     volume_reports=None,
 ) -> None:
     """
-    Shared step-4+5 finalizer for both imputation shells: combine gap stats,
-    write the household and project summaries, and compute the
-    post-imputation household_aggregated_diff (DuckDB over the finished
-    output -- monolith path or hive glob, via ``imputed_read_sql``).
+    Shared step-4+5 finalizer for both imputation shells: combine gap stats
+    and write the slim household summary plus the per-gap volume artifact.
+
+    The project summary, the counts half of the household summary and
+    household_aggregated_diff are derived by the end-of-pipeline
+    post-processing step (etdworkflow/postprocess_reports.py) from the
+    persisted outputs. ``imputed_read_sql`` and ``imputed_schema_names``
+    stay in the signature for the shells that pass them; nothing here reads
+    the finished output any more.
 
     The combined gap stats stay in memory. They were also written as
     impute_gap_stats.parquet, which duplicated impute_summary_household.parquet
     at the same grain and on every shared column.
 
-    Extracted VERBATIM from the legacy chunked shell so the two paths produce
+    Extracted from the legacy chunked shell so the two paths produce
     identical artifacts (protected by test_total_imputation_workflow).
     """
-    import duckdb
-    import numpy as np
-
     from etdtransform.vectorized_impute import methods_to_bitwise
 
     logging.info(f"{log_prefix} Combining gap stats and saving summaries...")
@@ -818,38 +816,17 @@ def _finalize_impute_outputs(
     summary_house["percentage_imputed"] = (
         summary_house["imputed"] / summary_house["total_records"] * 100
     )
-    summary_house.to_parquet(
+    # The written file carries only what the persisted outputs cannot
+    # reproduce (see _slim_summary_columns); the counts half derives exactly
+    # from the persisted flags and is rejoined by the post-processing step,
+    # which also writes impute_summary_project.
+    summary_house[_slim_summary_columns(summary_house)].to_parquet(
         os.path.join(str(output_folder), "impute_summary_household.parquet"),
         engine="pyarrow",
     )
 
-    total_project = (
-        imputation_gap_stats_df[["ProjectIdBSV", "HuisIdBSV"]]
-        .drop_duplicates()
-        .merge(total_records_df, on="HuisIdBSV")
-        .groupby("ProjectIdBSV")["total_records"].sum()
-        .reset_index()
-    )
-    summary_project = (
-        imputation_gap_stats_df.groupby(["ProjectIdBSV", "column"])
-        .agg(
-            bitwise_methods=("bitwise_methods", lambda x: np.bitwise_or.reduce(x.values)),
-            methods=("methods", lambda x: list(set().union(*x))),
-            missing=("missing", "sum"),
-            imputed=("imputed", "sum"),
-            imputed_na=("imputed_na", "sum"),
-        )
-        .reset_index()
-        .merge(total_project, on="ProjectIdBSV")
-    )
-    summary_project["percentage_imputed"] = (
-        summary_project["imputed"] / summary_project["total_records"] * 100
-    )
-    summary_project.to_parquet(
-        os.path.join(str(output_folder), "impute_summary_project.parquet"),
-        engine="pyarrow",
-    )
-
+    # The >40% warning keeps its behaviour from the in-memory counts; only
+    # the file slimmed.
     over_40 = summary_house[summary_house["percentage_imputed"] > 40]
     for _, row in over_40.iterrows():
         logging.warning(
@@ -857,24 +834,10 @@ def _finalize_impute_outputs(
             f"{row['percentage_imputed']:.2f}% imputed values."
         )
 
-    # Aggregated diff via DuckDB on the finished output -- no pandas RAM
-    diff_cols_present = [
-        c for c in [interval_column(col) for col in cum_cols]
-        if c in imputed_schema_names
-    ]
-    if diff_cols_present:
-        agg_sql = ", ".join(f'AVG("{c}") AS "{c}"' for c in diff_cols_present)
-        aggregated_diff = duckdb.query(
-            f'SELECT ProjectIdBSV, ReadingDate, {agg_sql} '
-            f"FROM {imputed_read_sql} "
-            f"GROUP BY ProjectIdBSV, ReadingDate"
-        ).df()
-        for c in diff_cols_present:
-            aggregated_diff[c] = aggregated_diff[c].astype("Float64")
-        aggregated_diff.to_parquet(
-            os.path.join(str(output_folder), "household_aggregated_diff.parquet"),
-            engine="pyarrow",
-        )
+    # household_aggregated_diff is a pure post-fill aggregation of the
+    # finished output and is written by the end-of-pipeline post-processing
+    # step (etdworkflow/postprocess_reports.py), not here -- removing a full
+    # pass over the output from the run.
 
 
 def _chunk_ids_by_project(all_ids, project_of, chunk_size):
@@ -907,7 +870,7 @@ def _chunk_ids_by_project(all_ids, project_of, chunk_size):
 
 def _impute_chunk_core(
     chunk_df, cum_cols, diffs, volume_reports=None,
-    constraints=None, coverage_duty=None,
+    constraints=None, coverage_duty=None, apparaat_sets=None,
 ):
     """
     Shared per-chunk imputation core: sort -> merge project diffs ->
@@ -921,7 +884,10 @@ def _impute_chunk_core(
     Returns (imputed_chunk_df, gap_stats_chunk).
     """
     from etdtransform.impute import sort_for_impute
-    from etdtransform.vectorized_impute import impute_and_normalize
+    from etdtransform.vectorized_impute import (
+        impute_and_normalize,
+        without_tariff_splits,
+    )
 
     chunk_df = sort_for_impute(chunk_df, "ProjectIdBSV")
     chunk_df = chunk_df.merge(diffs, on=["ProjectIdBSV", "ReadingDate"], how="left")
@@ -931,12 +897,16 @@ def _impute_chunk_core(
         volume_reports=volume_reports,
         constraints=constraints,
         coverage_duty=coverage_duty,
+        apparaat_sets=apparaat_sets,
     )
 
     # Rebuild cumulative columns from imputed Diff columns per household.
     # chunk_df is already sorted by sort_for_impute, so cumsum is correct.
+    # Tariff splits are not processed by the fill, so their delivered
+    # cumulative registers must not be overwritten by a rebuilt cumsum.
     cols_to_reconstruct = [
-        c for c in cum_cols if interval_column(c) in chunk_df.columns
+        c for c in without_tariff_splits(cum_cols)
+        if interval_column(c) in chunk_df.columns
     ]
     chunk_df = reconstruct_cumulative_columns(chunk_df, cols_to_reconstruct)
     return chunk_df, gap_stats_chunk
@@ -972,6 +942,7 @@ def impute_mapped_households_sharded(
     household_ids=None,
     chunk_size: int = 50,
     use_constraints: bool = True,
+    apparaat_sets: dict | None = None,
 ) -> None:
     """
     Sharded version of impute_hh_data_5min_chunked (stage 3).
@@ -1090,6 +1061,7 @@ def impute_mapped_households_sharded(
         chunk_df, gap_stats_chunk = _impute_chunk_core(
             chunk_df, cum_cols, diffs, volume_reports=_volume_reports,
             constraints=_constraints, coverage_duty=_coverage_duty,
+            apparaat_sets=apparaat_sets,
         )
         all_gap_stats.append(gap_stats_chunk)
         for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
@@ -1138,6 +1110,7 @@ def impute_hh_data_5min_chunked(
     cum_cols=cumulative_columns,
     household_ids=None,
     use_constraints: bool = True,
+    apparaat_sets: dict | None = None,
 ):
     """
     Chunked variant of impute_hh_data_5min.
@@ -1161,6 +1134,14 @@ def impute_hh_data_5min_chunked(
     household_ids : list | None
         If provided, restrict processing to this subset of HuisIdBSV values.
         Used by sample/filter steps to avoid writing a temp parquet.
+    apparaat_sets : dict | None
+        ``HuisIdBSV -> apparaat-set key``, selecting each household's
+        specialized constraint table. Defaults to the ApparaatOntbrekend
+        declarations in the BSV metadata. Pass it explicitly for a frame
+        whose households have no metadata entry (synthetic test data): the
+        registry is then injected rather than the selection guard weakened,
+        since a household silently falling back to the base table would get
+        bounds that ignore its absent devices.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -1244,6 +1225,7 @@ def impute_hh_data_5min_chunked(
         chunk_df, gap_stats_chunk = _impute_chunk_core(
             chunk_df, cum_cols, diffs, volume_reports=_volume_reports,
             constraints=_constraints, coverage_duty=_coverage_duty,
+            apparaat_sets=apparaat_sets,
         )
 
         all_gap_stats.append(gap_stats_chunk)
@@ -1396,6 +1378,24 @@ def add_calculated_columns_to_hh_data_ibis(
     import shutil
     import tempfile
     from etdmap.catalog import load_catalog
+    from etdtransform.calculated_columns import undefined_where
+    from etdtransform.calculated_flags import calculated_flag_expressions
+
+    # A calculated value is judged at the GRID interval: the derivation runs
+    # after imputation, so every variable it reads sits on the grid and one
+    # grid interval is what a calculated cell covers. An unreadable grid leaves
+    # the marks off rather than failing the derivation.
+    try:
+        from etdtransform.bounds import dataset_grid_minutes
+
+        _calc_grid_minutes = dataset_grid_minutes()
+    except (FileNotFoundError, ValueError) as _grid_error:
+        _calc_grid_minutes = None
+        logging.warning(
+            "[calc ibis] dataset grid unavailable (%s) -- CALCULATED and "
+            "CALCULATED_THRESHOLD_VIOLATED will not be written",
+            _grid_error,
+        )
     from etdmap.data_model import all_performance_data_columns, required_performance_data_columns
     from etdtransform.catalog.query import DatasetAdapter
     from etdtransform.calculated_columns import sympy_to_ibis
@@ -1572,14 +1572,35 @@ def add_calculated_columns_to_hh_data_ibis(
                     **{c: ibis.literal(0.0) for c in _missing_fillna}
                 )
 
+            _group_derived = []
+            _group_undefined = {}
             for col_name, rhs_expr in plan:
+                # The undefined mask reads the denominator, so it is built
+                # against the table BEFORE the target column is added.
+                _undefined = undefined_where(rhs_expr, group_tbl)
                 group_tbl = group_tbl.mutate(**{col_name: sympy_to_ibis(rhs_expr, group_tbl)})
+                if _undefined is not None:
+                    _group_undefined[col_name] = _undefined
+                _group_derived.append(col_name)
                 _prov_plan_rows.append({
                     "schema_group_id": group_idx,
                     "variable": col_name,
                     "rhs_text": str(rhs_expr),
                     "rhs_vars": ",".join(sorted(str(s) for s in rhs_expr.free_symbols)),
                 })
+            # Mark the derived cells and flag the ones outside their declared
+            # bound. Nothing else in the pipeline checks a derived value
+            # against its threshold: the validate_ column for a derived
+            # variable is written before this stage runs, so it exists and is
+            # empty.
+            if _group_derived and _calc_grid_minutes is not None:
+                group_tbl = group_tbl.mutate(
+                    **calculated_flag_expressions(
+                        group_tbl, _group_derived, _calc_grid_minutes,
+                        undefined=_group_undefined,
+                    )
+                )
+
             for _hid in group_ids:
                 _prov_hh_rows.append({"HuisIdBSV": int(_hid), "schema_group_id": group_idx})
 

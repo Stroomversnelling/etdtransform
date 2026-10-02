@@ -30,6 +30,35 @@ __all__ = [
     'process_imputation_vectorized'
 ]
 
+#: ASSESSMENT scale for JITTER_CANDIDATE, pending a metadata decision.
+#:
+#: The data model carries no per-column metering-resolution field, so the
+#: scale cannot yet be derived from metadata. 0.02 kWh is the measured p99 of
+#: the known bound contradictions (phase 3 validation: median 0.002, p99
+#: 0.021 kWh) -- an empty bound whose overshoot is at or below this is marked
+#: a jitter CANDIDATE for assessment, nothing more: the flag is a signal and
+#: changes no fill behaviour. Per-column overrides go in
+#: ``JITTER_ASSESSMENT_SCALE_KWH``; the default applies to every energy Diff
+#: column otherwise. When a metering-resolution field lands in the data
+#: model, derivation replaces this table.
+DEFAULT_JITTER_ASSESSMENT_SCALE_KWH = 0.02
+JITTER_ASSESSMENT_SCALE_KWH: dict = {}
+
+
+def _jitter_assessment_scale(diff_col: str) -> float:
+    return JITTER_ASSESSMENT_SCALE_KWH.get(
+        diff_col, DEFAULT_JITTER_ASSESSMENT_SCALE_KWH
+    )
+
+
+#: Gate for the whole-household no-known short-circuit in the narrowing.
+#: Evaluating only the rows with known rule inputs is faster below this
+#: evaluated-row share and slower above it, because the subset must be
+#: materialised. The split path applies only when the evaluated share of a
+#: (cadence, model)
+#: group is below this.
+MASKED_EVAL_MAX_EVALUATED_SHARE = 0.5
+
 def methods_to_bitwise(methods_column):
     """
     Convert methods to bitwise representation.
@@ -210,19 +239,31 @@ def _row_bounds_per_cadence(
     packages,
     imputed=None,
     physical_model_by_project=None,
+    apparaat_sets_by_household=None,
 ):
-    """Per-row narrowed bounds for *diff_col*, at each household's own cadence
-    and under each household's own physical model.
+    """Per-row narrowed bounds for *diff_col*, at each household's own cadence,
+    physical model and apparaat-set.
 
     A constraint package fixes one cadence and one rule subset, and households
-    differ on both: they report at more than one cadence, and their project's
-    physical model decides which rules apply to them at all. So the frame is
-    resolved in (cadence, model) groups, each with its own package built once
-    per call into *packages*. A household absent from the cadence table takes
-    the declared bounds unscaled -- the same resolution the column thresholds
-    apply through ``grid_bound``. A project absent from
+    differ on all three axes: they report at more than one cadence, their
+    project's physical model decides which rules apply to them at all, and
+    their declared-absent devices select which SPECIALIZED compile of those
+    rules they narrow with (the sync substitutes 0 for absent variables per
+    distinct set and writes the table keyed by ``apparaat_set``). So the
+    frame is resolved in (cadence, model, apparaat-set) groups, each with its
+    own package built once per call into *packages* -- selection only, no
+    sympy here. A household absent from the cadence table takes the declared
+    bounds unscaled -- the same resolution the column thresholds apply
+    through ``grid_bound``. A project absent from
     *physical_model_by_project* raises: the model decides the rules, so an
-    unregistered project is a sync gap, never a default.
+    unregistered project is a sync gap, never a default. Likewise a
+    household absent from *apparaat_sets_by_household*, or a set with no
+    compiled table, raises as an unsynced state.
+
+    A constraint table WITHOUT the ``apparaat_set`` column (the pre-split
+    artifact) is treated as the empty-set table for every household, with a
+    warning naming the re-sync -- tests and comparison runs on the committed
+    artifact keep working until the next apply.
 
     Returns ``(lo, hi, from_imputed)`` aligned to ``df.index``, as
     :func:`etdtransform.constraints.narrow_bounds_by_row` returns them per
@@ -247,6 +288,43 @@ def _row_bounds_per_cadence(
             f"etdmap's projects.csv."
         )
 
+    set_keyed = "apparaat_set" in constraints.columns
+    if set_keyed:
+        if apparaat_sets_by_household is None:
+            from etdtransform.constraints import apparaat_set_by_household
+
+            apparaat_sets_by_household = apparaat_set_by_household()
+        if "HuisIdBSV" in df.columns:
+            set_keys = df["HuisIdBSV"].map(apparaat_sets_by_household)
+            unmapped_households = (
+                df["HuisIdBSV"][set_keys.isna()].dropna().unique()
+            )
+            if len(unmapped_households):
+                raise ValueError(
+                    f"No apparaat-set registered for HuisIdBSV "
+                    f"{sorted(int(h) for h in unmapped_households)}. The "
+                    f"declared-absent set selects the specialized constraint "
+                    f"table, so it cannot default. Rebuild the BSV metadata "
+                    f"(sync_data_model.py / build_bsv_metadata.py)."
+                )
+            set_keys = set_keys.astype("string")
+        else:
+            # No household column: a caller that scoped its own frame. The
+            # empty set is the unspecialized table and the only honest pick.
+            set_keys = pd.Series("", index=df.index, dtype="string")
+        available_sets = set(constraints["apparaat_set"].astype(str))
+    else:
+        if "_legacy_constraints_warned" not in packages:
+            packages["_legacy_constraints_warned"] = True
+            logging.warning(
+                "[narrow] constraints table carries no apparaat_set column "
+                "(pre-specialization artifact): treating it as the empty-set "
+                "table for every household. Re-run the data model sync to "
+                "write the per-set tables."
+            )
+        set_keys = pd.Series("", index=df.index, dtype="string")
+        available_sets = {""}
+
     by_household = cadence_minutes_by_household(diff_col, cadence)
     if "HuisIdBSV" in df.columns:
         minutes = df["HuisIdBSV"].map(by_household)
@@ -269,9 +347,28 @@ def _row_bounds_per_cadence(
     ]
     narrow_frame = df[narrow_columns] if narrow_columns else df[[]]
 
+    # The whole-household no-known short-circuit: a household none of whose
+    # rule inputs is ever known in this chunk gets, on every row, exactly the
+    # package's presolved bound for the target -- the per-row narrowing
+    # substitutes each unknown at its presolved endpoint, which the presolve
+    # already intersected to fixpoint, so evaluating it per row recomputes a
+    # constant. Knownness here is the SAME predicate the narrowing applies
+    # (``usable_readings``), over the superset of rule variables, so a
+    # household this counts as known is simply evaluated normally -- the
+    # short-circuit can only skip work, never change a bound.
+    known_any = pd.Series(False, index=df.index)
+    for name in wanted:
+        known_any = known_any | usable_readings(df, name)
+    if "HuisIdBSV" in df.columns:
+        known_household = known_any.groupby(df["HuisIdBSV"]).transform("any")
+    else:
+        known_household = pd.Series(bool(known_any.any()), index=df.index)
+
     lo = pd.Series(pd.NA, index=df.index, dtype="Float64")
     hi = pd.Series(pd.NA, index=df.index, dtype="Float64")
     from_imputed = pd.Series(False, index=df.index, dtype="boolean")
+
+    _inf = float("inf")
 
     distinct = [None] if minutes.isna().any() else []
     distinct += sorted(float(m) for m in minutes.dropna().unique())
@@ -282,38 +379,119 @@ def _row_bounds_per_cadence(
             else (minutes == value).fillna(False)
         )
         for model in sorted(models[cadence_mask].dropna().unique()):
-            key = (cadence_key, str(model))
-            if key not in packages:
-                packages[key] = build_constraint_package(
-                    constraints,
-                    cadence_minutes=cadence_key,
-                    physical_model=str(model),
+            model_mask = cadence_mask & (models == model).fillna(False)
+            for set_key in sorted(
+                str(s) for s in set_keys[model_mask].dropna().unique()
+            ):
+                key = (cadence_key, str(model), set_key)
+                if key not in packages:
+                    if set_key not in available_sets:
+                        raise ValueError(
+                            f"No compiled constraint table for apparaat-set "
+                            f"'{set_key}'. The sync compiles one table per "
+                            f"declared set; a set without a table is an "
+                            f"unsynced state -- run the data model sync."
+                        )
+                    subset = (
+                        constraints[
+                            constraints["apparaat_set"].astype(str) == set_key
+                        ]
+                        if set_keyed
+                        else constraints
+                    )
+                    packages[key] = build_constraint_package(
+                        subset,
+                        cadence_minutes=cadence_key,
+                        physical_model=str(model),
+                    )
+                mask = model_mask & (set_keys == set_key).fillna(False)
+                package = packages[key]
+
+                # Split the group only below the measured crossover: with no
+                # rules for the target every row is the presolve constant, and
+                # with few known households evaluating only those wins; past
+                # ~50% evaluated share the subset copy costs more than it saves,
+                # so the group is evaluated whole as before (identical result --
+                # no-known rows come out at the presolve constant either way).
+                rules_for_target = package.rules_by_target.get(diff_col, ())
+                group_rows = int(mask.sum())
+                if rules_for_target and group_rows:
+                    evaluated = mask & known_household.fillna(False)
+                    share = float(evaluated.sum()) / group_rows
+                else:
+                    evaluated = pd.Series(False, index=df.index)
+                    share = 0.0
+                use_split = (
+                    group_rows > 0
+                    and share < MASKED_EVAL_MAX_EVALUATED_SHARE
+                    and not bool(evaluated.equals(mask))
                 )
-            mask = cadence_mask & (models == model).fillna(False)
-            whole_frame = bool(mask.all())
-            part_frame = narrow_frame if whole_frame else narrow_frame.loc[mask]
-            part_imputed_in = (
-                None if imputed is None
-                else (
-                    imputed if whole_frame
-                    else {
-                        name: series.loc[mask]
-                        for name, series in imputed.items()
-                    }
-                )
-            )
-            part_lo, part_hi, part_imputed = narrow_bounds_by_row(
-                part_frame,
-                diff_col,
-                packages[key],
-                imputed=part_imputed_in,
-            )
-            if whole_frame:
-                return part_lo, part_hi, part_imputed
-            lo.loc[mask] = part_lo
-            hi.loc[mask] = part_hi
-            from_imputed.loc[mask] = part_imputed
+                if not use_split:
+                    evaluated = mask
+                skipped = mask & ~evaluated
+
+                if skipped.any():
+                    start_lo, start_hi = package.bounds.get(
+                        diff_col, (-_inf, _inf)
+                    )
+                    lo.loc[skipped] = (
+                        pd.NA if start_lo == -_inf else float(start_lo)
+                    )
+                    hi.loc[skipped] = (
+                        pd.NA if start_hi == _inf else float(start_hi)
+                    )
+                    # from_imputed stays False: nothing was substituted.
+                    logging.info(
+                        f"[narrow] {diff_col}: {int(skipped.sum())} row(s) in "
+                        f"household(s) with no known rule input take the "
+                        f"presolved bound without per-row evaluation "
+                        f"(evaluated share {share:.0%})."
+                    )
+
+                if evaluated.any():
+                    whole_frame = bool(evaluated.all())
+                    part_frame = (
+                        narrow_frame if whole_frame
+                        else narrow_frame.loc[evaluated]
+                    )
+                    part_imputed_in = (
+                        None if imputed is None
+                        else (
+                            imputed if whole_frame
+                            else {
+                                name: series.loc[evaluated]
+                                for name, series in imputed.items()
+                            }
+                        )
+                    )
+                    part_lo, part_hi, part_imputed = narrow_bounds_by_row(
+                        part_frame,
+                        diff_col,
+                        package,
+                        imputed=part_imputed_in,
+                    )
+                    if whole_frame:
+                        return part_lo, part_hi, part_imputed
+                    lo.loc[evaluated] = part_lo
+                    hi.loc[evaluated] = part_hi
+                    from_imputed.loc[evaluated] = part_imputed
     return lo, hi, from_imputed
+
+
+def without_tariff_splits(columns):
+    """Drop Hoog/Laag tariff register columns from a column list.
+
+    The combined root is delivered at mapping (``combine_tariff_registers``),
+    and the discrete alternating splits are not physically averageable: only
+    the continuous root is averaged and filled. The splits stay in the mapped
+    data untouched -- they simply contribute no averages and receive no
+    fills. Membership comes from the data model's own tariff pair structures
+    (``tariff_partner_columns`` covers both the cumulative and Diff forms),
+    never from name heuristics here.
+    """
+    from etdmap.data_model import tariff_partner_columns
+
+    return [c for c in columns if c not in tariff_partner_columns]
 
 
 def order_columns_for_fill(cumulative_columns, coverage_duty):
@@ -479,15 +657,52 @@ def _allocate_gap_fills(df, diff_col, impute_type_col):
     return df
 
 
+def _bits_or_by_group(values, group):
+    """Bitwise OR of *values* per *group*, as an Int64 Series indexed by group.
+
+    *group* holds one contiguous run of rows per group, so each run reduces
+    with ``np.bitwise_or.reduceat`` over the run boundaries. Runs sharing a
+    group are folded together, which leaves the result correct if a group
+    ever appears in more than one run.
+    """
+    bits = values.to_numpy(dtype="int64")
+    codes, uniques = pd.factorize(group, sort=False)
+    run_start = np.flatnonzero(np.r_[True, codes[1:] != codes[:-1]])
+    run_bits = np.bitwise_or.reduceat(bits, run_start)
+    run_codes = codes[run_start]
+
+    if len(run_start) == len(uniques):
+        return pd.Series(
+            run_bits, index=pd.Index(uniques[run_codes], name=group.name),
+            dtype="Int64",
+        )
+
+    folded = np.zeros(len(uniques), dtype="int64")
+    np.bitwise_or.at(folded, run_codes, run_bits)
+    return pd.Series(
+        folded, index=pd.Index(uniques, name=group.name), dtype="Int64",
+    )
+
+
 def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
-    """One row per gap: what the routes wrote, what the bounds moved, and what
-    could not be placed.
+    """One accumulator row per gap: the fill's TRANSIENT state only.
 
     Collected inside the fill, before the threshold pass -- that pass records
-    its own actions in the flags and is not this report's subject. Data-volume
-    sums take ``min_count=1``, so a gap holding no values reports pd.NA rather
-    than a zero total. The signed convention throughout: positive volume was
-    cut away or placed back downward-of-cap, negative the mirror.
+    its own actions in the flags and is not this report's subject, which is
+    exactly why these columns must be captured here: total_final and the
+    per-gap bits are pre-threshold snapshots, the routed/redistributed/
+    unplaced volumes read temp columns, and none of it exists in the
+    persisted outputs. Everything DERIVABLE from the outputs (gap_length,
+    the cells_* counts, deviation and its fraction, rule_expressions) is
+    assembled by the end-of-pipeline post-processing step, which joins this
+    accumulator to the persisted flags on (HuisIdBSV, column, gap_start,
+    gap_end) -- the span columns exist for that join, so the post-processor
+    never has to trust re-derived gap numbering.
+
+    Data-volume sums take ``min_count=1``, so a gap holding no values
+    reports pd.NA rather than a zero total. The signed convention
+    throughout: positive volume was cut away or placed back downward-of-cap,
+    negative the mirror.
     """
     in_gap = df["cumulative_value_group"].notna()
     if not in_gap.any():
@@ -500,7 +715,8 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
     report = grouped.agg(
         ProjectIdBSV=("ProjectIdBSV", "first"),
         HuisIdBSV=("HuisIdBSV", "first"),
-        gap_length=("gap_length", "first"),
+        gap_start=("ReadingDate", "first"),
+        gap_end=("ReadingDate", "last"),
         gap_jump=("gap_jump", "first"),
     )
     report["total_final"] = grouped[diff_col].sum(min_count=1)
@@ -510,30 +726,9 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
         else pd.Series(pd.NA, index=report.index, dtype="Float64")
     )
     report["anchored"] = report["gap_jump"].notna()
-    report["deviation"] = report["total_final"] - report["gap_jump"]
-    report["deviation_fraction"] = (
-        report["deviation"] / report["gap_jump"]
-    ).where(report["gap_jump"].abs() > 1e-12)
 
     findings = scoped[impute_type_col].fillna(ImputeType.NONE.value)
-    for name, flag in (
-        ("cells_clipped", ImputeType.CLIPPED),
-        ("cells_absorbed", ImputeType.CLIPPED_REDISTRIBUTION),
-        ("cells_residual", ImputeType.UNIFORM_RESIDUAL),
-        ("cells_not_filled", ImputeType.NOT_FILLED),
-    ):
-        report[name] = (
-            ((findings & flag.value) != 0).groupby(group).sum().astype("Int64")
-        )
-    # The whole history at gap grain; which infeasible flag fired reads off it.
-    # A python reduce per gap, at thousands of gaps, not millions of rows.
-    report["impute_type_bits"] = (
-        findings.groupby(group)
-        .agg(lambda values: int(
-            np.bitwise_or.reduce(values.to_numpy(dtype="int64"))
-        ))
-        .astype("Int64")
-    )
+    report["impute_type_bits"] = _bits_or_by_group(findings, group)
 
     for name, column in (
         ("redistributed_volume", "_gap_redistributed"),
@@ -545,6 +740,19 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
             report[name] = grouped[column].first().astype("Float64")
         else:
             report[name] = pd.Series(0.0, index=report.index, dtype="Float64")
+
+    # The worst bound contradiction inside the gap, where any bound came up
+    # empty -- transient like its neighbours (the bounds exist only in-run),
+    # and the magnitude evidence behind the JITTER_CANDIDATE signal, so the
+    # assessment is never locked to the announced scale.
+    if "_bound_overshoot" in df.columns:
+        report["bound_overshoot_max"] = (
+            grouped["_bound_overshoot"].max().astype("Float64")
+        )
+    else:
+        report["bound_overshoot_max"] = pd.Series(
+            pd.NA, index=report.index, dtype="Float64"
+        )
 
     report.index.name = "gap"
     return report.reset_index()
@@ -558,6 +766,7 @@ def impute_and_normalize(
     constraints: pd.DataFrame | None = None,
     coverage_duty: pd.DataFrame | None = None,
     physical_models: dict | None = None,
+    apparaat_sets: dict | None = None,
     volume_reports: list | None = None,
 ):
     """
@@ -596,6 +805,13 @@ def impute_and_normalize(
         etdmap's synced project registry; only used when *constraints* is
         given, and a project the mapping does not carry raises rather than
         defaulting.
+    apparaat_sets : dict, optional
+        ``HuisIdBSV -> apparaat-set key`` selecting each household's
+        specialized constraint table when *constraints* carries the
+        ``apparaat_set`` column. Defaults to the BSV metadata's
+        declarations (``apparaat_set_by_household``); ignored for a
+        pre-specialization table, which is treated as the empty set with a
+        warning.
     volume_reports : list, optional
         When given, one per-gap volume frame per column is appended, each
         carrying its ``column`` and the rule expressions that were in force
@@ -633,6 +849,11 @@ def impute_and_normalize(
     """
 
     logging.info("Starting to impute cumulative column diffs (vectorized).")
+
+    # Tariff splits are never filled: the combined root carries the physics.
+    # One membership check where the fill list is constructed, so every
+    # shell and direct caller agrees.
+    cumulative_columns = without_tariff_splits(cumulative_columns)
 
     # Read once per call: the bound for every column is scaled from this.
     _cadence = load_column_cadence() if cadence is None else cadence
@@ -677,12 +898,41 @@ def impute_and_normalize(
 
         drop_temp_cols(df, logLeftoverError=True)
 
+        # The no-delivered-no-fill rule: a (household, column) with zero
+        # delivered readings is never filled -- there is nothing to anchor or
+        # scale from, and the only thing the fill could do is invent the whole
+        # column from peer averages (the broadcast bug class the zero-prefill
+        # era papered over). Delivered means the usable-readings predicate on
+        # the interval OR its cumulative form -- a column of pipeline-written
+        # values carries NOT_A_MEASUREMENT bits and does not count -- and the
+        # seeded first-row zero of add_diff_columns is excluded, mirroring the
+        # interval-only test in the fill. One mask per column per chunk; the
+        # hot loop never sees it.
+        _first_in_house = (
+            df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)
+            if "HuisIdBSV" in df.columns
+            else pd.Series(False, index=df.index)
+        )
+        _delivered_rows = (
+            (usable_readings(df, diff_col) & ~_first_in_house)
+            | usable_readings(df, cum_col)
+        )
+        if "HuisIdBSV" in df.columns:
+            _never_fillable = ~(
+                _delivered_rows.groupby(df["HuisIdBSV"]).transform("any")
+            )
+        else:
+            _never_fillable = pd.Series(
+                not bool(_delivered_rows.any()), index=df.index
+            )
+
         avg_use = avg_col
         if constraints is not None:
             row_lo, row_hi, _bound_from_imputed = _row_bounds_per_cadence(
                 df, diff_col, constraints, _cadence, _packages,
                 imputed=_imputed_so_far,
                 physical_model_by_project=physical_models,
+                apparaat_sets_by_household=apparaat_sets,
             )
 
             # Judged before the fill writes into the column: a delivered value
@@ -719,14 +969,22 @@ def impute_and_normalize(
             # permitted, nothing will be written, and the cause splits on
             # what fed the bound -- measurements alone contradict each other
             # (hard), while a cell this run filled makes it a contradiction
-            # we made (soft).
-            _no_value_permitted = _empty & ~delivered
+            # we made (soft). A never-fillable household is excluded: no
+            # fill was ever possible there, so an empty bound withholds
+            # nothing and the flags would be noise on untouched rows.
+            _no_value_permitted = _empty & ~delivered & ~_never_fillable
             df["_infeasible_hard"] = (
                 _no_value_permitted & ~_bound_from_imputed.fillna(False)
             )
             df["_infeasible_soft"] = (
                 _no_value_permitted & _bound_from_imputed.fillna(False)
             )
+
+            # How far apart the contradicting bounds are, where they are
+            # empty. Transient in-run state (the bounds exist only here), so
+            # the gap accumulator carries its per-gap maximum; the
+            # JITTER_CANDIDATE signal reads it against the assessment scale.
+            df["_bound_overshoot"] = (row_lo - row_hi).where(_empty)
 
         if df[diff_col].isna().sum() == 0:
             logging.info(
@@ -762,6 +1020,23 @@ def impute_and_normalize(
                 cum_col=cum_col,
             )
 
+            # Never-fillable households leave the gap structures entirely:
+            # their rows are not gaps, so no route writes, no flag is set,
+            # no volume row is collected, and the cells stay NA.
+            if _never_fillable.any():
+                _n_house = (
+                    int(df.loc[_never_fillable, "HuisIdBSV"].nunique())
+                    if "HuisIdBSV" in df.columns else 1
+                )
+                logging.info(
+                    f"{diff_col}: {_n_house} household(s) deliver no usable "
+                    f"reading in this column (interval or cumulative); their "
+                    f"{int(_never_fillable.sum())} row(s) are not treated as "
+                    f"gaps and stay NA."
+                )
+                df.loc[_never_fillable, "cumulative_value_group"] = pd.NA
+                df.loc[_never_fillable, "gap_length"] = pd.NA
+
             logging.info(f"Imputing {diff_col}")
             df = process_imputation_vectorized(
                 df,
@@ -775,14 +1050,10 @@ def impute_and_normalize(
             )
             if volume_reports:
                 volume_reports[-1]["column"] = diff_col
-                # The rules that were in force for this column, for reading an
-                # infeasible bound's provenance off the report row.
-                _expressions = sorted({
-                    rule.expression
-                    for package in _packages.values()
-                    for rule in package.rules_by_target.get(diff_col, ())
-                })
-                volume_reports[-1]["rule_expressions"] = "; ".join(_expressions)
+                # rule_expressions (the rules in force for this column) is a
+                # package fact, not fill state: the post-processing step
+                # derives it from the packaged constraints when it assembles
+                # the full gap artifact from this accumulator.
 
             # Every cell inside a gap should carry a value once imputation
             # has run.
@@ -875,6 +1146,7 @@ def impute_and_normalize(
                 "_infeasible_hard",
                 "_infeasible_soft",
                 "_bound_from_imputed",
+                "_bound_overshoot",
                 "_gap_unplaced",
                 "_gap_redistributed",
                 "_gap_uniform_residual",
@@ -1757,6 +2029,26 @@ def process_imputation_vectorized(
             df[impute_type_col].fillna(ImputeType.NONE.value)
             | ImputeType.BOUND_FROM_IMPUTED.value
         )
+
+        # An empty bound whose contradiction is at metering resolution: a
+        # jitter CANDIDATE, marked for assessment against the announced
+        # scale. Signal only -- what fills or stays unfilled is unchanged --
+        # and OR-ed here, before the accumulator collects the gap bits.
+        if "_bound_overshoot" in df.columns:
+            _jitter = (
+                (
+                    df["_infeasible_hard"].fillna(False)
+                    | df["_infeasible_soft"].fillna(False)
+                )
+                & (
+                    df["_bound_overshoot"]
+                    <= _jitter_assessment_scale(diff_col)
+                ).fillna(False)
+            )
+            df.loc[_jitter, impute_type_col] = (
+                df[impute_type_col].fillna(ImputeType.NONE.value)
+                | ImputeType.JITTER_CANDIDATE.value
+            )
 
     if volume_reports is not None:
         volume_reports.append(
