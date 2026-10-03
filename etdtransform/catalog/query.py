@@ -1,5 +1,5 @@
 """
-DatasetAdapter — per-dataset query against the pre-built catalog.
+DatasetAdapter -- per-dataset query against the pre-built catalog.
 
 Given a DataFrame (the actual mapped dataset from a provider), the adapter:
   1. Assesses which columns are available (present and sufficiently non-null).
@@ -8,10 +8,12 @@ Given a DataFrame (the actual mapped dataset from a provider), the adapter:
   4. Returns an execution plan: [(target_col, rhs_sympy_expr), ...] in
      topological order so each column is computed after its dependencies.
 
-'Available' means: the column exists in the DataFrame AND its non-null fraction
-is >= completeness_threshold (default 0.95). This is assessed per dataset — a
-column available for Provider B (who supplies it directly) may need to be derived
-for Provider A (who only supplies its components).
+'Available' means: the column exists in the DataFrame AND holds at least one
+value. There is no fraction test: pd.NA propagates through the arithmetic, so a
+partly-missing input yields a partly-missing output, which is the honest answer
+and needs no threshold to protect it. This is assessed per dataset -- a column
+available for Provider B (who supplies it directly) may need to be derived for
+Provider A (who only supplies its components).
 """
 
 import sympy as sp
@@ -33,14 +35,10 @@ class DatasetAdapter:
         Output of build_catalog() or loaded from catalog_from_parquet().
         Must have columns: lhs (str), rhs_text (str), rhs_vars (list[str]),
         rhs_var_count (int).
-    completeness_threshold : float
-        Minimum non-null fraction for a column to be considered 'effectively raw'.
-        Default 0.95 (configurable per use case).
     """
 
-    def __init__(self, catalog_df: pd.DataFrame, completeness_threshold: float = 0.95):
+    def __init__(self, catalog_df: pd.DataFrame):
         self._catalog = catalog_df
-        self.completeness_threshold = completeness_threshold
 
     # ------------------------------------------------------------------
     # Column assessment
@@ -54,17 +52,22 @@ class DatasetAdapter:
 
     def available_columns(self, df: pd.DataFrame) -> set:
         """
-        Return the set of column names available in this dataset:
-        - column exists in df AND
-        - non-null fraction >= completeness_threshold
+        Return the set of column names holding at least one value.
 
-        A column is available if the provider supplied it with sufficient data
-        quality. It does not need to be derived. This is assessed per dataset.
+        A column with nothing in it is unavailable, because it cannot
+        contribute to any formula. A column with gaps IS available: pd.NA
+        propagates, so a formula over it yields a value where its inputs have
+        one and pd.NA where they do not, which is the honest answer.
+
+        There was a fraction test here (``>= 0.95``). It existed because a
+        missing cell used to be read as 0, so a column had to be nearly
+        complete before a formula over it could be trusted. It did three jobs
+        at once with one number -- deciding which formulas were feasible,
+        which columns became derivation TARGETS, and how households were
+        grouped into plans -- and the second of those meant a delivered column
+        at 94% was overwritten by a formula, losing the 94% that was measured.
         """
-        return {
-            col for col, frac in self.assess_columns(df).items()
-            if frac >= self.completeness_threshold
-        }
+        return {col for col, frac in self.assess_columns(df).items() if frac > 0}
 
     # ------------------------------------------------------------------
     # Feasibility check (iterative until fixed point)
@@ -86,7 +89,7 @@ class DatasetAdapter:
 
     def _feasible_entries_for(self, target: str, available: set, physical_model=None) -> list:
         """
-        Return catalog rows where lhs == target AND set(rhs_vars) ⊆ available,
+        Return catalog rows where lhs == target AND set(rhs_vars) <= available,
         optionally filtered to those whose physical_models includes physical_model.
         The 'n_non_raw' count uses the initial effective_raw set (not the
         growing available set) so preference reflects actual provider data.
@@ -122,7 +125,7 @@ class DatasetAdapter:
         dict with keys:
           effectively_raw : set[str]
           column_completeness : dict[str, float]
-          derivable : dict[str, list[dict]]  — sorted catalog entries per target
+          derivable : dict[str, list[dict]]  -- sorted catalog entries per target
           not_derivable : list[str]
         """
         available_cols = self.available_columns(df)
@@ -260,7 +263,7 @@ class DatasetAdapter:
 
         # Select the best (first) catalog entry for each derivable target
         # and parse its rhs_text into a SymPy expression
-        selected = {}  # target_name → (rhs_expr, rhs_vars_set)
+        selected = {}  # target_name -> (rhs_expr, rhs_vars_set)
         for target, entries in report["derivable"].items():
             best = entries[0]
             rhs_expr = parse_expr(best["rhs_text"])
@@ -279,12 +282,12 @@ def _toposort(selected: dict, available_cols: set) -> list:
     """
     Topologically sort the selected derivations.
 
-    selected       : dict[target_name] → (rhs_expr, rhs_vars_set)
+    selected       : dict[target_name] -> (rhs_expr, rhs_vars_set)
     available_cols : set of column names already available (no derivation needed)
 
     Returns ordered list of target names. Raises ValueError on cycle.
     """
-    # Build adjacency: dependency_name → {targets that need it}
+    # Build adjacency: dependency_name -> {targets that need it}
     # A target depends on any rhs_var that is itself a derived target (not eff_raw)
     derived_names = set(selected.keys())
 

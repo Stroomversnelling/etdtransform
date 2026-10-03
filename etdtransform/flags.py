@@ -114,6 +114,10 @@ class ImputeType(IntFlag):
 
     CALCULATED_UNDEFINED = auto()
 
+    # --- appended: actions, written by the calculated stage ---
+
+    CALCULATED_FROM_RULE_BOUND = auto()
+
     # --- composites ---
 
     SIGNALS = (
@@ -152,6 +156,7 @@ class ImputeType(IntFlag):
         | CLIPPED_REDISTRIBUTION
         | UNIFORM_RESIDUAL
         | CALCULATED
+        | CALCULATED_FROM_RULE_BOUND
     )
 
     FILLED = (
@@ -169,6 +174,16 @@ class ImputeType(IntFlag):
         | CLIPPED
         | CLIPPED_REDISTRIBUTION
         | UNIFORM_RESIDUAL
+    )
+
+    #: Every cell whose value the calculation stage produced, by either route:
+    #: evaluating a catalog formula, or taking the single value the rules
+    #: narrow its row to. The counterpart of IMPUTED_VALUE, and what a
+    #: downstream filter tests to separate calculated values from delivered
+    #: ones without needing to know which route produced each cell.
+    CALCULATED_VALUE = (
+        CALCULATED
+        | CALCULATED_FROM_RULE_BOUND
     )
 
 DESCRIPTIONS = {
@@ -229,6 +244,12 @@ DESCRIPTIONS = {
     "CALCULATED_THRESHOLD_VIOLATED": (
         "A calculated value outside its own column's threshold, scaled to the "
         "cadence that column reports at."
+    ),
+    "CALCULATED_FROM_RULE_BOUND": (
+        "The rules narrowed this row to a single value for the column -- the "
+        "bound's lower and upper ends met -- and that value was written. No "
+        "catalog formula reached the cell; the constraint system determined "
+        "it from the other values in the row."
     ),
     "CALCULATED_UNDEFINED": (
         "Every input was present and the formula still could not produce a "

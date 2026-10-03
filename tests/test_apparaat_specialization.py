@@ -151,6 +151,86 @@ class TestApparaatSetByHousehold:
             apparaat_set_by_household(path)
 
 
+class TestRuleSetsByHousehold:
+    """What a household may derive, resolved from its declarations. One
+    composition in the library, so no caller repeats the two steps."""
+
+    @staticmethod
+    def _metadata(tmp_path, declarations):
+        path = tmp_path / "metadata.csv"
+        pd.DataFrame({
+            "HuisIdBSV": list(declarations),
+            "ApparaatOntbrekend": list(declarations.values()),
+        }).to_csv(path, index=False)
+        return path
+
+    def _catalog_with_a_device_term(self):
+        return _catalog([
+            _row(
+                "ElektriciteitsgebruikTotaalBruto",
+                f"{DIFF} + ElektriciteitsgebruikRadiatorDiff",
+                [DIFF, "ElektriciteitsgebruikRadiatorDiff"],
+            ),
+        ])
+
+    def test_households_are_grouped_by_their_declaration(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household
+
+        path = self._metadata(tmp_path, {
+            1: "ElektriciteitsgebruikRadiator", 2: "ElektriciteitsgebruikRadiator", 3: "",
+        })
+        resolved = rule_sets_by_household(
+            [1, 2, 3], self._catalog_with_a_device_term(), 5,
+            metadata_path=path,
+        )
+        assert set(resolved) == {"ElektriciteitsgebruikRadiator", ""}
+        assert resolved["ElektriciteitsgebruikRadiator"].households == [1, 2]
+        assert resolved[""].households == [3]
+
+    def test_an_absent_device_leaves_the_formula_set(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household
+
+        path = self._metadata(tmp_path, {
+            1: "ElektriciteitsgebruikRadiator", 2: "",
+        })
+        resolved = rule_sets_by_household(
+            [1, 2], self._catalog_with_a_device_term(), 5, metadata_path=path,
+        )
+        # Household 1 has no radiator meter, so the term is substituted to zero and
+        # its formula no longer names it -- it is not a candidate that a null
+        # check rejects later, it is simply not in the set.
+        specialized = resolved["ElektriciteitsgebruikRadiator"].formulas
+        assert list(specialized["rhs_vars"]) == [[DIFF]]
+        assert "ElektriciteitsgebruikRadiatorDiff" not in str(
+            specialized["rhs_text"].iloc[0]
+        )
+        assert list(resolved[""].formulas["rhs_vars"]) == [
+            [DIFF, "ElektriciteitsgebruikRadiatorDiff"]
+        ]
+
+    def test_a_household_the_metadata_does_not_mention_raises(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household
+
+        path = self._metadata(tmp_path, {1: ""})
+        # Defaulting to the full model would narrow HARDER on a household
+        # whose devices are unknown, and absence may only widen.
+        with pytest.raises(ValueError, match="not in the BSV metadata"):
+            rule_sets_by_household(
+                [1, 99], self._catalog_with_a_device_term(), 5,
+                metadata_path=path,
+            )
+
+    def test_each_set_gets_a_package_at_the_grid_cadence(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household
+
+        path = self._metadata(tmp_path, {1: ""})
+        resolved = rule_sets_by_household(
+            [1], self._catalog_with_a_device_term(), 15, metadata_path=path,
+        )
+        assert resolved[""].package is not None
+        assert resolved[""].apparaat_set == ""
+
+
 def _set_keyed(tables):
     """Concatenate (set_key, constraints_frame) pairs under the key column."""
     frames = []

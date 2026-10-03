@@ -20,12 +20,12 @@ from unittest.mock import patch
 
 import etdtransform
 from etdtransform.aggregate import (
-    _catalog_hash,
     _derive_columns_in_parquet,
-    _write_calc_provenance,
     resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
 )
+from etdtransform.calculated_columns import _catalog_hash
+from etdtransform.calculated_stage import _write_calc_provenance
 
 pytestmark = pytest.mark.integration
 

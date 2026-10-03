@@ -78,6 +78,35 @@ def _lambdify_over_columns(expr, table):
     return f(*[table[str(s)] for s in symbols])
 
 
+def evaluate_over_frame(expr, frame) -> pd.Series:
+    """Evaluate a catalog expression against the columns of a pandas frame.
+
+    The pandas counterpart of :func:`sympy_to_ibis`, for the passes that work
+    on a materialised frame because they need per-row rule bounds. Null
+    handling is the same and for the same reason: pandas arithmetic propagates
+    pd.NA, so an unknown input gives an unknown result.
+
+    The lambdified expression is called with nullable Series, so the operators
+    dispatch to pandas rather than numpy and the result stays nullable. A
+    constant expression is broadcast over *frame*'s index.
+    """
+    import sympy as sp
+
+    symbols = sorted(expr.free_symbols, key=str)
+    names = [str(s) for s in symbols]
+    absent = [name for name in names if name not in frame.columns]
+    if absent:
+        raise KeyError(
+            f"cannot evaluate {expr}: {absent} not in the frame"
+        )
+    if not names:
+        return pd.Series(float(expr), index=frame.index, dtype="Float64")
+    computed = sp.lambdify(names, expr)(*[frame[name] for name in names])
+    if not isinstance(computed, pd.Series):
+        computed = pd.Series(computed, index=frame.index)
+    return computed.astype("Float64")
+
+
 def undefined_where(expr, table):
     """When *expr* has all its inputs and still cannot produce a value.
 
@@ -222,15 +251,14 @@ def add_calculated_columns_adaptive(
     catalog_df: pd.DataFrame = None,
     target_columns=None,
     fillna: bool = False,
-    completeness_threshold: float = 0.95,
 ) -> pd.DataFrame:
     """
     Derive missing columns from available data using the pre-built equation catalog.
 
     Availability is assessed per household (HuisIdBSV): a column is considered
-    available for a household only if it is non-null for >= completeness_threshold
-    fraction of that household's rows.  This correctly handles mixed datasets where
-    different providers supply different column sets.
+    available for a household only if it holds at least one value for that
+    household.  This correctly handles mixed datasets where different providers
+    supply different column sets.
 
     Households with the same column-availability pattern share a cached derivation
     plan, so the catalog is only traversed once per unique provider schema.
@@ -252,8 +280,6 @@ def add_calculated_columns_adaptive(
         was a measured zero, which is how negative gross consumption was
         produced for households whose solar reading was absent while their
         export register advanced.
-    completeness_threshold : float
-        Minimum non-null fraction for a column to be considered available.
     """
     from .catalog.query import DatasetAdapter
     import sympy as sp
@@ -278,7 +304,7 @@ def add_calculated_columns_adaptive(
     derivable_in_catalog = set(catalog_df["lhs"].unique())
     explicit_targets = set(target_columns) if target_columns is not None else None
 
-    adapter = DatasetAdapter(catalog_df, completeness_threshold)
+    adapter = DatasetAdapter(catalog_df)
 
     has_project_col = "ProjectIdBSV" in df.columns
 
@@ -912,3 +938,18 @@ def add_normalized_datetime(
         )
     else:
         raise TypeError("Input must be either a pandas DataFrame or an Ibis TableExpr")
+
+
+def _catalog_hash(catalog_df) -> str:
+    """Stable short content hash of the catalog (lhs + rhs_text pairs).
+
+    Lets derivation provenance be pinned to the exact catalog that produced it,
+    so a later reader knows the recorded equations came from this catalog
+    version (the catalog is rebuilt from the data model's rules by the
+    project's sync tooling).
+    """
+    import hashlib
+    pairs = sorted(
+        f"{lhs}={rhs}" for lhs, rhs in zip(catalog_df["lhs"], catalog_df["rhs_text"])
+    )
+    return hashlib.sha1("\n".join(pairs).encode("utf-8")).hexdigest()[:12]

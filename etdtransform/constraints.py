@@ -138,7 +138,10 @@ def specialize_catalog_for_absent(catalog: pd.DataFrame, absent_vars) -> pd.Data
       absence may only widen (the doctrine); the declared bounds remain the
       only thing entitled to bound such a target.
 
-    Runs at sync time; the fill never calls this.
+    The constraint compiler applies this at sync time, which is why
+    constraints.parquet carries one table per apparaat-set. The catalog
+    carries no such column, so a run-time caller that needs a household's
+    formulas calls this -- see :func:`rule_sets_by_household`.
     """
     import sympy as sp
     from sympy.parsing.sympy_parser import parse_expr
@@ -188,6 +191,83 @@ def specialize_catalog_for_absent(catalog: pd.DataFrame, absent_vars) -> pd.Data
     if "rhs_var_count" in out.columns:
         out["rhs_var_count"] = out["rhs_var_count"].astype("Int64")
     return out.reset_index(drop=True)
+
+
+@dataclass
+class RuleSet:
+    """The formulas and the bounds that apply to one apparaat-set."""
+
+    apparaat_set: str
+    households: list
+    formulas: pd.DataFrame
+    package: "ConstraintPackage"
+
+
+def rule_sets_by_household(household_ids, catalog, cadence_minutes,
+                           metadata_path=None) -> dict:
+    """What each of *household_ids* may derive, keyed by its apparaat-set.
+
+    A household may only see a formula whose variables it actually has. A
+    household that declares no heat pump has no heat-pump term to solve for
+    and no heat-pump reading to solve with, so a formula naming one must not
+    be a candidate for it -- not rejected later by a null check, absent from
+    its formula set.
+
+    The declarations decide that, and households sharing a declaration share
+    everything that follows from it, so the work is done once per distinct
+    set rather than once per household: the catalog is specialized and the
+    constraint package is built per set, and every member of the set gets the
+    same two objects.
+
+    Returns ``{apparaat_set_key: RuleSet}``. A household the metadata does
+    not mention raises rather than falling back to the full model: the full
+    model has MORE rules and so narrows HARDER, and absence may only widen.
+
+    Parameters
+    ----------
+    household_ids : iterable of int
+    catalog : pd.DataFrame
+        The derivation catalog, unspecialized.
+    cadence_minutes : int
+        The grid, which is what a calculated cell covers.
+    metadata_path : str or None
+        Passed through to :func:`apparaat_set_by_household`.
+    """
+    declared = apparaat_set_by_household(metadata_path)
+    grouped: dict = {}
+    unknown = []
+    for household_id in household_ids:
+        household_id = int(household_id)
+        if household_id not in declared:
+            unknown.append(household_id)
+            continue
+        grouped.setdefault(declared[household_id], []).append(household_id)
+
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} household(s) are not in the BSV metadata, so "
+            f"their ApparaatOntbrekend declarations are unknown and the "
+            f"formulas they may use cannot be resolved (first 10: "
+            f"{sorted(unknown)[:10]}). Rebuild the metadata rather than "
+            f"deriving them against the full model."
+        )
+
+    constraints = packaged_constraints()
+    return {
+        key: RuleSet(
+            apparaat_set=key,
+            households=sorted(members),
+            formulas=specialize_catalog_for_absent(
+                catalog, key.split("|") if key else []
+            ),
+            package=build_constraint_package(
+                constraints,
+                cadence_minutes=cadence_minutes,
+                apparaat_set=key,
+            ),
+        )
+        for key, members in grouped.items()
+    }
 
 
 _APPARAAT_SETS_CACHE: dict = {}

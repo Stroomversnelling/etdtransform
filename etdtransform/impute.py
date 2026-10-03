@@ -5,6 +5,7 @@ from math import floor, isclose, log10
 import numpy as np
 import pandas as pd
 from etdmap.data_model import (
+    complement_column,
     cumulative_column,
     interval_column,
     monotonic_interval_columns,
@@ -83,6 +84,53 @@ def assert_averageable(diff_columns) -> None:
         raise ValueError(
             f"These columns cannot be used for a project average:\n  {listed}\n"
             f"Check the data model: Monotoon and ComplementVariabele.\n"
+        )
+
+
+def assert_cumulative_interval_pairs_complete(columns) -> None:
+    """Refuse a column set holding one half of a cumulative/interval pair.
+
+    By the time a dataset reaches the stages after imputation, every cumulative
+    variable should carry its interval column and every interval column its
+    cumulative: the mapping derives whichever was not delivered. A set with one
+    half missing means that conversion did not happen, and every later stage
+    reads the gap as the variable being absent rather than as a pipeline step
+    having been skipped.
+
+    Both directions are checked at once: ``complement_column`` resolves the
+    other half whichever side is held. The link comes from
+    ``ComplementVariabele``, so a pair whose names do not follow the ``Diff``
+    convention resolves correctly -- ``ZonopwekTotaal``'s interval is
+    ``ZonopwekBruto``, and a guard built on the suffix would report it broken.
+
+    Parameters
+    ----------
+    columns : iterable of str
+        Column names. Not a DataFrame, so this serves a pandas frame and an
+        ibis table equally -- pass ``df.columns`` or ``table.columns``.
+
+    Raises
+    ------
+    ValueError
+        Listing every column whose declared complement is absent, in both
+        directions, rather than the first one found.
+    """
+    present = set(columns)
+    missing = [
+        f"{column}: declared complement {partner} is absent"
+        for column in sorted(present)
+        if (partner := complement_column(column)) is not None
+        and partner not in present
+    ]
+
+    if missing:
+        listed = "\n  ".join(missing)
+        raise ValueError(
+            f"Cumulative/interval pairs are incomplete:\n  {listed}\n"
+            f"Both halves of a pair should exist by this stage -- the mapping "
+            f"derives whichever the supplier did not deliver. A missing half "
+            f"reads downstream as an absent variable rather than a skipped "
+            f"step. Check the mapping stage and ComplementVariabele."
         )
 
 

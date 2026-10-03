@@ -273,3 +273,477 @@ class TestUndefinedCalculation:
         assert not bool(ImputeType.CALCULATED_UNDEFINED & ImputeType.ACTIONS)
         # And not an imputed value -- nothing was filled.
         assert not bool(ImputeType.CALCULATED_UNDEFINED & ImputeType.IMPUTED_VALUE)
+
+
+class TestDeriveFromRuleBound:
+    """Cells the rules narrow to a single value. A derivation, not a guess:
+    the other values in the row determine the column exactly, and no catalog
+    formula reached the cell."""
+
+    @staticmethod
+    def _package(lo, hi):
+        import pandas as pd_
+
+        from etdtransform.constraints import build_constraint_package
+
+        empty = pd_.DataFrame({
+            "lhs": pd_.array([], dtype="string"),
+            "rhs_text": pd_.array([], dtype="string"),
+            "variable": pd_.array([], dtype="string"),
+            "sign": pd_.array([], dtype="Int64"),
+            "derivative_text": pd_.array([], dtype="string"),
+            "rhs_var_count": pd_.array([], dtype="Int64"),
+        })
+        return build_constraint_package(
+            empty, cadence_minutes=5,
+            thresholds={COLUMN: {
+                "Min": lo, "Max": hi, "ThresholdType": "algemeen",
+                "UpperThresholdSustained": pd_.NA,
+                "UpperThresholdExponent": pd_.NA,
+            }},
+        )
+
+    def test_a_point_bound_fills_a_missing_cell(self):
+        from etdtransform.calculated_flags import derive_from_rule_bound
+
+        # Min == Max, so the bound admits exactly one value.
+        df, filled = derive_from_rule_bound(
+            _frame([pd.NA, pd.NA]), [COLUMN], self._package(0.4, 0.4)
+        )
+        assert filled == {COLUMN: 2}
+        assert [float(v) for v in df[COLUMN]] == [pytest.approx(0.4)] * 2
+        assert ((_flags(df) & ImputeType.CALCULATED_FROM_RULE_BOUND.value) != 0).all()
+
+    def test_a_wide_bound_fills_nothing(self):
+        from etdtransform.calculated_flags import derive_from_rule_bound
+
+        df, filled = derive_from_rule_bound(
+            _frame([pd.NA]), [COLUMN], self._package(0.0, 1.0)
+        )
+        assert filled == {}
+        assert pd.isna(df[COLUMN].iloc[0])
+        # No flag column is created when nothing is pinned: an empty
+        # impute-type column would read as "examined and found nothing".
+        assert impute_type_column(COLUMN) not in df.columns
+
+    def test_a_delivered_value_is_never_overwritten(self):
+        from etdtransform.calculated_flags import derive_from_rule_bound
+
+        df, filled = derive_from_rule_bound(
+            _frame([0.9, pd.NA]), [COLUMN], self._package(0.4, 0.4)
+        )
+        # Only the missing cell moved, even though the bound pins both.
+        assert filled == {COLUMN: 1}
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.9)
+        assert float(df[COLUMN].iloc[1]) == pytest.approx(0.4)
+        flags = _flags(df)
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+        assert bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+
+    def test_the_flag_is_an_action_distinct_from_CALCULATED(self):
+        # A reader must be able to tell a constraint-pinned value from one
+        # produced by evaluating a formula.
+        assert bool(ImputeType.CALCULATED_FROM_RULE_BOUND & ImputeType.ACTIONS)
+        assert not bool(ImputeType.CALCULATED_FROM_RULE_BOUND & ImputeType.SIGNALS)
+        assert not bool(
+            ImputeType.CALCULATED_FROM_RULE_BOUND & ImputeType.IMPUTED_VALUE
+        )
+        assert (ImputeType.CALCULATED_FROM_RULE_BOUND.value
+                != ImputeType.CALCULATED.value)
+
+    def test_existing_flags_survive(self):
+        from etdtransform.calculated_flags import derive_from_rule_bound
+
+        df = _frame([pd.NA])
+        df[impute_type_column(COLUMN)] = pd.array(
+            [ImputeType.NOT_FILLED.value], dtype="Int64"
+        )
+        df, _ = derive_from_rule_bound(df, [COLUMN], self._package(0.4, 0.4))
+        flags = _flags(df)
+        assert bool(flags.iloc[0] & ImputeType.NOT_FILLED.value)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+
+
+class TestCalculatedValueComposite:
+    """One test for "did the calculation produce this value", whichever route
+    produced it. The counterpart of IMPUTED_VALUE."""
+
+    def test_it_covers_both_routes(self):
+        assert bool(ImputeType.CALCULATED_VALUE & ImputeType.CALCULATED)
+        assert bool(
+            ImputeType.CALCULATED_VALUE & ImputeType.CALCULATED_FROM_RULE_BOUND
+        )
+
+    def test_it_is_actions_only(self):
+        # A composite that admitted a signal would make "was this calculated"
+        # true for a cell that was merely judged.
+        assert (ImputeType.CALCULATED_VALUE & ImputeType.ACTIONS) \
+            == ImputeType.CALCULATED_VALUE
+        for signal in (
+            ImputeType.CALCULATED_THRESHOLD_VIOLATED,
+            ImputeType.CALCULATED_OUTSIDE_RULE_BOUND,
+            ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED,
+            ImputeType.CALCULATED_UNDEFINED,
+        ):
+            assert not bool(ImputeType.CALCULATED_VALUE & signal)
+
+    def test_it_does_not_overlap_imputed_value(self):
+        # Imputed and calculated are different provenance; a cell must not
+        # read as both through the composites.
+        assert not bool(ImputeType.CALCULATED_VALUE & ImputeType.IMPUTED_VALUE)
+
+    def test_a_rule_bound_fill_is_caught_by_it(self):
+        from etdtransform.calculated_flags import derive_from_rule_bound
+
+        df, _ = derive_from_rule_bound(
+            _frame([pd.NA]), [COLUMN],
+            TestDeriveFromRuleBound._package(0.4, 0.4),
+        )
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_VALUE.value)
+
+    def test_a_formula_derived_cell_is_caught_by_it(self):
+        df = scan_calculated_columns(_frame([0.5]), [COLUMN], grid_minutes=5)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_VALUE.value)
+
+    def test_a_missing_cell_is_not(self):
+        df = scan_calculated_columns(_frame([pd.NA]), [COLUMN], grid_minutes=5)
+        assert not bool(_flags(df).iloc[0] & ImputeType.CALCULATED_VALUE.value)
+
+
+class TestFillFromFormula:
+    """Gaps in a column that a catalog formula reaches from the other values in
+    the same row. The derivation pass cannot do this: a delivered column was
+    never a derivation target, so its gaps were never a candidate for one."""
+
+    LEFT = "ElektriciteitNetgebruikDiff"
+    RIGHT = "ElektriciteitTerugleveringDiff"
+    THIRD = "ZonopwekBruto"
+    FOURTH = "Netuitwisseling"
+
+    @staticmethod
+    def _catalog(rows):
+        return pd.DataFrame([
+            {
+                "lhs": lhs,
+                "rhs_text": text,
+                "rhs_vars": inputs,
+                "rhs_var_count": len(inputs),
+            }
+            for lhs, text, inputs in rows
+        ])
+
+    @classmethod
+    def _sum_catalog(cls):
+        return cls._catalog([
+            (COLUMN, f"{cls.LEFT} + {cls.RIGHT}", [cls.LEFT, cls.RIGHT]),
+        ])
+
+    @classmethod
+    def _frame_with_inputs(cls, target, left, right, third=None, fourth=None):
+        df = _frame(target)
+        df[cls.LEFT] = pd.array(left, dtype="Float64")
+        df[cls.RIGHT] = pd.array(right, dtype="Float64")
+        if third is not None:
+            df[cls.THIRD] = pd.array(third, dtype="Float64")
+        if fourth is not None:
+            df[cls.FOURTH] = pd.array(fourth, dtype="Float64")
+        return df
+
+    def test_a_gap_is_filled_where_both_inputs_are_present(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs([pd.NA], [0.1], [0.2]),
+            [COLUMN], self._sum_catalog(),
+            TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {COLUMN: 1}
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.3)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)
+        assert int(plan["cells_filled"].iloc[0]) == 1
+
+    def test_a_row_missing_an_input_is_left_alone(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        # The not-null map for this row does not contain RIGHT, so the only
+        # formula is not a candidate. No reasoning about derivation order.
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs([pd.NA], [0.1], [pd.NA]),
+            [COLUMN], self._sum_catalog(),
+            TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {}
+        assert pd.isna(df[COLUMN].iloc[0])
+        assert plan.empty
+
+    def test_a_delivered_value_is_never_overwritten(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        df, filled, _ = fill_from_formula(
+            self._frame_with_inputs([0.9, pd.NA], [0.1, 0.1], [0.2, 0.2]),
+            [COLUMN], self._sum_catalog(),
+            TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {COLUMN: 1}
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.9)
+        assert float(df[COLUMN].iloc[1]) == pytest.approx(0.3)
+        flags = _flags(df)
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(flags.iloc[1] & ImputeType.CALCULATED.value)
+
+    def test_a_value_outside_the_rows_rule_bound_is_rejected(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        # The fill is an invented value, so it has to be plausible. 99 kWh in
+        # five minutes is not, and the bound is what says so.
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs([pd.NA], [50.0], [49.0]),
+            [COLUMN], self._sum_catalog(),
+            TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {}
+        assert pd.isna(df[COLUMN].iloc[0])
+        assert int(plan["cells_rejected"].iloc[0]) == 1
+
+    def test_the_formula_with_the_fewest_inputs_is_chosen(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        catalog = self._catalog([
+            (COLUMN, f"{self.LEFT} + {self.RIGHT}", [self.LEFT, self.RIGHT]),
+            (COLUMN, f"{self.LEFT} + {self.RIGHT} + {self.THIRD}",
+             [self.LEFT, self.RIGHT, self.THIRD]),
+        ])
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs([pd.NA], [0.1], [0.2], third=[0.4]),
+            [COLUMN], catalog, TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        # Both are candidates; only one is evaluated, and it is the short one.
+        assert len(plan) == 1
+        assert plan["rhs_vars"].iloc[0] == ",".join(sorted([self.LEFT, self.RIGHT]))
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.3)
+
+    def test_a_formula_on_measurements_beats_one_using_a_filled_cell(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        # Both are two-input formulas, so length cannot decide, and the one
+        # using the filled cell sorts FIRST by text -- it would win on the
+        # tie-break. Only the provenance criterion can explain the choice.
+        catalog = self._catalog([
+            (COLUMN, f"{self.LEFT} + {self.RIGHT}", [self.LEFT, self.RIGHT]),
+            (COLUMN, f"{self.FOURTH} + {self.THIRD}", [self.FOURTH, self.THIRD]),
+        ])
+        df = self._frame_with_inputs(
+            [pd.NA], [0.1], [0.2], third=[0.25], fourth=[0.25]
+        )
+        df[f"{self.LEFT}_is_imputed"] = pd.array([True], dtype="boolean")
+        df, _, plan = fill_from_formula(
+            df, [COLUMN], catalog, TestDeriveFromRuleBound._package(0.0, 1.6)
+        )
+        assert int(plan["inputs_from_fill"].iloc[0]) == 0
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.5)
+
+    def test_rows_with_different_maps_are_handled_separately(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        catalog = self._catalog([
+            (COLUMN, f"{self.LEFT} + {self.RIGHT}", [self.LEFT, self.RIGHT]),
+            (COLUMN, f"2*{self.THIRD}", [self.THIRD]),
+        ])
+        # Row 0 has both inputs of the first formula; row 1 has only THIRD.
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs(
+                [pd.NA, pd.NA], [0.1, pd.NA], [0.2, pd.NA], third=[pd.NA, 0.25]
+            ),
+            [COLUMN], catalog, TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {COLUMN: 2}
+        assert float(df[COLUMN].iloc[0]) == pytest.approx(0.3)
+        assert float(df[COLUMN].iloc[1]) == pytest.approx(0.5)
+        assert len(plan) == 2
+        assert set(plan["mask"]) == {
+            "|".join(sorted([self.LEFT, self.RIGHT])), self.THIRD,
+        }
+
+    def test_a_tie_on_length_is_broken_by_the_expression_text(self):
+        from etdtransform.calculated_flags import choose_formula
+
+        catalog = self._catalog([
+            (COLUMN, f"{self.RIGHT} * 2", [self.RIGHT]),
+            (COLUMN, f"{self.LEFT} * 2", [self.LEFT]),
+        ])
+        rows = list(catalog.itertuples())
+        available = {self.LEFT, self.RIGHT}
+        first = choose_formula(rows, available)
+        # Same answer whichever order the catalog rows arrive in: a column's
+        # provenance must not vary between runs.
+        assert choose_formula(list(reversed(rows)), available).rhs_text \
+            == first.rhs_text
+
+    def test_a_formula_that_needs_its_own_target_is_not_a_candidate(self):
+        from etdtransform.calculated_flags import choose_formula
+
+        catalog = self._catalog([(COLUMN, f"{COLUMN} * 2", [COLUMN])])
+        assert choose_formula(
+            list(catalog.itertuples()), {COLUMN, self.LEFT}
+        ) is None
+
+    def test_a_frame_with_no_gaps_returns_an_empty_plan(self):
+        from etdtransform.calculated_flags import fill_from_formula
+
+        df, filled, plan = fill_from_formula(
+            self._frame_with_inputs([0.5], [0.1], [0.2]),
+            [COLUMN], self._sum_catalog(),
+            TestDeriveFromRuleBound._package(0.0, 1.6),
+        )
+        assert filled == {}
+        assert plan.empty
+        assert impute_type_column(COLUMN) not in df.columns
+
+
+class TestFillCalculatedGaps:
+    """Both routes as the calculated stage runs them."""
+
+    @staticmethod
+    def _catalog():
+        return TestFillFromFormula._catalog([(
+            COLUMN,
+            f"{TestFillFromFormula.LEFT} + {TestFillFromFormula.RIGHT}",
+            [TestFillFromFormula.LEFT, TestFillFromFormula.RIGHT],
+        )])
+
+    def test_the_two_routes_are_distinguishable_per_cell(self):
+        from etdtransform.calculated_flags import fill_calculated_gaps
+
+        # Row 0 has the formula's inputs; row 1 does not, so only the point
+        # bound can reach it.
+        df = TestFillFromFormula._frame_with_inputs(
+            [pd.NA, pd.NA], [0.4, pd.NA], [0.0, pd.NA]
+        )
+        df, report, plan = fill_calculated_gaps(
+            df, [COLUMN], self._catalog(),
+            TestDeriveFromRuleBound._package(0.4, 0.4),
+        )
+        assert report["from_formula"] == {COLUMN: 1}
+        assert report["from_rule_bound"] == {COLUMN: 1}
+        assert report["cells"] == 2
+        flags = _flags(df)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED.value)
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+        assert bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+        assert not bool(flags.iloc[1] & ImputeType.CALCULATED.value)
+
+    def test_every_filled_cell_answers_to_the_composite(self):
+        from etdtransform.calculated_flags import fill_calculated_gaps
+
+        df = TestFillFromFormula._frame_with_inputs(
+            [pd.NA, pd.NA], [0.4, pd.NA], [0.0, pd.NA]
+        )
+        df, _, _ = fill_calculated_gaps(
+            df, [COLUMN], self._catalog(),
+            TestDeriveFromRuleBound._package(0.4, 0.4),
+        )
+        assert df[COLUMN].notna().all()
+        assert ((_flags(df) & ImputeType.CALCULATED_VALUE.value) != 0).all()
+
+    def test_it_runs_over_an_ibis_table_and_patches_it(self):
+        import ibis
+
+        from etdtransform.calculated_flags import (
+            BITS_SUFFIX, FILL_SUFFIX, fill_gaps_in_table,
+        )
+        from etdtransform.constraints import RuleSet
+
+        ibis.set_backend("duckdb")
+        # Two rows: the first has the formula's inputs, the second does not and
+        # is reached only by the point bound.
+        frame = TestFillFromFormula._frame_with_inputs(
+            [pd.NA, pd.NA], [0.4, pd.NA], [0.0, pd.NA]
+        )
+        rule_sets = {"": RuleSet(
+            apparaat_set="",
+            households=[1],
+            formulas=self._catalog(),
+            package=TestDeriveFromRuleBound._package(0.4, 0.4),
+        )}
+        table, report, plan = fill_gaps_in_table(
+            ibis.memtable(frame), [1], rule_sets
+        )
+        out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
+
+        assert report["cells"] == 2
+        # The values reach the table, not just the pandas slice.
+        assert [float(v) for v in out[COLUMN]] == [pytest.approx(0.4)] * 2
+        flags = out[impute_type_column(COLUMN)].fillna(0).astype("Int64")
+        assert ((flags & ImputeType.CALCULATED_VALUE.value) != 0).all()
+        # The patch columns are scaffolding and must not reach a schema.
+        assert not [
+            c for c in out.columns
+            if c.endswith((FILL_SUFFIX, BITS_SUFFIX, "_right"))
+        ]
+
+    def test_a_cell_the_fill_did_not_touch_keeps_its_value(self):
+        import ibis
+
+        from etdtransform.calculated_flags import fill_gaps_in_table
+        from etdtransform.constraints import RuleSet
+
+        ibis.set_backend("duckdb")
+        # The bound pins 0.4, and the delivered 0.9 contradicts it. Coalesce
+        # must still leave the delivered value alone -- the fill writes gaps,
+        # it does not correct measurements.
+        frame = TestFillFromFormula._frame_with_inputs(
+            [0.9, pd.NA], [pd.NA, pd.NA], [pd.NA, pd.NA]
+        )
+        rule_sets = {"": RuleSet(
+            apparaat_set="",
+            households=[1],
+            formulas=self._catalog(),
+            package=TestDeriveFromRuleBound._package(0.4, 0.4),
+        )}
+        table, report, _ = fill_gaps_in_table(
+            ibis.memtable(frame), [1], rule_sets
+        )
+        out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
+        assert report["cells"] == 1
+        assert float(out[COLUMN].iloc[0]) == pytest.approx(0.9)
+        assert float(out[COLUMN].iloc[1]) == pytest.approx(0.4)
+
+    def test_a_household_outside_the_rule_set_is_not_touched(self):
+        import ibis
+
+        from etdtransform.calculated_flags import fill_gaps_in_table
+        from etdtransform.constraints import RuleSet
+
+        ibis.set_backend("duckdb")
+        frame = TestFillFromFormula._frame_with_inputs(
+            [pd.NA], [pd.NA], [pd.NA]
+        )
+        # The rule set covers household 2; the table holds household 1, which
+        # therefore has no formulas and no bounds of its own.
+        rule_sets = {"": RuleSet(
+            apparaat_set="",
+            households=[2],
+            formulas=self._catalog(),
+            package=TestDeriveFromRuleBound._package(0.4, 0.4),
+        )}
+        table, report, plan = fill_gaps_in_table(
+            ibis.memtable(frame), [1], rule_sets
+        )
+        assert report["cells"] == 0
+        assert plan.empty
+        assert pd.isna(table.execute()[COLUMN].iloc[0])
+
+    def test_the_formula_route_runs_first(self):
+        from etdtransform.calculated_flags import fill_calculated_gaps
+
+        # The point bound would pin this cell to 0.4 as well, and the formula
+        # sums to 0.4, so the value cannot tell which route ran. The flag can,
+        # and it has to say the formula: that route runs first and the second
+        # only touches cells still pd.NA.
+        df = TestFillFromFormula._frame_with_inputs([pd.NA], [0.4], [0.0])
+        df, report, _ = fill_calculated_gaps(
+            df, [COLUMN], self._catalog(),
+            TestDeriveFromRuleBound._package(0.4, 0.4),
+        )
+        assert report["from_rule_bound"] == {}
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)

@@ -68,32 +68,33 @@ def _make_df(cols: dict, n=100, household_id=1) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 class TestAvailableColumns:
-    def test_above_threshold_included(self):
-        df = _make_df({"A": _full_col(), "B": _sparse_col(frac=0.96)})
-        adapter = DatasetAdapter(_make_catalog(), completeness_threshold=0.95)
-        assert "A" in adapter.available_columns(df)
-        assert "B" in adapter.available_columns(df)
+    """Availability is "holds at least one value". The 0.95 fraction test was
+    removed: pd.NA propagates, so a partly-missing input yields a
+    partly-missing output and needs no threshold to protect it."""
 
-    def test_below_threshold_excluded(self):
+    def test_a_complete_column_is_available(self):
+        df = _make_df({"A": _full_col()})
+        assert "A" in DatasetAdapter(_make_catalog()).available_columns(df)
+
+    def test_a_sparse_column_is_available(self):
+        # 80% would have failed the old threshold; the formula over it now
+        # yields values where its inputs have them and pd.NA elsewhere.
         df = _make_df({"A": _sparse_col(frac=0.80)})
-        adapter = DatasetAdapter(_make_catalog(), completeness_threshold=0.95)
-        assert "A" not in adapter.available_columns(df)
+        assert "A" in DatasetAdapter(_make_catalog()).available_columns(df)
 
-    def test_exactly_at_threshold_included(self):
+    def test_an_all_pdna_column_is_not_available(self):
+        """A column with no values cannot feed a formula. This is the one
+        exclusion that survives, and it is not a fraction question."""
         n = 100
-        data = [1.0] * 95 + [pd.NA] * 5
-        df = _make_df({"A": pd.array(data, dtype="Float64")}, n=n)
-        adapter = DatasetAdapter(_make_catalog(), completeness_threshold=0.95)
-        assert "A" in adapter.available_columns(df)
+        df = _make_df({"A": pd.array([pd.NA] * n, dtype="Float64")}, n=n)
+        assert "A" not in DatasetAdapter(_make_catalog()).available_columns(df)
 
     def test_pdna_counted_as_missing(self):
-        """pd.NA values must be counted as missing (not as 0 or some other value)."""
+        """pd.NA must count as missing, not as 0 -- which is what the fraction
+        reported and what the arithmetic used to assume."""
         n = 100
-        # 60 present, 40 pd.NA -> fraction 0.60 < 0.95
-        data = [1.0] * 60 + [pd.NA] * 40
-        df = _make_df({"A": pd.array(data, dtype="Float64")}, n=n)
-        adapter = DatasetAdapter(_make_catalog(), completeness_threshold=0.95)
-        assert "A" not in adapter.available_columns(df)
+        df = _make_df({"A": pd.array([1.0] * 60 + [pd.NA] * 40, dtype="Float64")}, n=n)
+        assert DatasetAdapter(_make_catalog()).assess_columns(df)["A"] == 0.60
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +596,131 @@ class TestOcclusionBackCalculation:
         assert recovered.tolist() == pytest.approx([1.0] * n, rel=1e-6), (
             f"Full-loop recovery: expected 1.0 everywhere, got {recovered.unique().tolist()}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Gap-filling a DELIVERED column from a rule -- proof of concept.
+#
+# The A + B + C case: a supplier delivers A, B and C, the catalog derives
+# C = f(A, B), and C has holes that A and B can fill. No current supplier
+# delivers such a redundant set, so real data cannot exercise this and the
+# fixture is synthetic -- but the COMBINATION is real, taken from the
+# committed catalog, so the test breaks if that rule changes.
+#
+# The calculated form goes in a SEPARATE column, never over the delivered one,
+# so the two can be compared and the delivered values cannot be disturbed.
+# Not wired into any stage: this is post-processing, and the comparison half
+# is already covered in the pipeline by DELIVERED_OUTSIDE_RULE_BOUND -- with
+# every rule input known the rule bound collapses to a point, so "differs from
+# the rule" and "outside the rule bound" are the same condition.
+#
+# Values are plausible five-minute quantities. An earlier version used
+# 1.0 + 2.0 + 3.0 = 6.0 kWh per five minutes, which blows the column's
+# declared Max of 1.6 and makes every bound inverted -- the fixture was
+# physically impossible, so it tested nothing.
+# ---------------------------------------------------------------------------
+
+GAPFILL_TARGET = "ElektriciteitsgebruikTotaalWarmtepomp"
+GAPFILL_INPUTS = (
+    "ElektriciteitsgebruikBoilervatDiff",
+    "ElektriciteitsgebruikBoosterDiff",
+    "ElektriciteitsgebruikWarmtepompDiff",
+)
+
+
+class TestGapFillAPocOnARealCatalogRule:
+    HOLES = [2, 5, 7]
+
+    #: 0.01 + 0.02 + 0.03 = 0.06 kWh, within the column's declared Max.
+    PARTS = (0.01, 0.02, 0.03)
+    EXPECTED = 0.06
+
+    def _frame(self, n=10, delivered=0.50):
+        """A, B and D complete; C delivered with holes.
+
+        *delivered* defaults to a value that does NOT equal the sum, so the
+        comparison half of the test has something to find.
+        """
+        values = [delivered] * n
+        for i in self.HOLES:
+            values[i] = None
+        return _make_df({
+            GAPFILL_INPUTS[i]: pd.array([self.PARTS[i]] * n, dtype="Float64")
+            for i in range(3)
+        } | {GAPFILL_TARGET: pd.array(values, dtype="Float64")}, n=n)
+
+    def _plan(self, real_catalog, frame):
+        adapter = DatasetAdapter(real_catalog)
+        without = frame.drop(columns=[GAPFILL_TARGET])
+        plan, _ = adapter.execution_plan_for_available(
+            adapter.available_columns(without), {GAPFILL_TARGET}
+        )
+        return plan
+
+    def test_the_catalog_still_derives_the_target_from_these_inputs(
+        self, real_catalog
+    ):
+        # Guards the fixture: if the rule changes, this fails loudly rather
+        # than the rest of the class quietly testing nothing.
+        plan = self._plan(real_catalog, self._frame())
+        assert plan, f"catalog no longer derives {GAPFILL_TARGET} from its components"
+        _, expr = plan[0]
+        assert {str(s) for s in expr.free_symbols} == set(GAPFILL_INPUTS)
+
+    def test_today_the_delivered_column_is_not_a_target(self, real_catalog):
+        # The current two-state behaviour: available means untouched, so the
+        # holes stay. Gap-filling is a third state that does not exist yet.
+        frame = self._frame()
+        adapter = DatasetAdapter(real_catalog)
+        assert GAPFILL_TARGET in adapter.available_columns(frame)
+        result = add_calculated_columns_adaptive(frame.copy(), real_catalog)
+        assert int(result[GAPFILL_TARGET].isna().sum()) == len(self.HOLES)
+
+    def test_the_calculated_form_goes_in_a_separate_column(self, real_catalog):
+        import sympy as sp
+
+        from etdtransform.flags import ImputeType
+
+        frame = self._frame()
+        _, expr = self._plan(real_catalog, frame)[0]
+        symbols = sorted(expr.free_symbols, key=str)
+        computed = sp.lambdify([str(s) for s in symbols], expr)(
+            *[frame[str(s)] for s in symbols]
+        )
+
+        # A separate column: the delivered one is never written to.
+        calculated = f"{GAPFILL_TARGET}_calculated"
+        before = frame[GAPFILL_TARGET].copy()
+        frame[calculated] = pd.array(computed, dtype="Float64")
+
+        assert (
+            frame[GAPFILL_TARGET].fillna(-1) == before.fillna(-1)
+        ).all(), "the delivered column must not be touched"
+        # The calculated column has a value everywhere its inputs do,
+        # including on the delivered column's holes.
+        assert frame[calculated].notna().all()
+        for i in self.HOLES:
+            assert float(frame[calculated].iloc[i]) == pytest.approx(self.EXPECTED)
+
+        # Every cell of the calculated column is CALCULATED -- the whole
+        # column is derived, so nothing can be mistaken for delivered.
+        flags = pd.Series(
+            pd.array([ImputeType.CALCULATED.value] * len(frame), dtype="Int64")
+        )
+        assert ((flags & ImputeType.CALCULATED.value) != 0).all()
+
+    def test_where_both_exist_a_disagreement_is_visible(self, real_catalog):
+        """The second validation, from the same pass: the delivered value and
+        the rule's value can be compared wherever both are present."""
+        import sympy as sp
+
+        frame = self._frame(delivered=0.50)
+        _, expr = self._plan(real_catalog, frame)[0]
+        symbols = sorted(expr.free_symbols, key=str)
+        computed = sp.lambdify([str(s) for s in symbols], expr)(
+            *[frame[str(s)] for s in symbols]
+        )
+        both = frame[GAPFILL_TARGET].notna()
+        # Delivered 0.50 against components summing to 0.06.
+        disagree = both & ((computed - frame[GAPFILL_TARGET]).abs() > 1e-9)
+        assert int(disagree.sum()) == int(both.sum())
