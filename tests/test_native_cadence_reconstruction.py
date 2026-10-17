@@ -78,7 +78,9 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
 
 
 def _treated_and_imputed(df):
-    rows = _detect_frozen_spans_for_household(df, 1)
+    rows = _detect_frozen_spans_for_household(
+        df, 1, cadence=cadence_table(df, [CUM])
+    )
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
         df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])

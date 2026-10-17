@@ -85,7 +85,9 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
     df.loc[0, DIFF] = 0
     df[f"{DIFF}_avg"] = pd.array([NORMAL] * n, dtype="Float64")
 
-    rows = _detect_frozen_spans_for_household(df, hh)
+    rows = _detect_frozen_spans_for_household(
+        df, hh, cadence=cadence_table(df, [CUM])
+    )
     assert rows, "the fixture must produce a detected span"
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
