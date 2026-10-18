@@ -333,8 +333,8 @@ DESCRIPTIONS = {
         "DELIVERED_INTERVAL_IMPUTATION."
     ),
     "RESAMPLED_TO_GRID": (
-        "RESERVED. No stage sets this yet. The value is a redistribution of a "
-        "coarser delivered reading across the grid slots it covers."
+        "The value is a redistribution of a coarser delivered reading across "
+        "the grid slots it covers."
     ),
     "IN_GAP": (
         "RESERVED. No stage sets this yet. The cell was identified as sitting "

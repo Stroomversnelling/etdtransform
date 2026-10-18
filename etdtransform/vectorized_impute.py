@@ -19,6 +19,11 @@ from etdtransform.bounds import (
     usable_readings,
 )
 from etdtransform.flags import ImputeType
+from etdtransform.spread import (
+    cadence_with_column_at_grid,
+    spread_delivered_interval_to_grid,
+    spread_steps_by_household,
+)
 
 __all__ = [
     'ImputeType',
@@ -765,6 +770,28 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
     return report.reset_index()
 
 
+def _stamp_resampled(df, impute_type_col, spread_rows) -> None:
+    """
+    Record RESAMPLED_TO_GRID on the cells the upspread placed.
+
+    OR-ed, and run once the findings column exists: the fill routes assign into
+    a column ``setup_impute_columns`` has just created all-NA, so a bit written
+    before them would be replaced rather than kept. The spread itself has to
+    happen earlier, before the fill reads the column for what is missing, so the
+    mask is carried across the gap between the two.
+
+    No route can have claimed these cells in the meantime -- the spread left a
+    value in them and the routes fill empty ones.
+    """
+    if not bool(spread_rows.any()):
+        return
+
+    df.loc[spread_rows, impute_type_col] = (
+        df[impute_type_col].fillna(ImputeType.NONE.value)
+        | ImputeType.RESAMPLED_TO_GRID.value
+    )
+
+
 def impute_and_normalize(
     df: pd.DataFrame,
     cumulative_columns: list,
@@ -903,6 +930,32 @@ def impute_and_normalize(
 
         df[old_diff_col] = df[diff_col]
 
+        # A coarsely delivered interval is k slots of energy in a one-slot cell,
+        # so it is placed on the slots it covers before anything below reads the
+        # column as grid-cadence. Only where the variable arrived as intervals
+        # only: a register is authoritative and the cumulative logic reads it at
+        # its own cadence. Captured pre-spread in OldDiff above, so a comparison
+        # shows this pass placing the energy.
+        _spread_steps = spread_steps_by_household(cum_col, diff_col, _cadence)
+        _spread_rows = pd.Series(False, index=df.index)
+        if _spread_steps:
+            _spread = spread_delivered_interval_to_grid(
+                df, diff_col, _spread_steps
+            )
+            _spread_rows = _spread.notna()
+            df.loc[_spread_rows, diff_col] = _spread[_spread_rows]
+            # The values now report every grid row, so that is the interval every
+            # bound below has to judge them at. Local to this call: what happened
+            # to a column inside one pass is not a fact about the mapped data.
+            _cadence = cadence_with_column_at_grid(
+                _cadence, diff_col, _spread_steps
+            )
+            logging.info(
+                f"[impute] {diff_col}: spread {int(_spread_rows.sum())} cell(s) "
+                f"onto the grid for {len(_spread_steps)} household(s) "
+                f"delivered as intervals only."
+            )
+
         drop_temp_cols(df, logLeftoverError=True)
 
         # The no-delivered-no-fill rule: a (household, column) with zero
@@ -945,7 +998,11 @@ def impute_and_normalize(
             # Judged before the fill writes into the column: a delivered value
             # outside what the rules narrow its row to, while inside the bound
             # its own column declares, is a signal and is never touched.
-            delivered = usable_readings(df, diff_col)
+            #
+            # A spread cell is excluded. It holds a share of a reading the
+            # supplier did deliver, but not at this row, and the signal says the
+            # supplier delivered this value here.
+            delivered = usable_readings(df, diff_col) & ~_spread_rows
             declared_lo = column_bound(df, diff_col, _cadence, bound_key="Min")
             declared_hi = column_bound(df, diff_col, _cadence, bound_key="Max")
             inside_declared = ~(
@@ -1005,6 +1062,7 @@ def impute_and_normalize(
                 dtype="Int64",
                 index=df.index,
             )
+            _stamp_resampled(df, impute_type_col, _spread_rows)
             logging.info("Apply thresholds to remove physically impossible outliers")
             df = apply_thresholds(
                 df,
@@ -1055,6 +1113,7 @@ def impute_and_normalize(
                 cadence=_cadence,
                 volume_reports=volume_reports,
             )
+            _stamp_resampled(df, impute_type_col, _spread_rows)
             if volume_reports:
                 volume_reports[-1]["column"] = diff_col
                 # rule_expressions (the rules in force for this column) is a

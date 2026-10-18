@@ -177,13 +177,18 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
     Households absent from the table, or recorded with no cadence, are omitted;
     callers decide what an unknown cadence means for them.
 
+    *diff_col*'s own row wins. It is looked up under the variable it is paired
+    with as well, because cadence is measured on the columns as delivered and a
+    column derived later is not in the table under its own name -- but that is a
+    fallback for a column the table has nothing for, and must not override one
+    it does. A variable delivered as intervals only has a row for its absent
+    register too, carrying the grid, and letting that through would report the
+    delivered interval as reporting every slot.
+
     Parameters
     ----------
     diff_col : str
-        The column being asked about. It is looked up under its own name and
-        under the variable it is paired with, since cadence is measured on the
-        columns as delivered and a derived column is not there under its own
-        name.
+        The column being asked about.
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`: one row per
         (HuisIdBSV, column), with ``cadence_minutes`` holding the interval that
@@ -197,12 +202,16 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
     if cadence is None or cadence.empty:
         return {}
 
-    rows = cadence[cadence["column"].isin(cadence_lookup_names(diff_col))]
-    return {
-        int(r.HuisIdBSV): float(r.cadence_minutes)
-        for r in rows.itertuples()
-        if pd.notna(r.cadence_minutes)
-    }
+    def _minutes(names):
+        rows = cadence[cadence["column"].isin(names)]
+        return {
+            int(r.HuisIdBSV): float(r.cadence_minutes)
+            for r in rows.itertuples()
+            if pd.notna(r.cadence_minutes)
+        }
+
+    paired = [n for n in cadence_lookup_names(diff_col) if n != diff_col]
+    return {**_minutes(paired), **_minutes([diff_col])}
 
 
 def grid_bound(diff_col, bound_key="Max"):
@@ -568,6 +577,87 @@ def resample_to_grid(df, diff_col, cadence, grid_minutes):
     inside = covered >= 0
     placed.iloc[covered[inside]] = values[inside]
     return placed
+
+
+def delivered_by_household(column, cadence) -> dict:
+    """
+    Whether *column* itself carried delivered readings, per household.
+
+    Read from ``n_readings``, counted on the data as delivered before any fill.
+    A household with no row for *column*, or a row recording no readings, did
+    not have that form delivered.
+
+    The column's **own** row is the only one read. A variable delivered in both
+    forms has a row for each, and one delivered as intervals only still has a
+    row for its absent register, so resolving a column through the variable it
+    is paired with -- as :func:`cadence_minutes_by_household` does, for the
+    stages asking about a column derived later -- would report a delivery that
+    never happened.
+
+    Metadata, not data: a delivered register whose every reading is later
+    condemned still *was* delivered, and reading the values would say otherwise.
+
+    Parameters
+    ----------
+    column : str
+        The column name as delivered, e.g. a register or an interval column.
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`load_column_cadence`.
+
+    Returns
+    -------
+    dict
+        HuisIdBSV -> bool, for every household the table has a row for.
+    """
+    if cadence is None or cadence.empty:
+        return {}
+
+    # A table without the field cannot say what was delivered, which is the same
+    # state as a row that records no readings: not delivered. Reporting a
+    # delivery on no evidence would route a column down a path its data does not
+    # support, so the unknown resolves the safe way.
+    if "n_readings" not in cadence.columns:
+        return {}
+
+    rows = cadence[cadence["column"] == column]
+    return {
+        int(r.HuisIdBSV): bool(pd.notna(r.n_readings) and r.n_readings > 0)
+        for r in rows.itertuples()
+    }
+
+
+def grid_minutes_by_household(cadence, date_column="ReadingDate") -> dict:
+    """
+    The interval each household's rows sit on, in minutes.
+
+    ``detect_column_cadence`` measures the timestamp column alongside the data
+    columns, so its row carries the grid the household's batch declares -- the
+    spacing ``ensure_intervals`` padded that household to. Read from the table
+    rather than from a dataset-wide figure, because an aggregated dataset spans
+    batches and a household on a coarser grid would be judged against the finest
+    of them.
+
+    Parameters
+    ----------
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`load_column_cadence`.
+    date_column : str
+        Name of the timestamp column, whose row carries the grid.
+
+    Returns
+    -------
+    dict
+        HuisIdBSV -> minutes, omitting any household with no usable row.
+    """
+    if cadence is None or cadence.empty:
+        return {}
+
+    rows = cadence[cadence["column"] == date_column]
+    return {
+        int(r.HuisIdBSV): float(r.cadence_minutes)
+        for r in rows.itertuples()
+        if pd.notna(r.cadence_minutes) and float(r.cadence_minutes) > 0
+    }
 
 
 def _offsets_within(spans):
