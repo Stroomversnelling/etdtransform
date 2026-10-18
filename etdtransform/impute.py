@@ -145,6 +145,15 @@ def assert_bounds_not_inverted(diff_col, cadence) -> None:
     Every cadence recorded for the column is checked, together with the declared
     pair, which is what a household with no recorded cadence is judged against.
     Metadata only, so this costs nothing per row.
+
+    Parameters
+    ----------
+    diff_col : str
+        The column whose bounds are checked.
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`etdtransform.bounds.load_column_cadence`.
+        Every distinct ``cadence_minutes`` recorded for *diff_col* is one
+        interval the column will be judged at, so each is checked here.
     """
     declared = thresholds_dict.get(diff_col, {})
     cadences = sorted(

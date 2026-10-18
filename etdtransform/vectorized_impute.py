@@ -268,6 +268,13 @@ def _row_bounds_per_cadence(
     Returns ``(lo, hi, from_imputed)`` aligned to ``df.index``, as
     :func:`etdtransform.constraints.narrow_bounds_by_row` returns them per
     group.
+
+    *cadence* is the table from
+    :func:`etdtransform.bounds.load_column_cadence`: one row per
+    (HuisIdBSV, column), with ``cadence_minutes`` holding the interval that
+    column's readings cover. It supplies one of the three axes the frame is
+    grouped on, so a household reporting at a different interval from its
+    neighbour is narrowed with its own package.
     """
     from etdtransform.constraints import (
         build_constraint_package,

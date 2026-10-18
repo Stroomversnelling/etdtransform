@@ -176,6 +176,23 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
 
     Households absent from the table, or recorded with no cadence, are omitted;
     callers decide what an unknown cadence means for them.
+
+    Parameters
+    ----------
+    diff_col : str
+        The column being asked about. It is looked up under its own name and
+        under the variable it is paired with, since cadence is measured on the
+        columns as delivered and a derived column is not there under its own
+        name.
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`load_column_cadence`: one row per
+        (HuisIdBSV, column), with ``cadence_minutes`` holding the interval that
+        column's readings cover. None or empty resolves nothing.
+
+    Returns
+    -------
+    dict
+        HuisIdBSV -> minutes.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -204,6 +221,22 @@ def column_bound_by_household(diff_col, cadence, bound_key="Max") -> dict:
 
     Households absent from the cadence table are omitted; they take the declared
     threshold, which :func:`grid_bound` returns.
+
+    Parameters
+    ----------
+    diff_col : str
+        The column being bounded.
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`load_column_cadence`. Each household's
+        bound is the declared threshold scaled to the interval its readings of
+        *diff_col* cover.
+    bound_key : str
+        ``"Max"`` or ``"Min"``.
+
+    Returns
+    -------
+    dict
+        HuisIdBSV -> bound.
     """
     declared = thresholds_dict.get(diff_col, {})
     index = 0 if bound_key == "Min" else 1
