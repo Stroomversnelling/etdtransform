@@ -47,7 +47,7 @@ FILL_ROUTES = (
     ImputeType.UNIFORM_FILL,
     ImputeType.SCALED_FILL,
     ImputeType.HOUSEHOLD_SCALED_AVERAGE,
-    ImputeType.NOT_FILLED,
+    ImputeType.GAP_NOT_FILLED,
 )
 
 

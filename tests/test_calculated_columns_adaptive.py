@@ -702,12 +702,12 @@ class TestGapFillAPocOnARealCatalogRule:
         for i in self.HOLES:
             assert float(frame[calculated].iloc[i]) == pytest.approx(self.EXPECTED)
 
-        # Every cell of the calculated column is CALCULATED -- the whole
+        # Every cell of the calculated column is CALCULATED_COLUMN -- the whole
         # column is derived, so nothing can be mistaken for delivered.
         flags = pd.Series(
-            pd.array([ImputeType.CALCULATED.value] * len(frame), dtype="Int64")
+            pd.array([ImputeType.CALCULATED_COLUMN.value] * len(frame), dtype="Int64")
         )
-        assert ((flags & ImputeType.CALCULATED.value) != 0).all()
+        assert ((flags & ImputeType.CALCULATED_COLUMN.value) != 0).all()
 
     def test_where_both_exist_a_disagreement_is_visible(self, real_catalog):
         """The second validation, from the same pass: the delivered value and

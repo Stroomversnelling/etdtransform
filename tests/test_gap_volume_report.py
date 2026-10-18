@@ -216,7 +216,7 @@ class TestTheGapBitsReduction:
                 ImputeType.CLIPPED.value,
                 ImputeType.UNIFORM_FILL.value,
                 ImputeType.INFEASIBLE_GAP.value,
-                ImputeType.NOT_FILLED.value,
+                ImputeType.GAP_NOT_FILLED.value,
             ],
             [1, 1, 2, 2, 3],
         )
@@ -244,7 +244,7 @@ class TestTheGapBitsReduction:
     def test_single_row_gaps_only(self):
         self._assert_agrees(
             [ImputeType.SCALED_FILL.value, ImputeType.CLIPPED.value,
-             ImputeType.NOT_FILLED.value],
+             ImputeType.GAP_NOT_FILLED.value],
             [1, 2, 3],
         )
 

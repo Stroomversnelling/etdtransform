@@ -118,7 +118,7 @@ class TestOnlyOneBoundReading:
         out = _impute(_frame([pd.NA, pd.NA, 0.0, 1.0], [1.0] * 4))
         assert out.loc[0:2, DIFF].isna().all()
         _expect(out, slice(0, 2), ImputeType.ZERO_END_VALUE,
-                ImputeType.ONLY_CLOSING_READING, ImputeType.NOT_FILLED)
+                ImputeType.ONLY_CLOSING_READING, ImputeType.GAP_NOT_FILLED)
 
     def test_a_positive_closing_reading_with_no_evidence_fills_nothing(self):
         """Too few comparable rows for a household factor, so the same rule as
@@ -128,7 +128,7 @@ class TestOnlyOneBoundReading:
         _expect(
             out, slice(0, 2),
             ImputeType.POSITIVE_END_VALUE, ImputeType.ONLY_CLOSING_READING,
-            ImputeType.NOT_FILLED,
+            ImputeType.GAP_NOT_FILLED,
         )
 
     def test_a_closing_reading_scales_by_the_household(self):
@@ -172,14 +172,14 @@ class TestOnlyOneBoundReading:
         """Too few comparable rows, so the factor would fall back to 1.0.
 
         Nothing measured bounds this gap, so no value is written and the
-        condition is recorded alongside NOT_FILLED.
+        condition is recorded alongside GAP_NOT_FILLED.
         """
         cumulative = [10.0] + [pd.NA] * 5
         out = _impute(_frame(cumulative, [1.0] * 6))
         _expect(
             out, slice(1, 5),
             ImputeType.NO_END_VALUE, ImputeType.ONLY_OPENING_READING,
-            ImputeType.NOT_FILLED,
+            ImputeType.GAP_NOT_FILLED,
         )
         assert out.loc[1:5, DIFF].isna().all(), (
             "a gap with no closing reading and no household evidence was filled"
@@ -210,7 +210,7 @@ class TestNoCumulativeAtAll:
         assert gap.isna().all(), "a gap with no cumulative bound was filled"
         _expect(
             out, slice(4, 7),
-            ImputeType.NO_CUMULATIVE_VALUE, ImputeType.NOT_FILLED,
+            ImputeType.NO_CUMULATIVE_VALUE, ImputeType.GAP_NOT_FILLED,
         )
 
     def test_a_household_with_only_a_seed_zero_is_not_interval_delivery(self):
@@ -233,14 +233,14 @@ class TestActionsWithoutAConditionOfTheirOwn:
     def test_a_cell_no_branch_wrote_to_carries_not_filled(self):
         """No average anywhere and no closing reading: nothing can be computed.
 
-        Row 0 is excluded from NOT_FILLED by design -- it bounds no gap -- so
+        Row 0 is excluded from GAP_NOT_FILLED by design -- it bounds no gap -- so
         the flag is asserted from row 1 on.
         """
         out = _impute(_frame([pd.NA, pd.NA, 5.0, pd.NA, pd.NA, pd.NA], [pd.NA] * 6))
         unfilled = out.index[out[DIFF].isna() & out[ITYPE].notna()]
         assert len(unfilled) > 0, "expected at least one unfilled gap cell"
         for value in out.loc[unfilled, ITYPE]:
-            assert int(value) & ImputeType.NOT_FILLED.value
+            assert int(value) & ImputeType.GAP_NOT_FILLED.value
 
     def test_the_threshold_pass_records_the_condition_and_its_action(self):
         """Out of bounds is the condition; substituting the average is the
@@ -250,10 +250,10 @@ class TestActionsWithoutAConditionOfTheirOwn:
         violated = [t for t in types if t & ImputeType.THRESHOLD_VIOLATED.value]
         assert violated, "an over-bound fill was not marked THRESHOLD_VIOLATED"
         for value in violated:
-            assert value & ImputeType.FILLED.value, (
+            assert value & ImputeType.GAP_FILLED.value, (
                 "the fill that produced the value is no longer in the history"
             )
-            assert not (value & ImputeType.NOT_FILLED.value)
+            assert not (value & ImputeType.GAP_NOT_FILLED.value)
             # The substitute is the project average as it stands: the threshold
             # pass has no household factor to scale it by. It is now the only
             # producer of this flag.
@@ -262,7 +262,7 @@ class TestActionsWithoutAConditionOfTheirOwn:
     def test_the_threshold_pass_records_a_blanking_separately(self):
         """With no average to substitute, the pass blanks the value. That is a
         different action from substituting one, and from imputation's own
-        NULLED."""
+        GAP_NULLED."""
         out = _impute(_frame([100.0, pd.NA, pd.NA, 112.0], [pd.NA] * 4))
         blanked = out.loc[1:3, DIFF].isna()
         types = [int(v) for v in out.loc[1:3, ITYPE].dropna()]
@@ -313,10 +313,25 @@ def _members_mentioned_in_tests(class_name):
 # Vocabulary declared ahead of its producer: the meaning is fixed in
 # DESCRIPTIONS, but nothing writes the flag yet. A member leaves this set the
 # moment a producer test names it -- the honesty test below fails and says so.
-# NULLED: the value-blanking action of the imputation's exclusive triple
-# (FILLED, NOT_FILLED, NULLED); every live blanking today happens in mapping
-# or in the threshold pass, which record themselves differently.
-UNPRODUCED = {"NULLED"}
+# GAP_NULLED: the value-blanking action of the imputation's exclusive triple
+# (GAP_FILLED, GAP_NOT_FILLED, GAP_NULLED); every live blanking today happens
+# in mapping or in the threshold pass, which record themselves differently.
+# The rest have no writer anywhere in the pipeline: each one's DESCRIPTIONS
+# entry opens with RESERVED and says what sets it, so the reason for the
+# exemption is recorded once, beside the meaning.
+UNPRODUCED = {
+    "GAP_NULLED",
+    "DELIVERED_INTERVAL_IMPUTATION",
+    "DELIVERED_CUMULATIVE_IMPUTATION",
+    "RESAMPLED_TO_GRID",
+    "IN_GAP",
+    "CALCULATED_FROM_ROW_FORMULA",
+    "CALCULATED_FROM_HARD_KNOWNS",
+    "CALCULATED_FROM_SOFT_KNOWNS",
+    "CALCULATED_RULE_BOUND_FROM_HARD_KNOWNS",
+    "NO_AVERAGE_SHAPE",
+    "SPARSE_AVERAGE",
+}
 
 
 class TestEveryMemberIsCovered:

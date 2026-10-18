@@ -198,7 +198,7 @@ class TestJitterCandidate:
     def test_the_signal_changes_no_fill_behaviour(self):
         out, _ = self._run(1.0, 0.99)
         assert pd.isna(out.loc[2, DIFF])
-        assert _flags(out, 2) & ImputeType.NOT_FILLED.value
+        assert _flags(out, 2) & ImputeType.GAP_NOT_FILLED.value
         for row in (1, 3):
             assert pd.notna(out.loc[row, DIFF])
 

@@ -71,7 +71,7 @@ class TestTheStatsDescribeTheFill:
     def test_imputed_counts_the_cells_a_value_was_written_into(self, conserved):
         """Four interval cells arrived empty and all four were filled, so all
         four count. What must not be counted is a cell left empty, which still
-        carries NOT_FILLED -- counting types is what made `imputed` equal
+        carries GAP_NOT_FILLED -- counting types is what made `imputed` equal
         `missing` on every row of both household sidecars."""
         filled, stats = conserved
         assert int(stats.iloc[0]["imputed"]) == 4

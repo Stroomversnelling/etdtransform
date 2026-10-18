@@ -4,9 +4,9 @@ A signal names the condition a cell was in. An action names what imputation did
 about it.
 
 Imputation does exactly one thing to any cell: it writes a value, writes
-nothing, or blanks it. So exactly one of FILLED, NOT_FILLED, NULLED applies.
+nothing, or blanks it. So exactly one of GAP_FILLED, GAP_NOT_FILLED, GAP_NULLED applies.
 The threshold pass runs afterwards and records its own action separately, which
-is why a cell can read FILLED and NULLED_POST_IMPUTATION at once -- that is the
+is why a cell can read GAP_FILLED and NULLED_POST_IMPUTATION at once -- that is the
 history, not a contradiction.
 """
 
@@ -33,11 +33,11 @@ class TestTheTaxonomyIsComplete:
 
 
 class TestFilledIsTheComplementOfNotFilled:
-    """FILLED collects the actions that wrote a value, so a reader can select
+    """GAP_FILLED collects the actions that wrote a value, so a reader can select
     cells carrying an imputed number without naming every fill method."""
 
     def test_filled_is_the_value_writing_actions(self):
-        assert ImputeType.FILLED == (
+        assert ImputeType.GAP_FILLED == (
             ImputeType.UNIFORM_FILL
             | ImputeType.SCALED_FILL
             | ImputeType.ZERO_FILL
@@ -46,11 +46,11 @@ class TestFilledIsTheComplementOfNotFilled:
         )
 
     def test_filled_excludes_not_filled(self):
-        assert not (ImputeType.FILLED & ImputeType.NOT_FILLED)
+        assert not (ImputeType.GAP_FILLED & ImputeType.GAP_NOT_FILLED)
 
     def test_filled_excludes_the_blanking_actions(self):
-        assert not (ImputeType.FILLED & ImputeType.NULLED)
-        assert not (ImputeType.FILLED & ImputeType.NULLED_POST_IMPUTATION)
+        assert not (ImputeType.GAP_FILLED & ImputeType.GAP_NULLED)
+        assert not (ImputeType.GAP_FILLED & ImputeType.NULLED_POST_IMPUTATION)
 
     @pytest.mark.parametrize("method", [
         ImputeType.UNIFORM_FILL,
@@ -60,18 +60,18 @@ class TestFilledIsTheComplementOfNotFilled:
         ImputeType.HOUSEHOLD_SCALED_AVERAGE,
     ])
     def test_each_fill_method_reaches_filled(self, method):
-        assert method & ImputeType.FILLED
+        assert method & ImputeType.GAP_FILLED
 
 
 class TestImputedValue:
     """Every cell imputation changed, whichever way it changed it."""
 
     def test_it_excludes_not_filled(self):
-        assert not (ImputeType.IMPUTED_VALUE & ImputeType.NOT_FILLED)
+        assert not (ImputeType.IMPUTED_VALUE & ImputeType.GAP_NOT_FILLED)
 
     def test_it_covers_the_fill_methods_and_the_blanking(self):
-        assert ImputeType.FILLED & ImputeType.IMPUTED_VALUE
-        assert ImputeType.NULLED & ImputeType.IMPUTED_VALUE
+        assert ImputeType.GAP_FILLED & ImputeType.IMPUTED_VALUE
+        assert ImputeType.GAP_NULLED & ImputeType.IMPUTED_VALUE
         assert ImputeType.NULLED_POST_IMPUTATION & ImputeType.IMPUTED_VALUE
 
 
@@ -91,9 +91,9 @@ class TestTheThresholdPassIsSeparate:
             | ImputeType.THRESHOLD_VIOLATED
             | ImputeType.NULLED_POST_IMPUTATION
         )
-        assert recorded & ImputeType.FILLED, "the fill is still in the history"
+        assert recorded & ImputeType.GAP_FILLED, "the fill is still in the history"
         assert recorded & ImputeType.NULLED_POST_IMPUTATION
-        assert not (recorded & ImputeType.NOT_FILLED)
+        assert not (recorded & ImputeType.GAP_NOT_FILLED)
 
 
 class TestValuesAreStable:
@@ -126,8 +126,8 @@ class TestValuesAreStable:
     def test_new_members_were_appended(self):
         for name in ("NO_CUMULATIVE_VALUE", "ONLY_CLOSING_READING",
                      "ONLY_OPENING_READING",
-                     "THRESHOLD_VIOLATED", "NULLED", "NULLED_POST_IMPUTATION"):
-            assert ImputeType[name].value > ImputeType.NOT_FILLED.value, (
+                     "THRESHOLD_VIOLATED", "GAP_NULLED", "NULLED_POST_IMPUTATION"):
+            assert ImputeType[name].value > ImputeType.GAP_NOT_FILLED.value, (
                 f"{name} was inserted rather than appended, which renumbers "
                 f"every member after it"
             )
@@ -150,9 +150,9 @@ class TestTheCategoriesAreDeclaredNotDescribed:
         assert not (ImputeType.SIGNALS & ImputeType.ACTIONS)
 
     def test_the_action_composites_hold_only_actions(self):
-        """FILLED and IMPUTED_VALUE select what was written, so a signal in
+        """GAP_FILLED and IMPUTED_VALUE select what was written, so a signal in
         either would select cells nothing was written to."""
-        assert not (ImputeType.FILLED & ImputeType.SIGNALS)
+        assert not (ImputeType.GAP_FILLED & ImputeType.SIGNALS)
         assert not (ImputeType.IMPUTED_VALUE & ImputeType.SIGNALS)
 
 class TestEveryMemberHasAMeaning:

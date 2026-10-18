@@ -1,6 +1,6 @@
 """The flags the calculated stage writes.
 
-``CALCULATED`` marks a cell as produced by a catalog formula rather than
+``CALCULATED_COLUMN`` marks a cell as produced by a catalog formula rather than
 measured -- which cannot be read from a sidecar, because the derivation is
 decided per household and the question is about a cell.
 ``CALCULATED_THRESHOLD_VIOLATED`` marks it as outside the column's declared
@@ -45,7 +45,7 @@ class TestCalculatedMark:
         df = scan_calculated_columns(
             _frame([1.0, 2.0, 3.0]), [COLUMN], grid_minutes=5
         )
-        assert ((_flags(df) & ImputeType.CALCULATED.value) != 0).all()
+        assert ((_flags(df) & ImputeType.CALCULATED_COLUMN.value) != 0).all()
 
     def test_a_missing_cell_is_not_marked(self):
         # Nothing was calculated there, and an absent value cannot be out of
@@ -53,7 +53,7 @@ class TestCalculatedMark:
         df = scan_calculated_columns(
             _frame([1.0, pd.NA, 3.0]), [COLUMN], grid_minutes=5
         )
-        marked = (_flags(df) & ImputeType.CALCULATED.value) != 0
+        marked = (_flags(df) & ImputeType.CALCULATED_COLUMN.value) != 0
         assert list(marked) == [True, False, True]
 
     def test_existing_flags_are_kept(self):
@@ -64,7 +64,7 @@ class TestCalculatedMark:
         )
         df = scan_calculated_columns(df, [COLUMN], grid_minutes=5)
         assert bool(_flags(df).iloc[0] & ImputeType.SCALED_FILL.value)
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)
 
     def test_a_column_not_in_the_frame_is_skipped(self):
         df = scan_calculated_columns(
@@ -84,7 +84,7 @@ class TestThresholdViolation:
 
     def test_a_violating_cell_is_also_marked_calculated(self):
         df = scan_calculated_columns(_frame([-0.5]), [COLUMN], grid_minutes=5)
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)
         assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_THRESHOLD_VIOLATED.value)
 
     def test_a_missing_cell_is_never_a_violation(self):
@@ -195,7 +195,7 @@ class TestHardVersusSoftKnowns:
         flags = _flags(df).iloc[0]
         assert bool(flags & ImputeType.CALCULATED_OUTSIDE_RULE_BOUND.value)
         assert not bool(
-            flags & ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED.value
+            flags & ImputeType.CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS.value
         ), "nothing in this frame was filled, so no bound can rest on a fill"
 
     def test_imputed_masks_are_read_from_the_is_imputed_columns(self):
@@ -266,7 +266,7 @@ class TestUndefinedCalculation:
     def test_an_undefined_cell_is_not_marked_calculated(self):
         # Nothing was calculated there: the cell holds no value.
         df = scan_calculated_columns(_frame([pd.NA]), [COLUMN], grid_minutes=5)
-        assert int((_flags(df) & ImputeType.CALCULATED.value).sum()) == 0
+        assert int((_flags(df) & ImputeType.CALCULATED_COLUMN.value).sum()) == 0
 
     def test_undefined_is_a_signal_not_an_action(self):
         assert bool(ImputeType.CALCULATED_UNDEFINED & ImputeType.SIGNALS)
@@ -349,18 +349,18 @@ class TestDeriveFromRuleBound:
             ImputeType.CALCULATED_FROM_RULE_BOUND & ImputeType.IMPUTED_VALUE
         )
         assert (ImputeType.CALCULATED_FROM_RULE_BOUND.value
-                != ImputeType.CALCULATED.value)
+                != ImputeType.CALCULATED_COLUMN.value)
 
     def test_existing_flags_survive(self):
         from etdtransform.calculated_flags import derive_from_rule_bound
 
         df = _frame([pd.NA])
         df[impute_type_column(COLUMN)] = pd.array(
-            [ImputeType.NOT_FILLED.value], dtype="Int64"
+            [ImputeType.GAP_NOT_FILLED.value], dtype="Int64"
         )
         df, _ = derive_from_rule_bound(df, [COLUMN], self._package(0.4, 0.4))
         flags = _flags(df)
-        assert bool(flags.iloc[0] & ImputeType.NOT_FILLED.value)
+        assert bool(flags.iloc[0] & ImputeType.GAP_NOT_FILLED.value)
         assert bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
 
 
@@ -369,7 +369,7 @@ class TestCalculatedValueComposite:
     produced it. The counterpart of IMPUTED_VALUE."""
 
     def test_it_covers_both_routes(self):
-        assert bool(ImputeType.CALCULATED_VALUE & ImputeType.CALCULATED)
+        assert bool(ImputeType.CALCULATED_VALUE & ImputeType.CALCULATED_COLUMN)
         assert bool(
             ImputeType.CALCULATED_VALUE & ImputeType.CALCULATED_FROM_RULE_BOUND
         )
@@ -382,7 +382,7 @@ class TestCalculatedValueComposite:
         for signal in (
             ImputeType.CALCULATED_THRESHOLD_VIOLATED,
             ImputeType.CALCULATED_OUTSIDE_RULE_BOUND,
-            ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED,
+            ImputeType.CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS,
             ImputeType.CALCULATED_UNDEFINED,
         ):
             assert not bool(ImputeType.CALCULATED_VALUE & signal)
@@ -459,7 +459,7 @@ class TestFillFromFormula:
         )
         assert filled == {COLUMN: 1}
         assert float(df[COLUMN].iloc[0]) == pytest.approx(0.3)
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)
         assert int(plan["cells_filled"].iloc[0]) == 1
 
     def test_a_row_missing_an_input_is_left_alone(self):
@@ -488,8 +488,8 @@ class TestFillFromFormula:
         assert float(df[COLUMN].iloc[0]) == pytest.approx(0.9)
         assert float(df[COLUMN].iloc[1]) == pytest.approx(0.3)
         flags = _flags(df)
-        assert not bool(flags.iloc[0] & ImputeType.CALCULATED.value)
-        assert bool(flags.iloc[1] & ImputeType.CALCULATED.value)
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
+        assert bool(flags.iloc[1] & ImputeType.CALCULATED_COLUMN.value)
 
     def test_a_value_outside_the_rows_rule_bound_is_rejected(self):
         from etdtransform.calculated_flags import fill_from_formula
@@ -627,10 +627,10 @@ class TestFillCalculatedGaps:
         assert report["from_rule_bound"] == {COLUMN: 1}
         assert report["cells"] == 2
         flags = _flags(df)
-        assert bool(flags.iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
         assert not bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
         assert bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
-        assert not bool(flags.iloc[1] & ImputeType.CALCULATED.value)
+        assert not bool(flags.iloc[1] & ImputeType.CALCULATED_COLUMN.value)
 
     def test_every_filled_cell_answers_to_the_composite(self):
         from etdtransform.calculated_flags import fill_calculated_gaps
@@ -746,4 +746,4 @@ class TestFillCalculatedGaps:
             TestDeriveFromRuleBound._package(0.4, 0.4),
         )
         assert report["from_rule_bound"] == {}
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED.value)
+        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)

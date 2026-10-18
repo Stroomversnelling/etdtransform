@@ -56,7 +56,7 @@ class ImputeType(IntFlag):
     ZERO_FILL = auto()
     UNSCALED_AVERAGE = auto()
     HOUSEHOLD_SCALED_AVERAGE = auto()
-    NOT_FILLED = auto()
+    GAP_NOT_FILLED = auto()
 
     # --- appended: signals ---
 
@@ -68,7 +68,7 @@ class ImputeType(IntFlag):
 
     # --- appended: actions ---
 
-    NULLED = auto()
+    GAP_NULLED = auto()
 
     NULLED_POST_IMPUTATION = auto()
 
@@ -102,7 +102,7 @@ class ImputeType(IntFlag):
 
     # --- appended: actions, written by the calculated stage ---
 
-    CALCULATED = auto()
+    CALCULATED_COLUMN = auto()
 
     # --- appended: signals, written by the calculated stage ---
 
@@ -110,13 +110,48 @@ class ImputeType(IntFlag):
 
     CALCULATED_OUTSIDE_RULE_BOUND = auto()
 
-    CALCULATED_RULE_BOUND_FROM_IMPUTED = auto()
+    CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS = auto()
 
     CALCULATED_UNDEFINED = auto()
 
     # --- appended: actions, written by the calculated stage ---
 
     CALCULATED_FROM_RULE_BOUND = auto()
+
+    # --- appended: signals, which branch of the fill resolved the cell ---
+
+    # Exactly one of the two is set on every cell imputation routed, so a cell
+    # carrying neither is one imputation did not reach. Both say which branch
+    # ran and nothing about the outcome, which the action flags carry.
+    DELIVERED_INTERVAL_IMPUTATION = auto()
+
+    DELIVERED_CUMULATIVE_IMPUTATION = auto()
+
+    # --- appended: actions ---
+
+    RESAMPLED_TO_GRID = auto()
+
+    # --- appended: signals ---
+
+    IN_GAP = auto()
+
+    # --- appended: actions, written by the calculated stage ---
+
+    CALCULATED_FROM_ROW_FORMULA = auto()
+
+    # --- appended: signals, written by the calculated stage ---
+
+    CALCULATED_FROM_HARD_KNOWNS = auto()
+
+    CALCULATED_FROM_SOFT_KNOWNS = auto()
+
+    CALCULATED_RULE_BOUND_FROM_HARD_KNOWNS = auto()
+
+    # --- appended: signals ---
+
+    NO_AVERAGE_SHAPE = auto()
+
+    SPARSE_AVERAGE = auto()
 
     # --- composites ---
 
@@ -140,8 +175,16 @@ class ImputeType(IntFlag):
         | JITTER_CANDIDATE
         | CALCULATED_THRESHOLD_VIOLATED
         | CALCULATED_OUTSIDE_RULE_BOUND
-        | CALCULATED_RULE_BOUND_FROM_IMPUTED
+        | CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS
         | CALCULATED_UNDEFINED
+        | DELIVERED_INTERVAL_IMPUTATION
+        | DELIVERED_CUMULATIVE_IMPUTATION
+        | IN_GAP
+        | CALCULATED_FROM_HARD_KNOWNS
+        | CALCULATED_FROM_SOFT_KNOWNS
+        | CALCULATED_RULE_BOUND_FROM_HARD_KNOWNS
+        | NO_AVERAGE_SHAPE
+        | SPARSE_AVERAGE
     )
     ACTIONS = (
         UNIFORM_FILL
@@ -149,17 +192,19 @@ class ImputeType(IntFlag):
         | ZERO_FILL
         | UNSCALED_AVERAGE
         | HOUSEHOLD_SCALED_AVERAGE
-        | NOT_FILLED
-        | NULLED
+        | GAP_NOT_FILLED
+        | GAP_NULLED
         | NULLED_POST_IMPUTATION
         | CLIPPED
         | CLIPPED_REDISTRIBUTION
         | UNIFORM_RESIDUAL
-        | CALCULATED
+        | CALCULATED_COLUMN
         | CALCULATED_FROM_RULE_BOUND
+        | RESAMPLED_TO_GRID
+        | CALCULATED_FROM_ROW_FORMULA
     )
 
-    FILLED = (
+    GAP_FILLED = (
         UNIFORM_FILL
         | SCALED_FILL
         | ZERO_FILL
@@ -168,22 +213,35 @@ class ImputeType(IntFlag):
     )
 
     IMPUTED_VALUE = (
-        FILLED
-        | NULLED
+        GAP_FILLED
+        | GAP_NULLED
         | NULLED_POST_IMPUTATION
         | CLIPPED
         | CLIPPED_REDISTRIBUTION
         | UNIFORM_RESIDUAL
     )
 
-    #: Every cell whose value the calculation stage produced, by either route:
-    #: evaluating a catalog formula, or taking the single value the rules
-    #: narrow its row to. The counterpart of IMPUTED_VALUE, and what a
+    #: Every cell whose value the calculation stage produced, by any of its
+    #: three routes: deriving a whole column from a catalog formula, filling one
+    #: cell from a formula chosen for that row, or taking the single value the
+    #: rules narrow the row to. The counterpart of IMPUTED_VALUE, and what a
     #: downstream filter tests to separate calculated values from delivered
     #: ones without needing to know which route produced each cell.
     CALCULATED_VALUE = (
-        CALCULATED
+        CALCULATED_COLUMN
+        | CALCULATED_FROM_ROW_FORMULA
         | CALCULATED_FROM_RULE_BOUND
+    )
+
+    #: Not a measurement of this variable in this interval, for the stages after
+    #: mapping: a value these stages wrote, or one they removed. The counterpart
+    #: of MappingFlag.NOT_A_MEASUREMENT, and it follows that composite in
+    #: including the blanking actions rather than only the writes.
+    NOT_A_MEASUREMENT_IMPUTED = (
+        GAP_FILLED
+        | CALCULATED_VALUE
+        | GAP_NULLED
+        | NULLED_POST_IMPUTATION
     )
 
 DESCRIPTIONS = {
@@ -198,11 +256,11 @@ DESCRIPTIONS = {
     "ZERO_FILL": "A zero written into the cell.",
     "UNSCALED_AVERAGE": "The project average, unscaled.",
     "HOUSEHOLD_SCALED_AVERAGE": "The project average, multiplied by this household's own factor.",
-    "NOT_FILLED": "A cell inside a gap that holds no value.",
+    "GAP_NOT_FILLED": "A cell inside a gap that holds no value.",
     "ONLY_CLOSING_READING": "Only the closing cumulative reading bounds the gap.",
     "ONLY_OPENING_READING": "Only the opening cumulative reading bounds the gap.",
     "THRESHOLD_VIOLATED": "The value lies outside the bound it is judged against.",
-    "NULLED": "A value imputation blanked.",
+    "GAP_NULLED": "A value imputation blanked.",
     "NULLED_POST_IMPUTATION": "An imputed value that was blanked.",
     "NO_CUMULATIVE_VALUE": "Neither end of the gap has a cumulative reading.",
     "CLIPPED": "A filled value moved to the edge of its narrowed bound.",
@@ -236,10 +294,10 @@ DESCRIPTIONS = {
         "An empty bound whose contradiction is at metering resolution -- a "
         "candidate measurement-jitter conflict, marked for assessment."
     ),
-    "CALCULATED": (
-        "The value was produced by evaluating a catalog formula, not "
-        "measured. Which formula, per household, is the calculated stage's "
-        "derivation_plan and household_derivation sidecars."
+    "CALCULATED_COLUMN": (
+        "The value was produced by deriving the whole column from a catalog "
+        "formula, not measured. Which formula, per household, is the "
+        "calculated stage's derivation_plan and household_derivation sidecars."
     ),
     "CALCULATED_THRESHOLD_VIOLATED": (
         "A calculated value outside its own column's threshold, scaled to the "
@@ -256,14 +314,57 @@ DESCRIPTIONS = {
         "value -- a ratio whose denominator is zero. Distinct from a missing "
         "input: the data is there and the formula does not apply to the row."
     ),
-    "CALCULATED_RULE_BOUND_FROM_IMPUTED": (
+    "CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS": (
         "The rule bound this calculated cell was judged against rests partly "
-        "on cells the fill wrote. Absent alongside "
-        "CALCULATED_OUTSIDE_RULE_BOUND means the contradiction stands on "
-        "measurements alone, which is the stronger signal."
+        "on cells the pipeline wrote rather than on delivered values."
     ),
     "CALCULATED_OUTSIDE_RULE_BOUND": (
         "A calculated value outside the bound the rules narrow its row to "
         "using the other values known in that row."
+    ),
+    "DELIVERED_INTERVAL_IMPUTATION": (
+        "RESERVED. No stage sets this yet. The cell was resolved on the "
+        "delivered-interval branch of the fill. Says which branch ran, not "
+        "what it did: the action flags carry the outcome."
+    ),
+    "DELIVERED_CUMULATIVE_IMPUTATION": (
+        "RESERVED. No stage sets this yet. The cell was resolved on the "
+        "delivered-cumulative branch of the fill, the complement of "
+        "DELIVERED_INTERVAL_IMPUTATION."
+    ),
+    "RESAMPLED_TO_GRID": (
+        "RESERVED. No stage sets this yet. The value is a redistribution of a "
+        "coarser delivered reading across the grid slots it covers."
+    ),
+    "IN_GAP": (
+        "RESERVED. No stage sets this yet. The cell was identified as sitting "
+        "inside a gap, whatever the fill then did about it."
+    ),
+    "CALCULATED_FROM_ROW_FORMULA": (
+        "RESERVED. No stage sets this yet. An empty cell filled from a "
+        "formula chosen for that row, rather than by deriving the whole "
+        "column. Which formula is the calculation_fill_plan sidecar."
+    ),
+    "CALCULATED_FROM_HARD_KNOWNS": (
+        "RESERVED. No stage sets this yet. Every input the formula read was a "
+        "value the supplier delivered."
+    ),
+    "CALCULATED_FROM_SOFT_KNOWNS": (
+        "RESERVED. No stage sets this yet. At least one input the formula "
+        "read was a plausible value the pipeline wrote rather than a "
+        "delivered one."
+    ),
+    "CALCULATED_RULE_BOUND_FROM_HARD_KNOWNS": (
+        "RESERVED. No stage sets this yet. The rule bound this calculated "
+        "cell was judged against rests on delivered values alone, the "
+        "complement of CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS."
+    ),
+    "NO_AVERAGE_SHAPE": (
+        "RESERVED. No stage sets this yet. No project average was available "
+        "to shape the fill across the gap."
+    ),
+    "SPARSE_AVERAGE": (
+        "RESERVED. No stage sets this yet. The average the fill used was "
+        "built from one or two contributing households."
     ),
 }

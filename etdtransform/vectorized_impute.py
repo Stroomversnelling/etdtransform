@@ -1079,7 +1079,7 @@ def impute_and_normalize(
         # `imputed` is the cells this run wrote a value into; `imputed_na` is the
         # cells inside a gap it left empty. Counting non-null impute_type counts
         # every gap cell instead, because a cell left empty still carries
-        # NOT_FILLED -- which is what made `imputed` equal `missing`.
+        # GAP_NOT_FILLED -- which is what made `imputed` equal `missing`.
         _in_gap = df["gap_length"].notna()
         df["_gap_written"] = _in_gap & df[diff_col].notna()
         df["_gap_left_empty"] = _in_gap & df[diff_col].isna()
@@ -1594,7 +1594,7 @@ def process_imputation_vectorized(
         # An empty row bound permits no value, so no route may write there.
         # The shaped routes are already stopped by their blanked average; the
         # zero and uniform routes need the exclusion stated. The cell then
-        # falls through to the NOT_FILLED sweep, and the infeasibility flags
+        # falls through to the GAP_NOT_FILLED sweep, and the infeasibility flags
         # say why.
         permitted = (
             ~df["_row_bound_empty"].fillna(False)
@@ -1687,7 +1687,7 @@ def process_imputation_vectorized(
         )
 
         # An empty row bound permits no value, so no route may write there;
-        # the cell falls through to the NOT_FILLED sweep and the
+        # the cell falls through to the GAP_NOT_FILLED sweep and the
         # infeasibility flags say why.
         permitted = (
             ~df["_row_bound_empty"].fillna(False)
@@ -1754,7 +1754,7 @@ def process_imputation_vectorized(
                 # First write, and the routes are exclusive, so this assigns rather than OR-s.
                 df.loc[_skip_io, impute_type_col] = (
                     ImputeType.NO_CUMULATIVE_VALUE.value
-                    | ImputeType.NOT_FILLED.value
+                    | ImputeType.GAP_NOT_FILLED.value
                 )
 
             _truly_empty = nogpjump_no_start_no_end_value_mask & house_no_diff_values
@@ -1792,7 +1792,7 @@ def process_imputation_vectorized(
             df.loc[nogpjump_has_end_value_zero_mask, impute_type_col] = (
                 ImputeType.ZERO_END_VALUE.value
                 | ImputeType.ONLY_CLOSING_READING.value
-                | ImputeType.NOT_FILLED.value
+                | ImputeType.GAP_NOT_FILLED.value
             )
 
         #### end value > 0 - fill with impute values - type 7 (only when avg available)
@@ -1834,7 +1834,7 @@ def process_imputation_vectorized(
             df.loc[_skip_ev, impute_type_col] = (
                 ImputeType.POSITIVE_END_VALUE.value
                 | ImputeType.ONLY_CLOSING_READING.value
-                | ImputeType.NOT_FILLED.value
+                | ImputeType.GAP_NOT_FILLED.value
             )
 
         #### end value < 0 - raise exception
@@ -1880,7 +1880,7 @@ def process_imputation_vectorized(
             df.loc[_skip_sv, impute_type_col] = (
                 ImputeType.NO_END_VALUE.value
                 | ImputeType.ONLY_OPENING_READING.value
-                | ImputeType.NOT_FILLED.value
+                | ImputeType.GAP_NOT_FILLED.value
             )
 
         return df
@@ -1919,7 +1919,7 @@ def process_imputation_vectorized(
                 )
                 != 0
             )
-            & ((_findings & ImputeType.FILLED.value) != 0)
+            & ((_findings & ImputeType.GAP_FILLED.value) != 0)
         )
         if _unanchored.any():
             _bounded, _moved, _ = clip_to_bounds(
@@ -1979,11 +1979,11 @@ def process_imputation_vectorized(
     if _unfilled.any():
         df.loc[_unfilled, impute_type_col] = (
             df[impute_type_col].fillna(ImputeType.NONE.value)
-            | ImputeType.NOT_FILLED.value
+            | ImputeType.GAP_NOT_FILLED.value
         )
         logging.warning(
             f"{diff_col}: {int(_unfilled.sum())} cell(s) inside a gap were not "
-            f"filled and carry NOT_FILLED."
+            f"filled and carry GAP_NOT_FILLED."
         )
 
     if "_row_bound_lo" in df.columns:

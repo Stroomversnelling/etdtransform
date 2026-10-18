@@ -1,7 +1,7 @@
 """An empty row bound permits no value; an unmeetable gap total is a finding.
 
 Two rules that disagree about a row leave it no permitted value: nothing is
-written there, the cell reads NOT_FILLED, and the cause is split by what fed
+written there, the cell reads GAP_NOT_FILLED, and the cause is split by what fed
 the bound -- measurements alone (INFEASIBLE_BOUNDS_HARD) or a cell this run
 filled (INFEASIBLE_BOUNDS_SOFT). A gap holding such a cell, or one whose
 allocation could not place all its volume, carries INFEASIBLE_GAP on every
@@ -77,8 +77,8 @@ class TestACellWithNoPermittedValue:
         assert pd.isna(out.loc[2, DIFF])
         assert not out.loc[2, f"{DIFF}_is_imputed"]
         value = _flags(out, 2)
-        assert value & ImputeType.NOT_FILLED.value
-        assert not value & ImputeType.FILLED.value
+        assert value & ImputeType.GAP_NOT_FILLED.value
+        assert not value & ImputeType.GAP_FILLED.value
 
     def test_measurements_alone_read_hard_not_soft(self):
         out = self._run([pd.NA, 1.0, 1.0, 1.0])
@@ -96,13 +96,13 @@ class TestACellWithNoPermittedValue:
         out = self._run([pd.NA, 1.0, 1.0, 1.0])
         for row in (1, 3):
             assert pd.notna(out.loc[row, DIFF])
-            assert _flags(out, row) & ImputeType.FILLED.value
+            assert _flags(out, row) & ImputeType.GAP_FILLED.value
 
     def test_a_uniform_gap_skips_the_cell_too(self):
         # No shape anywhere: the spread must still not write into the cell.
         out = self._run([pd.NA] * 4)
         assert pd.isna(out.loc[2, DIFF])
-        assert _flags(out, 2) & ImputeType.NOT_FILLED.value
+        assert _flags(out, 2) & ImputeType.GAP_NOT_FILLED.value
         for row in (1, 3):
             assert float(out.loc[row, DIFF]) == pytest.approx(1.0)
             assert _flags(out, row) & ImputeType.UNIFORM_FILL.value
@@ -156,7 +156,7 @@ class TestABoundFedByTheFill:
         assert value & ImputeType.INFEASIBLE_BOUNDS_SOFT.value
         assert not value & ImputeType.INFEASIBLE_BOUNDS_HARD.value
         assert pd.isna(out.loc[2, DIFF_B])
-        assert value & ImputeType.NOT_FILLED.value
+        assert value & ImputeType.GAP_NOT_FILLED.value
 
     def test_a_bound_resting_on_a_fill_is_recorded_where_it_acts(self):
         # B's bound follows A per row, and A's gap cells were filled by this

@@ -1,7 +1,7 @@
 """Flags the calculated stage writes, and the threshold scan behind them.
 
-Three members of ``ImputeType`` belong to this stage: ``CALCULATED`` marks a
-value as produced by a catalog formula rather than measured, and the two
+Three members of ``ImputeType`` belong to this stage: ``CALCULATED_COLUMN``
+marks a value as produced by a catalog formula rather than measured, and the two
 ``CALCULATED_*`` violation flags mark it as outside a bound. They go into the
 same impute-type column the fill writes, so one decode reads both stages.
 
@@ -65,7 +65,7 @@ def scan_calculated_columns(
 
     Writes three marks per derived column:
 
-    - ``CALCULATED`` on every cell holding a value;
+    - ``CALCULATED_COLUMN`` on every cell holding a value;
     - ``CALCULATED_THRESHOLD_VIOLATED`` where the value is outside the
       column's declared bound scaled to the GRID;
     - ``CALCULATED_OUTSIDE_RULE_BOUND`` where it is outside the bound the
@@ -80,7 +80,7 @@ def scan_calculated_columns(
     The threshold says the value is impossible for the variable; the rule
     bound says it contradicts the rest of its own row.
 
-    A fourth mark, ``CALCULATED_RULE_BOUND_FROM_IMPUTED``, says the rule bound
+    A fourth mark, ``CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS``, says the rule bound
     rested partly on cells the fill wrote. It comes free: the narrowing
     already computes it, so no extra pass and no comparison across columns. A
     rule violation WITHOUT it stands on measurements alone and is the stronger
@@ -133,7 +133,7 @@ def scan_calculated_columns(
         existing = df[flag_column].fillna(0).astype("Int64")
 
         present = df[column].notna()
-        bits = present.astype("Int64") * ImputeType.CALCULATED.value
+        bits = present.astype("Int64") * ImputeType.CALCULATED_COLUMN.value
 
         lower, upper = grid_scaled_bounds(column, grid_minutes)
         outside = bound_flags(df[column], lower_bound=lower, upper_bound=upper)
@@ -161,7 +161,7 @@ def scan_calculated_columns(
             soft = pd.Series(from_imputed, index=df.index).fillna(False) & present
             bits = bits | (
                 soft.astype("Int64")
-                * ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED.value
+                * ImputeType.CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS.value
             )
             rule_violations += int(broke_rule.sum())
             hard_violations += int((broke_rule & ~soft).sum())
@@ -180,7 +180,7 @@ def scan_calculated_columns(
             f"filled cell); bound rests on a filled cell for {soft_bounds:,}"
         )
     logging.info(
-        "[calc flags] grid %s min; CALCULATED on %s cell(s) across %d "
+        "[calc flags] grid %s min; CALCULATED_COLUMN on %s cell(s) across %d "
         "column(s); CALCULATED_THRESHOLD_VIOLATED on %s; "
         "CALCULATED_OUTSIDE_RULE_BOUND on %s",
         grid_minutes, f"{marked:,}", len(derived_columns),
@@ -217,7 +217,7 @@ def _rule_bounds(df: pd.DataFrame, column: str, package, imputed=None):
 
 
 def calculated_flag_expressions(table, derived_columns, grid_minutes, undefined=None):
-    """``CALCULATED`` and the THRESHOLD flag as ibis expressions.
+    """``CALCULATED_COLUMN`` and the THRESHOLD flag as ibis expressions.
 
     For the ibis derivation path, which never materialises the frame. Returns
     ``{impute_type_column: expression}`` for the caller to pass to ``mutate``,
@@ -240,7 +240,7 @@ def calculated_flag_expressions(table, derived_columns, grid_minutes, undefined=
         lower, upper = grid_scaled_bounds(column, grid_minutes)
 
         present = table[column].notnull()
-        bits = present.cast("int64") * ImputeType.CALCULATED.value
+        bits = present.cast("int64") * ImputeType.CALCULATED_COLUMN.value
 
         outside = ibis.literal(False)
         if pd.notna(lower):
@@ -277,7 +277,7 @@ def threshold_violation_summary(df: pd.DataFrame, derived_columns) -> pd.DataFra
     sources = (
         (THRESHOLD_SOURCE, ImputeType.CALCULATED_THRESHOLD_VIOLATED.value, None),
         (RULE_SOURCE, ImputeType.CALCULATED_OUTSIDE_RULE_BOUND.value,
-         ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED.value),
+         ImputeType.CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS.value),
     )
     for column in derived_columns:
         flag_column = impute_type_column(column)
@@ -356,10 +356,10 @@ def derive_from_rule_bound(df: pd.DataFrame, targets, package,
     Only cells that are pd.NA are touched; a delivered or already-derived
     value is never overwritten. Each filled cell is flagged
     ``CALCULATED_FROM_RULE_BOUND``, which is an ACTION distinct from
-    ``CALCULATED``: the value came from the constraint system rather than from
-    evaluating a formula, and a reader needs to be able to tell those apart.
-    ``CALCULATED_RULE_BOUND_FROM_IMPUTED`` is added where the bound rested on
-    a cell the fill wrote.
+    ``CALCULATED_COLUMN``: the value came from the constraint system rather
+    than from evaluating a formula, and a reader needs to be able to tell
+    those apart. ``CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS`` is added where the
+    bound rested on a cell the fill wrote.
 
     Returns *df* with the values written and the flags OR-ed in, plus a
     per-column count of what was filled.
@@ -389,7 +389,7 @@ def derive_from_rule_bound(df: pd.DataFrame, targets, package,
         soft = (pinned & pd.Series(from_imputed, index=df.index).fillna(False))
         bits = bits | (
             soft.astype("Int64")
-            * ImputeType.CALCULATED_RULE_BOUND_FROM_IMPUTED.value
+            * ImputeType.CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS.value
         )
         df[flag_column] = df[flag_column].fillna(0).astype("Int64") | bits
         filled[column] = int(pinned.sum())
@@ -439,7 +439,7 @@ def choose_formula(candidates, available, imputed_columns=frozenset()):
 
 def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
                       tolerance: float = POINT_BOUND_TOLERANCE):
-    """Fill pd.NA cells a catalog formula reaches, and flag them CALCULATED.
+    """Fill pd.NA cells a catalog formula reaches, and flag them.
 
     The second fill route. Where a supplier delivers A, B and C and the rules
     derive C from A and B, this fills C's gaps from the rows where A and B are
@@ -459,8 +459,9 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
     and has to be plausible, not merely computable.
 
     Only pd.NA cells are written. A delivered or already-derived value is
-    never overwritten, and the cells written are flagged ``CALCULATED``, which
-    is how a later reader tells them from measurements in the same column.
+    never overwritten, and the cells written are flagged
+    ``CALCULATED_COLUMN``, which is how a later reader tells them from
+    measurements in the same column.
 
     Returns *df*, a per-column count of what was filled, and a plan frame
     recording the formula used for each (mask, target) so the provenance of
@@ -534,7 +535,7 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
                     df[flag_column] = pd.array([0] * len(df), dtype="Int64")
                 df[flag_column] = df[flag_column].fillna(0).astype("Int64")
                 df.loc[written, flag_column] = (
-                    df.loc[written, flag_column] | ImputeType.CALCULATED.value
+                    df.loc[written, flag_column] | ImputeType.CALCULATED_COLUMN.value
                 )
                 filled[target] = filled.get(target, 0) + len(written)
 
@@ -556,7 +557,8 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
 
     if filled:
         logging.info(
-            "[calc flags] CALCULATED filled %s gap cell(s) from formulas: %s",
+            "[calc flags] CALCULATED_COLUMN filled %s gap cell(s) from "
+            "formulas: %s",
             f"{sum(filled.values()):,}",
             ", ".join(f"{c} {n:,}" for c, n in sorted(filled.items())),
         )
@@ -728,7 +730,7 @@ def fill_calculated_gaps(df: pd.DataFrame, targets, catalog, package,
     value in its row afterwards and can narrow another cell's bound to a
     point. The reverse order would leave those cells unfilled.
 
-    Each route writes its own ACTION flag -- ``CALCULATED`` and
+    Each route writes its own ACTION flag -- ``CALCULATED_COLUMN`` and
     ``CALCULATED_FROM_RULE_BOUND`` -- so which route produced a value is
     readable per cell, and ``CALCULATED_VALUE`` matches either.
 

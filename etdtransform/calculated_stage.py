@@ -158,8 +158,8 @@ def add_calculated_columns_to_hh_data_ibis(
     except (FileNotFoundError, ValueError) as _grid_error:
         _calc_grid_minutes = None
         logging.warning(
-            "[calc ibis] dataset grid unavailable (%s) -- CALCULATED and "
-            "CALCULATED_THRESHOLD_VIOLATED will not be written",
+            "[calc ibis] dataset grid unavailable (%s) -- CALCULATED_COLUMN "
+            "and CALCULATED_THRESHOLD_VIOLATED will not be written",
             _grid_error,
         )
     from etdmap.data_model import all_performance_data_columns, required_performance_data_columns
