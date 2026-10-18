@@ -15,10 +15,9 @@ a column ahead of one that actually moves.
 import pandas as pd
 import pytest
 
-from conftest import cadence_table
+from conftest import cadence_table, project_averages
 from etdtransform.impute import (
     _coverage_duty_by_project,
-    calculate_average_diff,
     write_coverage_duty,
 )
 
@@ -164,7 +163,7 @@ class TestItAgreesWithTheScalarTheAveragingAlreadyReported:
             "ReadingDate": pd.date_range("2026-01-01", periods=4, freq="5min"),
             DIFF: pd.array([0.0, 0.4, 0.2, 0.1], dtype="Float64"),
         })
-        result = calculate_average_diff(
+        result = project_averages(
             frame, "ProjectIdBSV", [DIFF],
             cadence=cadence_table(frame, [CUM]), grid_minutes=5,
         )[DIFF]

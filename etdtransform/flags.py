@@ -323,12 +323,12 @@ DESCRIPTIONS = {
         "using the other values known in that row."
     ),
     "DELIVERED_INTERVAL_IMPUTATION": (
-        "RESERVED. No stage sets this yet. The cell was resolved on the "
+        "The cell was resolved on the "
         "delivered-interval branch of the fill. Says which branch ran, not "
         "what it did: the action flags carry the outcome."
     ),
     "DELIVERED_CUMULATIVE_IMPUTATION": (
-        "RESERVED. No stage sets this yet. The cell was resolved on the "
+        "The cell was resolved on the "
         "delivered-cumulative branch of the fill, the complement of "
         "DELIVERED_INTERVAL_IMPUTATION."
     ),

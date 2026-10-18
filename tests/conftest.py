@@ -31,7 +31,7 @@ from etdtransform.aggregate import (
     impute_hh_data_5min_chunked,
     read_hh_data,
 )
-from etdtransform.impute import prepare_diff_averages_for_impute, prepare_diff_averages_for_impute_ibis
+from etdtransform.impute import prepare_diff_averages_for_impute_ibis
 
 
 def pytest_configure(config):
@@ -170,15 +170,15 @@ def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
     etdtransform.options.aggregate_folder_path = out_dir
     try:
         aggregate_hh_data_5min()
+        prepare_diff_averages_for_impute_ibis(
+            ibis.read_parquet(str(out_dir / "household_default.parquet")),
+            project_id_column="ProjectIdBSV",
+            cumulative_columns=cum_cols,
+        )
+        # Read after the averaging, which writes avg_diffs.parquet that the fill
+        # loads. Unsorted on read, so the fill sorts it.
         df = read_hh_data(interval="default")
-        prepare_diff_averages_for_impute(
-            df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
-        )
-        # sorted=False: prepare_diff_averages_for_impute sorts a local copy internally and does
-        # not return it, so df is still unsorted here. Always sort before imputing.
-        df_imputed = impute_hh_data_5min(
-            df, cum_cols=cum_cols, sorted=False, diffs_calculated=True
-        )
+        df_imputed = impute_hh_data_5min(df, cum_cols=cum_cols, sorted=False)
         # adaptive=True: matches the ibis path which uses the adaptive catalog-driven approach
         add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
     finally:
@@ -207,18 +207,18 @@ def _run_ibis_pipeline(out_dir: Path, cum_cols: list) -> None:
 
 
 def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
-    """DuckDB aggregation + pandas diffs + pandas impute + pandas adaptive calc columns."""
+    """DuckDB aggregation + the averaging + pandas impute + pandas adaptive calc columns."""
     old = etdtransform.options.aggregate_folder_path
     etdtransform.options.aggregate_folder_path = out_dir
     try:
         aggregate_hh_data_duckdb()
+        prepare_diff_averages_for_impute_ibis(
+            ibis.read_parquet(str(out_dir / "household_default.parquet")),
+            project_id_column="ProjectIdBSV",
+            cumulative_columns=cum_cols,
+        )
         df = read_hh_data(interval="default")
-        prepare_diff_averages_for_impute(
-            df, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols, sorted=False
-        )
-        df_imputed = impute_hh_data_5min(
-            df, cum_cols=cum_cols, sorted=False, diffs_calculated=True
-        )
+        df_imputed = impute_hh_data_5min(df, cum_cols=cum_cols, sorted=False)
         add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
     finally:
         etdtransform.options.aggregate_folder_path = old
@@ -457,6 +457,86 @@ DEFAULT_MARKEXPR = "not pipeline"
 def pytest_configure(config):
     if config.getoption("--full-suite") and config.option.markexpr == DEFAULT_MARKEXPR:
         config.option.markexpr = ""
+
+
+def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
+    """The averaging's spreading, on a frame too short for its presence gates.
+
+    Prepares exactly as :func:`etdtransform.impute.calculate_average_diff_ibis`
+    does -- the register supplies the volume for every household with usable
+    readings of it, the interval column for the rest -- then calls the spreading
+    directly with a one-slot window, which neutralises the gates. That is what
+    lets a case be written as six rows with the expected values spelled out.
+
+    Handing the register in unconditionally would agree with the expectation for
+    the wrong reason, so the source selection is reproduced rather than assumed.
+    Behaviour with the gates applied is tested in
+    ``test_minimum_household_presence.py``; behaviour over a realistic span in
+    ``test_averaging_coarse_delivery.py``.
+
+    Returns ``(avg, coverage, duty)``.
+    """
+    import ibis
+
+    from etdmap.data_model import cumulative_column
+    from etdtransform.impute import _resample_average_ibis
+
+    cum_col = cumulative_column(diff_col)
+    minutes = dict(zip(cadence["HuisIdBSV"], cadence["cadence_minutes"]))
+    has_register = (
+        frame[cum_col].notna() if cum_col in frame.columns
+        else pd.Series(False, index=frame.index)
+    )
+    on_register = frame["HuisIdBSV"].isin(
+        frame.loc[has_register, "HuisIdBSV"].unique()
+    )
+    source = (
+        frame[cum_col].where(on_register, frame[diff_col])
+        if cum_col in frame.columns else frame[diff_col]
+    )
+    prepared = ibis.memtable(
+        frame.assign(
+            _value=source.astype("Float64"),
+            _minutes=frame["HuisIdBSV"].map(minutes).astype("Float64"),
+            _on_cumulative=on_register.astype("boolean"),
+        )
+    )
+    total_slots = int(
+        frame[["ProjectIdBSV", "ReadingDate"]].drop_duplicates().shape[0]
+    )
+    coarsest = max(cadence["cadence_minutes"].dropna())
+    max_slots = max(1, int(round(float(coarsest) / grid_minutes)))
+
+    avg, coverage, duty, _presence = _resample_average_ibis(
+        prepared, diff_col, "ProjectIdBSV", grid_minutes,
+        max_slots=max_slots, total_slots=total_slots,
+        window_minutes=grid_minutes,
+    )
+    if drop_na:
+        avg = avg[avg[f"{diff_col}_avg"].notna()]
+    return avg.reset_index(drop=True), coverage, duty
+
+
+def project_averages(df, project_id_column, diff_columns, **kwargs):
+    """The project averages of a pandas frame, through the averaging the
+    pipeline runs.
+
+    The averaging is ibis, so a test asserting on averaging behaviour has to go
+    through ibis or it is asserting about something production does not
+    execute. The frames here are small and built in memory, which is what
+    ``ibis.memtable`` is for -- the lazy table the pipeline passes comes from
+    ``ibis.read_parquet`` instead.
+
+    Takes and returns what :func:`etdtransform.impute.calculate_average_diff_ibis`
+    takes and returns, so a test reads as the call it is making.
+    """
+    import ibis
+
+    from etdtransform.impute import calculate_average_diff_ibis
+
+    return calculate_average_diff_ibis(
+        ibis.memtable(df), project_id_column, diff_columns, **kwargs
+    )
 
 
 def cadence_table(df, columns, minutes=5):

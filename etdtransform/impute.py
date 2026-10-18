@@ -31,7 +31,6 @@ from etdtransform.bounds import (
     column_bound_by_household,
     dataset_grid_minutes,
     load_column_cadence,
-    resample_to_grid,
 )
 
 import etdtransform
@@ -214,28 +213,38 @@ def _coverage_duty_by_project(avg, col, project_id_column) -> pd.DataFrame:
     ]
 
 
-def calculate_average_diff(
-    df: pd.DataFrame,
+def calculate_average_diff_ibis(
+    tbl,
     project_id_column: str,
     diff_columns: list[str],
     bounds: dict | None = None,
     cadence: pd.DataFrame | None = None,
     grid_minutes: float | None = None,
-) -> pd.DataFrame:
+) -> dict:
     """
-    Calculate average differences for specified columns grouped by project and reading date.
+    The project average of each interval column, per project and reading date.
 
-    This function computes the average differences for the specified columns. It's used to prepare
-    data for imputation of missing values. Criteria used to assess the inclusion of values is found in assert_averageable()
+    This is what imputation fills from, and the only implementation: the
+    aggregations run as SQL, so the full dataset never materialises in Python
+    memory. Only the small result tables (one row per project, or one row per
+    project x date) are executed.
+
+    What may contribute at all is :func:`assert_averageable`. Of what remains, a
+    reading above its column threshold is discarded rather than clipped -- it is
+    a wrong reading, not a large one, and clipping would keep a fabricated
+    number in the pool. A household reporting more coarsely than the grid
+    contributes its level but not its shape: each reading is spread over the
+    slots it covers before the mean is taken, so an hourly reading does not read
+    as one slot of twelve hours' consumption.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        The input DataFrame containing the data.
+    tbl : ibis.Table
+        Household data table (e.g. from get_household_tables()["default"]).
     project_id_column : str
-        The name of the column containing project IDs.
+        Name of the project ID column.
     diff_columns : list[str]
-        A list of column names for which to calculate average differences.
+        Diff column names to process.
     bounds : dict, optional
         Column -> upper threshold. A value above its threshold is discarded
         before averaging. Defaults to the Max declared for the variable in the
@@ -251,178 +260,21 @@ def calculate_average_diff(
     Returns
     -------
     dict
-        A dictionary where keys are column names and values are dictionaries containing:
-        - 'avg_diff': DataFrame with average differences
-        - 'n_discarded': how many values were discarded for exceeding the
-          column threshold
-        - 'n_flagged': how many values were excluded as invented or mistimed
-        - 'coverage': the share of slots the average has a value for
-        - 'duty': of those, the share carrying consumption
+        One entry per column in *diff_columns*, each a dict of:
+
+        - ``avg_diff`` -- DataFrame of the average per (project, ReadingDate)
+        - ``n_discarded`` -- values dropped for exceeding the column threshold
+        - ``n_flagged`` -- values excluded as invented or mistimed
+        - ``coverage`` -- the share of slots the average has a value for
+        - ``duty`` -- of those, the share carrying consumption
+        - ``coverage_duty`` -- the same two per project
+        - ``window_presence`` -- which households covered which window
 
     Warnings
     --------
-    - Missing values in the resulting average columns will be logged as errors.
-
-
-    """
-    logging.info("Calculating Diff column averages.")
-    assert_averageable(diff_columns)
-
-    if bounds is None:
-        bounds = {
-            col: thresholds_dict[col]["Max"]
-            for col in diff_columns
-            if col in thresholds_dict
-        }
-    if cadence is None:
-        cadence = load_column_cadence()
-    if grid_minutes is None:
-        grid_minutes = dataset_grid_minutes()
-
-    avg_diff_dict = {}
-
-    for col in diff_columns:
-        logging.info(f"Handling column: {col}")
-
-        logging.info(f"Filtering the dataframe for {col}.")
-        # The cumulative variable supplies the volume where it has readings, so
-        # it travels with the interval column, as do both findings columns.
-        wanted = ["HuisIdBSV", project_id_column, "ReadingDate", col]
-        for extra in (cumulative_column(col), flag_column(col)):
-            if extra and extra in df.columns and extra not in wanted:
-                wanted.append(extra)
-        cum_findings = flag_column(cumulative_column(col) or "")
-        if cum_findings in df.columns and cum_findings not in wanted:
-            wanted.append(cum_findings)
-        df_filtered = df[wanted]
-
-        # any() on the mask is the cheap test; the minimum is only computed
-        # when it has already failed.
-        if (df_filtered[col] < 0).any():
-            assert_no_negative_interval(col, df_filtered[col].min())
-
-        df_filtered = df_filtered.copy()
-
-        # Exclude values that were not measured at this slot: invented by the
-        # pipeline, or recorded over a window rather than at this interval.
-        # Identified by their findings flags, not by a threshold.
-        n_flagged = 0
-        findings = flag_column(col)
-        if findings in df_filtered.columns:
-            not_measured_here = (
-                df_filtered[findings].fillna(0) & _NOT_MEASURED_HERE
-            ) != 0
-            n_flagged = int(not_measured_here.sum())
-            if n_flagged:
-                df_filtered.loc[not_measured_here, col] = pd.NA
-                logging.info(
-                    f"Excluded {n_flagged} value(s) from the {col} average: "
-                    f"invented or recorded for a different window."
-                )
-
-        # Values above the column threshold are discarded, not clipped. The
-        # threshold is scaled to each household's reporting cadence.
-        n_discarded = 0
-        bound = (bounds or {}).get(col, pd.NA)
-        if bound is None or (not isinstance(bound, pd.Series) and pd.isna(bound)):
-            bound = pd.NA
-        else:
-            bound = column_bound(df_filtered, col, cadence)
-        if not (isinstance(bound, pd.Series) or pd.isna(bound)):
-            bound = pd.Series(bound, index=df_filtered.index)
-        if isinstance(bound, pd.Series):
-            assert_bounds_not_inverted(col, cadence)
-            out_of_bounds = (df_filtered[col] > bound).fillna(False)
-            n_discarded = int(out_of_bounds.sum())
-            if n_discarded:
-                df_filtered.loc[out_of_bounds, col] = pd.NA
-                logging.info(
-                    f"Discarded {n_discarded} value(s) above the column bound "
-                    f"for {col} before averaging."
-                )
-
-        logging.info(f"Calculating the average differences for {col}.")
-        # Spread each reading evenly over the grid slots it covers, so every
-        # row is a per-grid-interval rate and the average is a plain mean over
-        # them. A household already at the grid cadence resamples to itself.
-        df_filtered = df_filtered.assign(
-            **{col: resample_to_grid(df_filtered, col, cadence, grid_minutes)}
-        )
-
-        # A household counts toward a slot only where it covered the window the
-        # slot sits in, and a slot has an average only where enough of the
-        # eligible households delivered for it.
-        window_minutes = window_minutes_for_column(
-            cadence_minutes_by_household(col, cadence).values()
-        )
-        values, presence_stats, window_presence = apply_presence_filter(
-            df_filtered, col, project_id_column, window_minutes=window_minutes
-        )
-        df_filtered = df_filtered.assign(**{col: values})
-
-        grouped = df_filtered.groupby([project_id_column, "ReadingDate"])[col]
-        avg_diff = grouped.mean().reset_index()
-        avg_diff.columns = [project_id_column, "ReadingDate", f"{col}_avg"]
-        # Nanoseconds in both paths, so the two outputs merge cleanly.
-        avg_diff = _match_reading_date_dtype(avg_diff)
-
-        # coverage: slots the meters delivered anything for. duty: of those,
-        # the slots that carry consumption.
-        present = avg_diff[f"{col}_avg"].notna()
-        coverage = float(present.mean()) if len(avg_diff) else 0.0
-        duty = (
-            float((avg_diff.loc[present, f"{col}_avg"] > 0).mean())
-            if int(present.sum()) else 0.0
-        )
-        coverage_duty = _coverage_duty_by_project(avg_diff, col, project_id_column)
-
-        avg_diff_dict[col] = {
-            "avg_diff": avg_diff,
-            "n_discarded": n_discarded,
-            "n_flagged": n_flagged,
-            "coverage": coverage,
-            "duty": duty,
-            "coverage_duty": coverage_duty,
-            "presence": presence_stats,
-            "window_presence": window_presence,
-        }
-
-    return avg_diff_dict
-
-
-def calculate_average_diff_ibis(
-    tbl,
-    project_id_column: str,
-    diff_columns: list[str],
-    bounds: dict | None = None,
-    cadence: pd.DataFrame | None = None,
-    grid_minutes: float | None = None,
-) -> dict:
-    """
-    Ibis/DuckDB variant of calculate_average_diff.
-
-    Accepts an ibis.Table and performs all aggregations as SQL so the full
-    dataset never materialises in Python memory.  Only the small result tables
-    (one row per project, or one row per project x date) are executed, and the
-    scaling step they feed is the one the pandas path uses.
-
-    Returns the same dict structure as calculate_average_diff so that callers
-    can substitute either function without downstream changes.
-
-    Parameters
-    ----------
-    tbl : ibis.Table
-        Household data table (e.g. from get_household_tables()["default"]).
-    project_id_column : str
-        Name of the project ID column.
-    diff_columns : list[str]
-        Diff column names to process.
-    bounds : dict, optional
-        Column -> upper threshold, as in calculate_average_diff.
-    cadence : pd.DataFrame, optional
-        The per-column cadence table, as in calculate_average_diff.
-    grid_minutes : float, optional
-        The grid the data sits on, as in calculate_average_diff.
+    A slot every contributing household was discarded at has no average rather
+    than an average of zero, and that is logged: no average is not the same
+    fact as no consumption.
     """
     import ibis
 
@@ -667,7 +519,7 @@ def _resample_average_ibis(
     """
     The project average of *diff_col*, computed in SQL by resampling.
 
-    The counterpart of :func:`etdtransform.bounds.resample_to_grid` followed by a
+    The spreading step, followed by a
     plain mean. Two consecutive usable readings bound a window; its volume is
     spread evenly over the grid slots between them, ending at the later reading.
 
@@ -1166,80 +1018,17 @@ def get_diff_columns(cumulative_columns: list):
         if interval_column(col) is not None
     ]
 
-def prepare_diff_averages_for_impute(
-    df: pd.DataFrame,
-    project_id_column: str,
-    cumulative_columns: list,
-    sorted=False,
-):
-    """
-    Prepare difference columns for imputation.
-
-    This function calculates average differences, combines them, and prepares
-    household maximum and bound information for imputation.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The input DataFrame containing the data.
-    project_id_column : str
-        The name of the column containing project IDs.
-    cumulative_columns : list
-        A list of cumulative column names.
-    sorted : bool, optional
-        Whether the DataFrame is already sorted. Default is False.
-
-    Returns
-    -------
-    tuple
-        A tuple containing:
-        - diff_columns: list of difference column names
-        - diffs: DataFrame with average differences
-
-    Notes
-    -----
-    This function performs the following steps:
-    1. Sorts the DataFrame if not already sorted.
-    2. Calculates average differences for each cumulative column.
-    3. Saves the result to parquet for later use.
-
-    The resulting file is saved in the directory specified by
-    etdtransform.options.aggregate_folder_path.
-
-    """
-    if not sorted:
-        df = sort_for_impute(df, project_id_column)
-
-    diff_columns = get_diff_columns(cumulative_columns)
-
-    logging.info("Starting to prepare diff averages.")
-    avg_diff_dict = calculate_average_diff(df, project_id_column, diff_columns)
-    logging.info("Combining average diff columns.")
-    diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
-
-    logging.info("Saving average diff columns in avg_diffs.parquet")
-    diffs.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
-        engine="pyarrow",
-    )
-    write_coverage_duty(avg_diff_dict)
-    write_window_presence(avg_diff_dict)
-
-    return diff_columns, diffs
-
-
 def prepare_diff_averages_for_impute_ibis(
     tbl,
     project_id_column: str,
     cumulative_columns: list,
 ):
     """
-    Ibis variant of prepare_diff_averages_for_impute.
+    Compute the project averages and save the artefacts imputation reads.
 
-    Accepts an ibis.Table (e.g. from ibis.read_parquet) instead of a pandas
-    DataFrame.  All heavy aggregations run as SQL inside DuckDB; only the small
-    result tables (one row per project or per project x date) are materialised and
-    saved as parquet artefacts.  The input table is never executed in full.
+    All heavy aggregations run as SQL inside DuckDB; only the small result
+    tables (one row per project or per project x date) are materialised and
+    saved as parquet artefacts. The input table is never executed in full.
 
     Parameters
     ----------
@@ -1253,8 +1042,8 @@ def prepare_diff_averages_for_impute_ibis(
     Returns
     -------
     tuple
-        (diff_columns, diffs) -- same structure as
-        prepare_diff_averages_for_impute.
+        ``(diff_columns, diffs)`` -- the interval column names, and one frame
+        of every column's average keyed by (project, ReadingDate).
     """
     diff_columns = get_diff_columns(cumulative_columns)
 
@@ -1365,7 +1154,6 @@ def process_and_impute(
     project_id_column: str,
     cumulative_columns: list,
     sorted=False,
-    diffs_calculated=False,
     volume_reports=None,
     constraints=None,
     coverage_duty=None,
@@ -1387,8 +1175,6 @@ def process_and_impute(
         A list of cumulative column names to be processed.
     sorted : bool, optional
         Whether the DataFrame is already sorted. Default is False.
-    diffs_calculated : bool, optional
-        Whether differences have already been calculated. Default is False.
 
     Returns
     -------
@@ -1421,16 +1207,12 @@ def process_and_impute(
     if not sorted:
         df = sort_for_impute(df, project_id_column)
 
-    if diffs_calculated:
-        logging.info("Loading average diffs from file...")
-        diffs = read_diffs()
-    else:
-        diff_columns, diffs = prepare_diff_averages_for_impute(
-            df=df,
-            project_id_column=project_id_column,
-            cumulative_columns=cumulative_columns,
-            sorted=True,
-        )
+    # The averages are a workflow step of their own, writing avg_diffs.parquet
+    # before this one runs. Computing them here instead would average whatever
+    # subset of households this call happens to hold, which is not the project
+    # average.
+    logging.info("Loading average diffs from file...")
+    diffs = read_diffs()
 
     logging.info(
         "Merging the average differences into the household dataframe for imputation.",

@@ -321,8 +321,6 @@ def _members_mentioned_in_tests(class_name):
 # exemption is recorded once, beside the meaning.
 UNPRODUCED = {
     "GAP_NULLED",
-    "DELIVERED_INTERVAL_IMPUTATION",
-    "DELIVERED_CUMULATIVE_IMPUTATION",
     "IN_GAP",
     "CALCULATED_FROM_ROW_FORMULA",
     "CALCULATED_FROM_HARD_KNOWNS",

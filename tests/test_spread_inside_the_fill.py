@@ -102,6 +102,13 @@ class TestTheSpreadRunsInThePass:
         out = _impute(_interval_only_frame(), _interval_only_cadence())
         assert all(_has(out, ImputeType.RESAMPLED_TO_GRID))
 
+    def test_the_branch_is_recorded_even_with_nothing_left_to_impute(self):
+        """A complete coarse column leaves no gap, so the fill takes its
+        nothing-to-impute path -- but the spread resolved those cells, and which
+        logic resolved them is recorded there too."""
+        out = _impute(_interval_only_frame(), _interval_only_cadence())
+        assert all(_has(out, ImputeType.DELIVERED_INTERVAL_IMPUTATION))
+
     def test_the_record_survives_the_fill(self):
         """The routes assign into a findings column created all-NA, so a bit
         written before them would be replaced. One cell is left for the fill to

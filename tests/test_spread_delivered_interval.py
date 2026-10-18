@@ -14,7 +14,8 @@ Synthetic frames only -- no pipeline, no fixtures.
 import pandas as pd
 import pytest
 
-from etdtransform.bounds import resample_to_grid
+from conftest import spread_average
+from etdtransform.bounds import cadence_minutes_by_household
 from etdtransform.spread import (
     cadence_with_column_at_grid,
     spread_delivered_interval_to_grid,
@@ -149,20 +150,26 @@ class TestTwoCadencesInOneCall:
 
 
 class TestAgreementWithTheAveraging:
-    """The fill spreads with a limited backward fill; the averaging spreads with
-    resample_to_grid. A household's own values and the project average it is
-    scaled against have to sit on the same footing, because the interval branch
-    multiplies one by the other."""
+    """The fill spreads with a limited backward fill; the averaging expands each
+    window against a table of offsets in SQL. A household's own values and the
+    project average it is scaled against have to sit on the same footing,
+    because the interval branch multiplies one by the other.
+
+    One household contributes, so the project average at a slot is that
+    household's own spread value there."""
 
     @pytest.mark.parametrize("k", [3, 4, 12])
     @pytest.mark.parametrize("first", [None, 1])
     @pytest.mark.parametrize("missing", [(), (11,)])
     def test_the_two_agree_slot_for_slot(self, k, first, missing):
         df = _frame(_ticks(24, k, first=first, missing=missing))
+        df["ProjectIdBSV"] = pd.array([1] * len(df), dtype="Int64")
         mine = spread_delivered_interval_to_grid(df, DIFF, {1: k})
-        theirs = resample_to_grid(
-            df, DIFF, _interval_only_cadence(reading_minutes=GRID * k), GRID
+        avg, _, _ = spread_average(
+            df, _interval_only_cadence(reading_minutes=GRID * k), DIFF, GRID,
+            drop_na=False,
         )
+        theirs = avg.sort_values("ReadingDate")[f"{DIFF}_avg"]
         assert _as_list(mine) == _as_list(theirs)
 
 
@@ -231,6 +238,51 @@ class TestWhichHouseholdsAreSpread:
             (2, DIFF, 60, 100),
         ])
         assert spread_steps_by_household(CUM, DIFF, cadence) == {1: 12, 2: 4}
+
+
+class TestWhichCadenceEachStageReads:
+    """A coarsely delivered interval is judged at its own cadence until this
+    pass moves its values onto the grid. Two different questions, and the sidecar
+    answers both -- so each has to read the row that applies to it."""
+
+    def test_the_delivered_cadence_comes_from_the_columns_own_row(self):
+        """The register of an interval-only variable still has a row, carrying
+        the grid as a fallback. Letting it through would report the delivered
+        interval as reporting every slot, and the averaging would stop spreading
+        it."""
+        cadence = _interval_only_cadence(reading_minutes=60)
+        assert cadence_minutes_by_household(DIFF, cadence) == {1: 60.0}
+
+    def test_the_winner_does_not_depend_on_row_order(self):
+        reordered = _cadence([
+            (1, DIFF, 60, 100),
+            (1, CUM, GRID, 0),
+            (1, "ReadingDate", GRID, 1000),
+        ])
+        assert cadence_minutes_by_household(DIFF, reordered) == {1: 60.0}
+
+    def test_a_derived_column_still_inherits_from_its_register(self):
+        """Cadence is measured on the columns as delivered, so a column the
+        pipeline derives later has no row of its own. The pairing is what
+        answers for it."""
+        register_only = _cadence([
+            (1, "ReadingDate", GRID, 1000),
+            (1, CUM, 60, 100),
+        ])
+        assert cadence_minutes_by_household(DIFF, register_only) == {1: 60.0}
+
+    def test_the_averaging_spreads_a_coarse_column_at_its_own_cadence(self):
+        """Not at the grid: one hourly reading is twelve slots of consumption,
+        so the averaging divides by twelve. Reading the grid here would place
+        the whole hour in one slot."""
+        df = _frame(_ticks(24, 12))
+        df["ProjectIdBSV"] = pd.array([1] * len(df), dtype="Int64")
+        avg, _, _ = spread_average(
+            df, _interval_only_cadence(reading_minutes=60), DIFF, GRID
+        )
+        placed = avg[f"{DIFF}_avg"].dropna()
+        assert float(placed.iloc[-1]) == pytest.approx(READING / 12)
+        assert int(placed.count()) > 12
 
 
 class TestTheCadenceAmendment:

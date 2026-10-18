@@ -24,8 +24,7 @@ values well under it and make the out-of-bounds ones obviously extreme.
 import pandas as pd
 import pytest
 
-from etdtransform.impute import calculate_average_diff
-from conftest import cadence_table
+from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -44,7 +43,7 @@ def _household(household, values, project=1):
 
 
 def _average(frame):
-    result = calculate_average_diff(
+    result = project_averages(
         frame, "ProjectIdBSV", [DIFF],
         cadence=cadence_table(frame, [CUM]), grid_minutes=5,
     )

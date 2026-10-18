@@ -14,6 +14,7 @@ import conftest
 import etdmap
 import etdmap.data
 import etdmap.index_helpers
+import ibis
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
@@ -29,7 +30,7 @@ from etdtransform.aggregate import (
     resample_hh_data,
 )
 from etdmap.data_model import test_aggregation_columns
-from etdtransform.impute import prepare_diff_averages_for_impute
+from etdtransform.impute import prepare_diff_averages_for_impute_ibis
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -84,13 +85,16 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
 
     logging.info("Preparing diffs.")
     # # "prepare and save diff averages",
-    prepare_diff_averages_for_impute(
-        df,
+    prepare_diff_averages_for_impute_ibis(
+        ibis.read_parquet(
+            os.path.join(
+                etdtransform.options.aggregate_folder_path,
+                "household_default.parquet",
+            )
+        ),
         project_id_column="ProjectIdBSV",
         cumulative_columns=cum_cols_list,
-        sorted=False,
     )
-    diffs_calculated = True
     # should create new files
     path_avg_diffs = os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet")
     assert os.path.isfile(path_avg_diffs)
@@ -122,7 +126,6 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
             df,
             cum_cols=cum_cols_list,
             sorted=True,
-            diffs_calculated=diffs_calculated,
             use_constraints=False,
         )
     # The run writes the slim household summary and the gap accumulator;

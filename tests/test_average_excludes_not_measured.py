@@ -29,9 +29,8 @@ from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household,
     _treat_frozen_spans,
 )
-from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import impute_and_normalize
-from conftest import cadence_table
+from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -125,7 +124,7 @@ def _project(n_clean=19, with_span=1):
 
 
 def _average(df):
-    result = calculate_average_diff(
+    result = project_averages(
         df, "ProjectIdBSV", [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )[DIFF]

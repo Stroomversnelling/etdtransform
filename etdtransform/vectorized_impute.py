@@ -1,4 +1,5 @@
 import logging
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ from etdtransform.bounds import (
     cadence_minutes_by_household,
     clip_to_bounds,
     column_bound,
+    delivered_by_household,
     fill_bound,
     load_column_cadence,
     usable_readings,
@@ -770,6 +772,191 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
     return report.reset_index()
 
 
+class DeliveryPaths(NamedTuple):
+    """Which logic each row's variable is resolved by, as row-aligned masks.
+
+    The three partition the frame. ``cumulative`` and ``interval`` are the two
+    logics; ``nothing`` is the rows of a (household, column) the supplier never
+    sent in either form, which no logic resolves.
+    """
+
+    cumulative: pd.Series
+    interval: pd.Series
+    nothing: pd.Series
+
+
+def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
+    """
+    Split *df*'s rows by which form of this variable the supplier delivered.
+
+    Read from the cadence sidecar, not from the values. A delivered register
+    whose every reading the mapping stage later condemned still *was* delivered,
+    and the two logics differ in what they are allowed to read -- so routing on
+    the data would send such a household down the interval path and label its
+    cells with a delivery that never happened.
+
+    A register makes the variable the cumulative logic's: it is authoritative,
+    and that logic reads the register together with the intervals differenced
+    from it. Only where no register arrived does the interval logic apply, and
+    it reads the delivered intervals and the project averages alone.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The chunk being filled. Must carry ``HuisIdBSV``.
+    cum_col : str
+        The register column of the variable.
+    diff_col : str
+        Its interval column.
+    cadence : pd.DataFrame
+        The cadence table from :func:`etdtransform.bounds.load_column_cadence`.
+
+    Returns
+    -------
+    DeliveryPaths
+        Three boolean masks on ``df.index``, exactly one True per row.
+
+    Raises
+    ------
+    ValueError
+        When ``HuisIdBSV`` is missing or holds pd.NA, or when a household in the
+        frame has no row in the sidecar at all.
+    """
+    if "HuisIdBSV" not in df.columns:
+        raise ValueError(
+            f"Cannot route {diff_col} by delivered form: the chunk carries no "
+            f"HuisIdBSV, so no row can be attributed to a household."
+        )
+
+    households = df["HuisIdBSV"]
+    # isin() reads pd.NA as no-match, so an NA id would route silently into
+    # nothing-delivered and still satisfy the partition guard below.
+    if bool(households.isna().any()):
+        raise ValueError(
+            f"Cannot route {diff_col} by delivered form: "
+            f"{int(households.isna().sum())} row(s) carry no HuisIdBSV."
+        )
+
+    # A household absent from the sidecar is absent metadata, not a delivery
+    # fact: both lookups would return False and every one of its rows would be
+    # classified as nothing-delivered and left unfilled. A household present
+    # with no row for THIS column is the legitimate case -- that is what not
+    # delivered means (ADR-003: a missing required input fails rather than
+    # defaults).
+    if cadence is None or getattr(cadence, "empty", True):
+        raise ValueError(
+            f"Cannot route {diff_col} by delivered form: no cadence table. "
+            f"Re-map the dataset to produce the column-cadence sidecar."
+        )
+    # A table without n_readings records no delivery counts at all, so the form
+    # of every column is unknown. Routing on that would put every row on the
+    # nothing-delivered path and stop the fill outright, which is the worst of
+    # the three answers. The cumulative logic is the one that ran before this
+    # routing existed, so an unrecorded form falls back to it: the fill behaves
+    # as it did, and only a table that can state the form moves a column off it.
+    if "n_readings" not in cadence.columns:
+        logging.info(
+            f"[impute] {diff_col}: the cadence table records no delivery "
+            f"counts, so every row takes the cumulative logic, as before "
+            f"delivered-form routing. Re-map to record them."
+        )
+        return DeliveryPaths(
+            cumulative=pd.Series(True, index=df.index, dtype="boolean"),
+            interval=pd.Series(False, index=df.index, dtype="boolean"),
+            nothing=pd.Series(False, index=df.index, dtype="boolean"),
+        )
+
+    known = set(int(h) for h in cadence["HuisIdBSV"].dropna().unique())
+    unknown = sorted(set(int(h) for h in households.unique()) - known)
+    if unknown:
+        raise ValueError(
+            f"Cannot route {diff_col} by delivered form: household(s) "
+            f"{unknown[:10]} have no row in the column-cadence sidecar, so "
+            f"what the supplier delivered for them is unrecorded. Re-map them."
+        )
+
+    register = delivered_by_household(cum_col, cadence)
+    intervals = delivered_by_household(diff_col, cadence)
+    on_register = households.isin([h for h, yes in register.items() if yes])
+    on_intervals = households.isin([h for h, yes in intervals.items() if yes])
+
+    paths = DeliveryPaths(
+        cumulative=on_register,
+        interval=on_intervals & ~on_register,
+        nothing=~on_register & ~on_intervals,
+    )
+
+    # The masks are nullable boolean, so pd.NA is representable and df.loc would
+    # read it as False without complaint.
+    for name, mask in paths._asdict().items():
+        if bool(mask.isna().any()):
+            raise ValueError(
+                f"Routing {diff_col}: the {name} path mask holds pd.NA on "
+                f"{int(mask.isna().sum())} row(s)."
+            )
+
+    # Catches a derivation bug here rather than through its consequences
+    # downstream, where it would read as a fill or a flag that makes no sense.
+    claims = (
+        paths.cumulative.astype("Int64")
+        + paths.interval.astype("Int64")
+        + paths.nothing.astype("Int64")
+    )
+    if not bool((claims == 1).all()):
+        raise ValueError(
+            f"Routing {diff_col}: {int((claims != 1).sum())} row(s) are claimed "
+            f"by {'more than one' if bool((claims > 1).any()) else 'no'} "
+            f"delivery path."
+        )
+
+    return paths
+
+
+def _stamp_branch(df, diff_col, impute_type_col, paths) -> None:
+    """
+    Record which logic resolved each cell the fill reached.
+
+    OR-ed, and last: the fill routes assign into a column
+    ``setup_impute_columns`` creates all-NA, so a signal written before them
+    would be replaced rather than kept. Called on both of the fill's paths --
+    the one that routes gaps and the one that finds nothing to impute -- because
+    the upspread writes findings on the second as well.
+
+    The signal says which branch handled the cell and asserts nothing about the
+    outcome: a cell the interval branch could not scale reads as
+    DELIVERED_INTERVAL_IMPUTATION with no fill action, which is why the branch
+    is recorded separately from what it did. A cell with no findings at all is
+    one no branch reached, and carries neither.
+    """
+    if paths is None:
+        return
+
+    has_finding = df[impute_type_col].notna()
+    # Every gap cell on the cumulative path ends with a finding: a route wrote
+    # one, or the end-of-fill sweep wrote GAP_NOT_FILLED. The interval branch
+    # deliberately writes none on a cell it declines, because those rows are not
+    # in a gap and GAP_NOT_FILLED would claim a structure they do not have -- so
+    # an empty cell there is also one this logic considered, and counts.
+    for path, reached, signal in (
+        (
+            paths.cumulative,
+            has_finding,
+            ImputeType.DELIVERED_CUMULATIVE_IMPUTATION,
+        ),
+        (
+            paths.interval,
+            has_finding | df[diff_col].isna(),
+            ImputeType.DELIVERED_INTERVAL_IMPUTATION,
+        ),
+    ):
+        on = path & reached
+        if on.any():
+            df.loc[on, impute_type_col] = (
+                df[impute_type_col].fillna(ImputeType.NONE.value)
+                | signal.value
+            )
+
+
 def _stamp_resampled(df, impute_type_col, spread_rows) -> None:
     """
     Record RESAMPLED_TO_GRID on the cells the upspread placed.
@@ -936,6 +1123,11 @@ def impute_and_normalize(
         # only: a register is authoritative and the cumulative logic reads it at
         # its own cadence. Captured pre-spread in OldDiff above, so a comparison
         # shows this pass placing the energy.
+        # Which logic resolves each row, from what the supplier delivered. Built
+        # before anything reads the column, because the two logics differ in
+        # what they may read and the spread below is the interval logic's.
+        _paths = delivery_paths(df, cum_col, diff_col, _cadence)
+
         _spread_steps = spread_steps_by_household(cum_col, diff_col, _cadence)
         _spread_rows = pd.Series(False, index=df.index)
         if _spread_steps:
@@ -958,15 +1150,22 @@ def impute_and_normalize(
 
         drop_temp_cols(df, logLeftoverError=True)
 
-        # The no-delivered-no-fill rule: a (household, column) with zero
-        # delivered readings is never filled -- there is nothing to anchor or
-        # scale from, and the only thing the fill could do is invent the whole
-        # column from peer averages (the broadcast bug class the zero-prefill
-        # era papered over). Delivered means the usable-readings predicate on
-        # the interval OR its cumulative form -- a column of pipeline-written
-        # values carries NOT_A_MEASUREMENT bits and does not count -- and the
-        # seeded first-row zero of add_diff_columns is excluded, mirroring the
-        # interval-only test in the fill. One mask per column per chunk; the
+        # The no-usable-reading-no-fill rule: a (household, column) whose every
+        # reading the mapping stage disqualified is never filled -- there is
+        # nothing to anchor or scale from, and the only thing the fill could do
+        # is invent the whole column from peer averages (the broadcast bug class
+        # the zero-prefill era papered over).
+        #
+        # Measured on the values, and so a different question from the delivery
+        # form above: a register the supplier did send, whose readings were all
+        # condemned, is on the cumulative path and has no usable reading. The
+        # path decides which logic reads the column; this decides whether there
+        # is anything for that logic to work from.
+        #
+        # Usable means the usable-readings predicate on the interval OR its
+        # register -- a column of pipeline-written values carries
+        # NOT_A_MEASUREMENT bits and does not count -- with the seeded first-row
+        # zero of add_diff_columns excluded. One mask per column per chunk; the
         # hot loop never sees it.
         _first_in_house = (
             df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)
@@ -978,11 +1177,11 @@ def impute_and_normalize(
             | usable_readings(df, cum_col)
         )
         if "HuisIdBSV" in df.columns:
-            _never_fillable = ~(
+            _no_usable_readings = ~(
                 _delivered_rows.groupby(df["HuisIdBSV"]).transform("any")
             )
         else:
-            _never_fillable = pd.Series(
+            _no_usable_readings = pd.Series(
                 not bool(_delivered_rows.any()), index=df.index
             )
 
@@ -1036,7 +1235,7 @@ def impute_and_normalize(
             # we made (soft). A never-fillable household is excluded: no
             # fill was ever possible there, so an empty bound withholds
             # nothing and the flags would be noise on untouched rows.
-            _no_value_permitted = _empty & ~delivered & ~_never_fillable
+            _no_value_permitted = _empty & ~delivered & ~_no_usable_readings
             df["_infeasible_hard"] = (
                 _no_value_permitted & ~_bound_from_imputed.fillna(False)
             )
@@ -1063,6 +1262,7 @@ def impute_and_normalize(
                 index=df.index,
             )
             _stamp_resampled(df, impute_type_col, _spread_rows)
+            _stamp_branch(df, diff_col, impute_type_col, _paths)
             logging.info("Apply thresholds to remove physically impossible outliers")
             df = apply_thresholds(
                 df,
@@ -1085,22 +1285,37 @@ def impute_and_normalize(
                 cum_col=cum_col,
             )
 
-            # Never-fillable households leave the gap structures entirely:
-            # their rows are not gaps, so no route writes, no flag is set,
-            # no volume row is collected, and the cells stay NA.
-            if _never_fillable.any():
+            # A gap is a run of missing intervals bounded by register readings:
+            # it exists so a jump can be measured across it and distributed. A
+            # variable delivered as intervals only has no register, so it has
+            # missing cells and no gaps -- and a group id on those rows would
+            # invite the gap machinery to measure a jump that does not exist.
+            #
+            # Every reader of these two columns gates on notna(), so blanking
+            # them is how the interval path stays out of the gap bookkeeping:
+            # the end-of-fill GAP_NOT_FILLED sweep skips those rows, the
+            # still-missing-in-a-gap warning does not count them, and the gap
+            # statistics do not report them.
+            if _paths.interval.any():
+                df.loc[_paths.interval, "cumulative_value_group"] = pd.NA
+                df.loc[_paths.interval, "gap_length"] = pd.NA
+
+            # Households with no usable reading leave the gap structures
+            # entirely: their rows are not gaps, so no route writes, no flag is
+            # set, no volume row is collected, and the cells stay NA.
+            if _no_usable_readings.any():
                 _n_house = (
-                    int(df.loc[_never_fillable, "HuisIdBSV"].nunique())
+                    int(df.loc[_no_usable_readings, "HuisIdBSV"].nunique())
                     if "HuisIdBSV" in df.columns else 1
                 )
                 logging.info(
                     f"{diff_col}: {_n_house} household(s) deliver no usable "
                     f"reading in this column (interval or cumulative); their "
-                    f"{int(_never_fillable.sum())} row(s) are not treated as "
+                    f"{int(_no_usable_readings.sum())} row(s) are not treated as "
                     f"gaps and stay NA."
                 )
-                df.loc[_never_fillable, "cumulative_value_group"] = pd.NA
-                df.loc[_never_fillable, "gap_length"] = pd.NA
+                df.loc[_no_usable_readings, "cumulative_value_group"] = pd.NA
+                df.loc[_no_usable_readings, "gap_length"] = pd.NA
 
             logging.info(f"Imputing {diff_col}")
             df = process_imputation_vectorized(
@@ -1112,8 +1327,10 @@ def impute_and_normalize(
                 is_imputed_col=is_imputed_col,
                 cadence=_cadence,
                 volume_reports=volume_reports,
+                paths=_paths,
             )
             _stamp_resampled(df, impute_type_col, _spread_rows)
+            _stamp_branch(df, diff_col, impute_type_col, _paths)
             if volume_reports:
                 volume_reports[-1]["column"] = diff_col
                 # rule_expressions (the rules in force for this column) is a
@@ -1226,7 +1443,7 @@ def impute_and_normalize(
     if not imputation_gap_stats:
         raise RuntimeError(
             "No columns were imputed -- all Diff columns were absent from this chunk. "
-            "Check that prepare_diff_averages_for_impute has run and that cum_cols matches the source data."
+            "Check that prepare_diff_averages_for_impute_ibis has run and that cum_cols matches the source data."
         )
     imputation_gap_stats_df = pd.concat(imputation_gap_stats, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(
@@ -1400,6 +1617,7 @@ def process_imputation_vectorized(
     is_imputed_col,
     cadence=None,
     volume_reports=None,
+    paths=None,
 ):
     """
     Perform vectorized imputation on the DataFrame.
@@ -1430,6 +1648,16 @@ def process_imputation_vectorized(
         When given, one frame per call is appended: per gap, what the routes
         wrote, what the bounds moved, and what could not be placed. Collected
         before the threshold pass, which accounts for itself separately.
+    paths : DeliveryPaths, optional
+        Row masks saying which logic resolves each row, from
+        :func:`delivery_paths`. The cumulative routes are confined to the rows
+        whose register the supplier delivered, and the interval branch to the
+        rows where it did not. Without it every row is treated as cumulative,
+        which is how this function behaved before the interval path existed.
+
+        The branch signals are not written here. They go on last, once both of
+        the fill's paths have run, so :func:`impute_and_normalize` records them
+        -- see :func:`_stamp_branch`.
 
     Returns
     -------
@@ -1652,9 +1880,21 @@ def process_imputation_vectorized(
     logging.info("Setting up proportional adjustment to mpute")
     df = setup_proportional_adjustment_to_impute(df, diff_col=diff_col, avg_col=avg_col)
 
+    # The routes below read a register: they measure a jump across a gap, or
+    # classify a gap by which of its ends carries a reading. A variable with no
+    # register has neither, so those routes may not claim its rows. Absent
+    # paths mean every row is cumulative, which is how this behaved before the
+    # interval path existed.
+    _on_cumulative = (
+        paths.cumulative if paths is not None
+        else pd.Series(True, index=df.index)
+    )
+
     def impute_with_gap_jump(df, diff_col, is_imputed_col, impute_type_col):
         has_gap_jump_mask = (
-            ~df["gap_jump_is_na_mask"] & df["cumulative_value_group"].notna()
+            ~df["gap_jump_is_na_mask"]
+            & df["cumulative_value_group"].notna()
+            & _on_cumulative
         )
 
         # An empty row bound permits no value, so no route may write there.
@@ -1749,7 +1989,9 @@ def process_imputation_vectorized(
 
     def impute_wo_gap_jump(df, diff_col, impute_type_col, is_imputed_col):
         wo_gap_jump_mask = (
-            df["gap_jump_is_na_mask"] & df["cumulative_value_group"].notna()
+            df["gap_jump_is_na_mask"]
+            & df["cumulative_value_group"].notna()
+            & _on_cumulative
         )
 
         # An empty row bound permits no value, so no route may write there;
@@ -1778,10 +2020,12 @@ def process_imputation_vectorized(
                 == 0
             )
 
-            # Neither end of the gap has a cumulative value. The household
-            # delivers this variable as intervals only when the interval column
-            # holds values and the cumulative does not.
-            _interval_only = (
+            # Neither end of this gap carries a register reading, though the
+            # supplier did deliver the register -- a variable with none is on
+            # the interval path and never reaches this route. So the gap has no
+            # anchor of its own, and the household's intervals are what is left
+            # to scale from.
+            _unanchored_gap = (
                 nogpjump_no_start_no_end_value_mask
                 & ~house_no_diff_values
                 & df["impute_values"].notna()
@@ -1791,14 +2035,14 @@ def process_imputation_vectorized(
             # the only scale available. Fill where it was computed from the
             # household's own rows; leave the cells empty where it fell back.
             _fallback = df["house_factor_is_fallback"]
-            _fill_io = _interval_only & ~_fallback
-            _skip_io = _interval_only & _fallback
+            _fill_io = _unanchored_gap & ~_fallback
+            _skip_io = _unanchored_gap & _fallback
 
             if _fill_io.any():
                 logging.info(
                     f"{diff_col}: filling {int(_fill_io.sum())} interval(s) from "
-                    f"the project average scaled to the household -- the variable "
-                    f"is delivered as intervals only for this household."
+                    f"the project average scaled to the household -- neither "
+                    f"end of the gap carries a register reading."
                 )
                 df.loc[_fill_io, is_imputed_col] = True
                 df.loc[_fill_io, diff_col] = (
@@ -1953,6 +2197,80 @@ def process_imputation_vectorized(
 
     logging.info("Impute without gap jump")
     df = impute_wo_gap_jump(
+        df,
+        diff_col=diff_col,
+        impute_type_col=impute_type_col,
+        is_imputed_col=is_imputed_col,
+    )
+
+    def impute_interval_only(df, diff_col, impute_type_col, is_imputed_col):
+        """Fill a variable delivered without a register, cell by cell.
+
+        There is no gap to distribute across: a gap is a run bounded by register
+        readings, and these rows have none. So there is no jump to measure, no
+        group to make sum to it, and no end to classify by -- only cells that
+        are missing, each filled from the project average brought to this
+        household's level.
+
+        The whole arithmetic is ``avg x house_impute_factor``. The factor is per
+        household rather than per gap, so it needs nothing the cumulative logic
+        builds.
+        """
+        if paths is None or not bool(paths.interval.any()):
+            return df
+
+        permitted = (
+            ~df["_row_bound_empty"].fillna(False)
+            if "_row_bound_empty" in df.columns
+            else pd.Series(True, index=df.index)
+        )
+
+        # impute_values is the project average with a partly-covered gap's own
+        # mean substituted where the average is absent; on these rows no gap
+        # exists, so it is the average itself.
+        missing = paths.interval & df[diff_col].isna()
+        scalable = missing & df["impute_values"].notna() & permitted
+
+        # Where the factor fell back to the neutral 1.0 the household has too
+        # few comparable rows to say what its level is, and filling with the
+        # project average raw would assert one. Same rule as the unanchored
+        # routes: leave the cell empty instead.
+        _fallback = df["house_factor_is_fallback"]
+        _fill = scalable & ~_fallback
+        _skip = scalable & _fallback
+
+        if _fill.any():
+            logging.info(
+                f"{diff_col}: filling {int(_fill.sum())} interval(s) from the "
+                f"project average scaled to the household -- the variable is "
+                f"delivered as intervals only."
+            )
+            df.loc[_fill, is_imputed_col] = True
+            df.loc[_fill, diff_col] = (
+                df.loc[_fill, "impute_values"]
+                * df.loc[_fill, "house_impute_factor"]
+            )
+            # First write: no cumulative route reaches these rows, so this
+            # assigns rather than OR-s.
+            df.loc[_fill, impute_type_col] = (
+                ImputeType.HOUSEHOLD_SCALED_AVERAGE.value
+            )
+
+        if _skip.any():
+            logging.warning(
+                f"{diff_col}: leaving {int(_skip.sum())} interval(s) unfilled "
+                f"-- the variable is delivered as intervals only and the "
+                f"household factor has too few comparable rows to scale with."
+            )
+
+        # No gap flag on what is left empty. These rows are not in a gap, so
+        # GAP_NOT_FILLED would claim a structure they do not have; the branch
+        # signal below records that the interval logic resolved them, and the
+        # absence of a fill action records that it wrote nothing.
+        return df
+
+    logging.info("Impute interval-only columns")
+    df = impute_interval_only(
         df,
         diff_col=diff_col,
         impute_type_col=impute_type_col,

@@ -18,8 +18,8 @@ import pandas as pd
 import pytest
 
 from etdmap.data_model import thresholds_dict
-from etdtransform.impute import calculate_average_diff, calculate_average_diff_ibis
-from conftest import cadence_table
+from etdtransform.impute import calculate_average_diff_ibis
+from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -65,7 +65,7 @@ def _frame(households=(1, 2), n=8):
 
 
 def _average_pandas(df, cadence_minutes):
-    return calculate_average_diff(
+    return project_averages(
         df,
         "ProjectIdBSV",
         [DIFF],

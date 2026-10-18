@@ -161,9 +161,14 @@ class TestKindIsNotRecoverableFromImputationFlagsAlone:
         df, _ = _household()
         out, _ = _treated_and_imputed(df)
 
+        # The branch signal is masked off: it says which logic resolved the
+        # cell, and both kinds here are resolved by the cumulative one, so it is
+        # the same bit on both and not the distinction this test is about.
+        not_the_route = ImputeType.DELIVERED_CUMULATIVE_IMPUTATION.value
         kinds = {
             (start, stop): {
-                int(v) for v in out[f"{DIFF}_impute_type"].iloc[start:stop]
+                int(v) & ~not_the_route
+                for v in out[f"{DIFF}_impute_type"].iloc[start:stop]
                 if pd.notna(v)
             }
             for start, stop in _filled_blocks(out)

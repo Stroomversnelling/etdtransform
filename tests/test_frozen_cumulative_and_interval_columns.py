@@ -12,9 +12,8 @@ import logging
 import pandas as pd
 import pytest
 
-from etdtransform.impute import calculate_average_diff
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
-from conftest import cadence_table
+from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -83,8 +82,21 @@ def _span(s: pd.Series) -> pd.Series:
     return s.iloc[FREEZE_FIRST : FREEZE_LAST + 2]
 
 
+#: Bits another pass ORs onto whatever a fill route recorded, masked off so an
+#: assertion on a route's own value tests one thing. The branch signal says
+#: which logic resolved the cell, which every cell here is resolved by.
+_NOT_THE_ROUTE = (
+    ImputeType.DELIVERED_CUMULATIVE_IMPUTATION.value
+    | ImputeType.DELIVERED_INTERVAL_IMPUTATION.value
+)
+
+
 def _types(out: pd.DataFrame) -> set:
-    return {int(v) for v in out[f"{DIFF}_impute_type"] if pd.notna(v)}
+    return {
+        int(v) & ~_NOT_THE_ROUTE
+        for v in out[f"{DIFF}_impute_type"]
+        if pd.notna(v)
+    }
 
 
 @pytest.mark.parametrize(
@@ -210,7 +222,7 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     df.loc[(df.HuisIdBSV == 99) & (df.ReadingDate == dates[0]), DIFF] = 5000.0
     df[DIFF] = df[DIFF].astype("Float64")
 
-    result = calculate_average_diff(
+    result = project_averages(
         df, "ProjectIdBSV", [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )
@@ -246,7 +258,7 @@ def test_project_average_rejects_physically_impossible_value():
     df.loc[df.ReadingDate == dates[0], DIFF] = 5000.0
     df[DIFF] = df[DIFF].astype("Float64")
 
-    result = calculate_average_diff(
+    result = project_averages(
         df, "ProjectIdBSV", [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )

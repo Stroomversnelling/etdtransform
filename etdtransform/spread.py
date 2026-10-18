@@ -8,10 +8,8 @@ energy is in hand, and a bound written per slot judges a reading holding k of
 them.
 
 So the reading is placed on the k slots it covers, before the fill looks for
-what is missing. This is an upspread, and it is not the averaging's
-``resample_to_grid``: that one chooses between a register's rise and a delivered
-interval per household, and the interval path of the fill may not consult a
-register.
+what is missing. The averaging does its own spreading, inside the aggregation
+it runs as SQL; this is the fill's, on the frame it is about to read.
 
 Only a variable delivered as intervals only is spread. Where a register exists
 it is authoritative and the cumulative logic reads it, at its own cadence.
@@ -133,11 +131,10 @@ def spread_delivered_interval_to_grid(
     and an hour the meter never reported stays unknown rather than borrowing
     from the hour after it.
 
-    Separate from :func:`resample_to_grid`, which the averaging uses: that one
-    chooses between a register's rise and a delivered interval per household,
-    and the interval path of the fill may not consult a register. Both place a
-    reading on the *k* slots ending at it and divide by *k*, so for a delivered
-    interval with no register they agree slot for slot.
+    The averaging reaches the same values by a different route -- it expands
+    each window against a table of offsets in SQL -- and the two must agree slot
+    for slot, because the interval branch of the fill multiplies a household's
+    own values by the average. ``test_spread_delivered_interval`` asserts that.
 
     Parameters
     ----------

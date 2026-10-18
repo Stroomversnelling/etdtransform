@@ -12,10 +12,9 @@ impute_and_normalize for every fill shell).
 
 import pandas as pd
 import pytest
-from conftest import cadence_table
+from conftest import cadence_table, project_averages
 
 from etdtransform.impute import (
-    calculate_average_diff,
     concatenate_avg_diff_columns,
     get_diff_columns,
 )
@@ -90,7 +89,7 @@ class TestAveragingMicroMixedSupplier:
     def test_avg_diffs_has_root_not_splits(self):
         df = self._frame()
         diff_columns = get_diff_columns([ROOT, HOOG, LAAG, WTW])
-        avg_dict = calculate_average_diff(
+        avg_dict = project_averages(
             df, "ProjectIdBSV", diff_columns,
             bounds={},
             cadence=cadence_table(df, [ROOT, WTW]),

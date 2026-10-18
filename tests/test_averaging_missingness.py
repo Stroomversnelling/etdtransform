@@ -1,11 +1,13 @@
-"""
-Tests that Ibis-based functions produce the same outputs as their pandas
-equivalents.  All tests use a synthetic in-memory fixture -- ibis.memtable()
-wraps the fixture DataFrame for the Ibis path.
+"""Missingness through the averaging, on a synthetic in-memory fixture.
 
-The fixture intentionally contains null (pd.NA) values in measurement columns
-to verify that both paths handle missingness identically.  Null-in, null-out
-is a correctness requirement throughout the ETD data science pipeline.
+The fixture carries null (pd.NA) values in its measurement columns on purpose.
+Null-in, null-out is a correctness requirement throughout the pipeline: a slot
+with no average is not a slot with an average of zero, and a project whose every
+reading is absent must come back with its slots present and empty rather than
+with no slots at all.
+
+``ibis.memtable()`` wraps each frame, which is what the averaging takes -- the
+pipeline passes a lazy table from ``ibis.read_parquet`` instead.
 """
 import numpy as np
 import pandas as pd
@@ -13,7 +15,7 @@ import pytest
 
 import ibis
 
-from etdtransform.impute import calculate_average_diff, calculate_average_diff_ibis
+from etdtransform.impute import calculate_average_diff_ibis
 from conftest import cadence_table
 
 
@@ -101,7 +103,7 @@ def test_ibis_memtable_preserves_nulls(diff_fixture_df):
     for col in DIFF_COLS:
         orig_nulls = _null_positions(original, col)
         rest_nulls = _null_positions(restored, col)
-        assert orig_nulls == rest_nulls, (
+    assert orig_nulls == rest_nulls, (
             f"{col}: null positions changed after ibis round-trip. "
             f"original={orig_nulls}, restored={rest_nulls}"
         )
@@ -109,38 +111,18 @@ def test_ibis_memtable_preserves_nulls(diff_fixture_df):
     pd.testing.assert_frame_equal(original, restored, check_like=True)
 
 
-def test_calculate_average_diff_ibis_matches_pandas(diff_fixture_df):
-    """Ibis and pandas paths agree on avg_diff values and null positions."""
-    tbl = ibis.memtable(diff_fixture_df)
-    result_pd = calculate_average_diff(
-        diff_fixture_df, "ProjectIdBSV", DIFF_COLS,
-        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
-    )
-    result_ibis = calculate_average_diff_ibis(
-        tbl, "ProjectIdBSV", DIFF_COLS,
-        cadence=_cadence(diff_fixture_df, DIFF_COLS), grid_minutes=5,
-    )
-
-    sort_avg = ["ProjectIdBSV", "ReadingDate"]
-
-    for col in DIFF_COLS:
-        avg_pd = result_pd[col]["avg_diff"].sort_values(sort_avg).reset_index(drop=True)
-        avg_ib = result_ibis[col]["avg_diff"].sort_values(sort_avg).reset_index(drop=True)
-
-        # Null positions in the avg column must match
-        assert _null_positions(avg_pd, f"{col}_avg") == _null_positions(avg_ib, f"{col}_avg"), (
-            f"{col}: avg_diff null positions differ between pandas and Ibis"
-        )
-        pd.testing.assert_frame_equal(avg_pd, avg_ib, check_like=True, rtol=1e-5)
-
-
 def test_nulls_excluded_from_mean(diff_fixture_df):
-    """Null Diff values must not affect the mean (both paths skip them)."""
-    # Build a minimal frame: one project, two households, three timestamps.
-    # household 1: readings [2.0, pd.NA, 4.0]  -> mean = 3.0
-    # household 2: readings [6.0, 6.0,  6.0]  -> mean = 6.0
-    # project mean over both households = (3.0 + 6.0) / 2 = 4.5
-    # (pandas and SQL both skip NULLs in mean, so average is over non-null pairs)
+    """A household that did not cover the window does not shape the average.
+
+    One project, two households, three slots. Household 1 reports
+    [2.0, pd.NA, 4.0] -- two slots of three -- and household 2 reports 6.0
+    throughout. The presence gate excludes household 1 for not covering the
+    window, so the average is household 2's level at every slot rather than a
+    blend of a partial series with a complete one.
+
+    Null-in, null-out still holds: no slot comes back empty, because one
+    household did cover every one of them.
+    """
     dates = pd.date_range("2024-01-01", periods=3, freq="5min")
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1, 1, 1, 1, 1, 1], dtype="Int64"),
@@ -149,22 +131,16 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
         "ZonopwekVerbruikDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
     })
 
-    result_pd = calculate_average_diff(
-        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
-        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
-    )
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
     )
 
-    avg_pd = result_pd["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
-    avg_ib = result_ibis["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].sort_values().values
+    avg = result_ibis["ZonopwekVerbruikDiff"]["avg_diff"]
+    avg = avg.sort_values("ReadingDate")["ZonopwekVerbruikDiff_avg"]
 
-    np.testing.assert_allclose(avg_pd, avg_ib, rtol=1e-6)
-    # Verify the mean correctly ignores the null
-    assert not np.isnan(avg_pd).any(), "NaN leaked into pandas mean despite non-null peers"
-    assert not avg_ib.isna().any() if hasattr(avg_ib, "isna") else not np.isnan(avg_ib).any()
+    assert avg.astype(float).tolist() == pytest.approx([6.0, 6.0, 6.0])
+    assert avg.notna().all(), "a null peer emptied a slot another household covered"
 
 
 def test_empty_project_edge_cases():
@@ -190,50 +166,39 @@ def test_empty_project_edge_cases():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(
-        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
-        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
-    )
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
     )
 
-    for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
+    result = result_ibis
+    avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
-        # avg_diff must have rows for project 2 only (project 1 excluded)
-        # Project 1 is all-zero, so it has no average to report -- but its
-        # slots exist and come back carrying pd.NA. A slot with no value is not
-        # a missing slot, and the merge downstream is on
-        # (project, ReadingDate).
-        assert set(avg["ProjectIdBSV"].dropna()) == {1, 2}, (
+    # avg_diff must have rows for project 2 only (project 1 excluded)
+    # Project 1 is all-zero, so it has no average to report -- but its
+    # slots exist and come back carrying pd.NA. A slot with no value is not
+    # a missing slot, and the merge downstream is on
+    # (project, ReadingDate).
+    assert set(avg["ProjectIdBSV"].dropna()) == {1, 2}, (
             f"{label}: both projects should appear, got "
             f"{set(avg['ProjectIdBSV'].dropna())}"
         )
-        # Zero is a measurement, so an all-zero project averages to 0.0. That is
-        # a different fact from pd.NA, which means nothing was measured, and the
-        # two must not be conflated.
-        assert (
+    # Zero is a measurement, so an all-zero project averages to 0.0. That is
+    # a different fact from pd.NA, which means nothing was measured, and the
+    # two must not be conflated.
+    assert (
             avg.loc[avg["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_avg"].dropna() == 0.0
         ).all(), f"{label}: an all-zero project should average to zero, not NA"
-        assert avg.loc[avg["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_avg"].notna().any(), (
+    assert avg.loc[avg["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_avg"].notna().any(), (
             f"{label}: project 2 has data and should have an average"
         )
-        # Three slots for each of the two projects, now that project 1 is no
-        # longer dropped wholesale.
-        assert len(avg) == 6, f"{label}: expected 3 slots per project, got {len(avg)}"
-        assert len(avg[avg["ProjectIdBSV"] == 2]) == 3, (
+    # Three slots for each of the two projects, now that project 1 is no
+    # longer dropped wholesale.
+    assert len(avg) == 6, f"{label}: expected 3 slots per project, got {len(avg)}"
+    assert len(avg[avg["ProjectIdBSV"] == 2]) == 3, (
             f"{label}: project 2 should still have its 3 slots"
         )
 
-    # The two paths must agree exactly on avg_diff
-    sort_avg = ["ProjectIdBSV", "ReadingDate"]
-    pd.testing.assert_frame_equal(
-        result_pd["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        result_ibis["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        check_like=True, rtol=1e-5,
-    )
 
 
 def test_flagged_values_excluded_in_both_paths():
@@ -258,26 +223,16 @@ def test_flagged_values_excluded_in_both_paths():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd = calculate_average_diff(
-        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
-        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
-    )
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
     )
 
-    for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        assert result["ZonopwekVerbruikDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
-        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].astype(float)
-        assert (avg == 3.0).all(), f"{label}: flagged values shaped the average"
+    result = result_ibis
+    assert result["ZonopwekVerbruikDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
+    avg = result["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].astype(float)
+    assert (avg == 3.0).all(), f"{label}: flagged values shaped the average"
 
-    sort_avg = ["ProjectIdBSV", "ReadingDate"]
-    pd.testing.assert_frame_equal(
-        result_pd["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        result_ibis["ZonopwekVerbruikDiff"]["avg_diff"].sort_values(sort_avg).reset_index(drop=True),
-        check_like=True, rtol=1e-5,
-    )
 
 
 def test_all_null_diffs_edge_case():
@@ -301,21 +256,17 @@ def test_all_null_diffs_edge_case():
     })
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
-    result_pd   = calculate_average_diff(
-        mini, "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
-        cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
-    )
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
     )
 
-    for result, label in [(result_pd, "pandas"), (result_ibis, "ibis")]:
-        avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
+    result = result_ibis
+    avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
-        assert len(avg) == len(dates), (
+    assert len(avg) == len(dates), (
             f"{label}: expected one row per slot, got {len(avg)}"
         )
-        assert avg["ZonopwekVerbruikDiff_avg"].isna().all(), (
+    assert avg["ZonopwekVerbruikDiff_avg"].isna().all(), (
             f"{label}: an all-null project has no average to report"
         )

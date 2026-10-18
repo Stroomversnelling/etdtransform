@@ -495,7 +495,6 @@ def impute_hh_data_5min(
     df,
     cum_cols=cumulative_columns,
     sorted=False,
-    diffs_calculated=False,
     reconstruct_in_pandas: bool = True,
     use_constraints: bool = True,
 ):
@@ -510,8 +509,6 @@ def impute_hh_data_5min(
         List of cumulative columns to process, by default cumulative_columns
     sorted : bool, optional
         Whether the data is already sorted, by default False
-    diffs_calculated : bool, optional
-        Whether differences are already calculated, by default False
     reconstruct_in_pandas : bool, optional
         Whether to reconstruct cumulative columns (*Original, cumsum, *Check) in
         pandas before writing to parquet.  Set to False when the caller will do
@@ -557,7 +554,6 @@ def impute_hh_data_5min(
         project_id_column="ProjectIdBSV",
         cumulative_columns=cum_cols,
         sorted=sorted,
-        diffs_calculated=diffs_calculated,
         volume_reports=_volume_reports,
         constraints=_constraints_for_run(use_constraints),
         coverage_duty=_read_coverage_duty(
@@ -792,7 +788,7 @@ def _finalize_impute_outputs(
         raise RuntimeError(
             f"{log_prefix} No gap stats produced across any chunk. "
             "This means no Diff columns were present after merging diffs. "
-            "Ensure prepare_diff_averages_for_impute has been run before imputation."
+            "Ensure prepare_diff_averages_for_impute_ibis has been run before imputation."
         )
     imputation_gap_stats_df = pd.concat(non_empty, ignore_index=True)
     imputation_gap_stats_df["bitwise_methods"] = methods_to_bitwise(

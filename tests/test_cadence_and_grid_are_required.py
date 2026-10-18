@@ -97,11 +97,26 @@ class TestTheDeclaredGridIsRequired:
 
 
 class TestTheGridIsNotDefaultedDownstream:
-    def test_resample_to_grid_requires_a_grid(self):
-        """A default here would reinstate the assumption the loaders refuse."""
+    def test_the_spreading_takes_the_grid_as_a_required_argument(self):
+        """The spreading divides a window's volume by the slots it covers, so
+        the grid decides how many slots that is. A default here would spread an
+        hourly reading over whatever spacing the default names."""
         import inspect
 
-        from etdtransform.bounds import resample_to_grid
+        from etdtransform.impute import _resample_average_ibis
 
-        parameter = inspect.signature(resample_to_grid).parameters["grid_minutes"]
+        parameter = inspect.signature(_resample_average_ibis).parameters[
+            "grid_minutes"
+        ]
         assert parameter.default is inspect.Parameter.empty
+
+    def test_the_averaging_resolves_the_grid_rather_than_assuming_one(self):
+        """calculate_average_diff_ibis accepts grid_minutes=None, and resolves it
+        from the index -- which raises when no batch declares one. Accepting None
+        is not the same as defaulting to a number."""
+        import inspect
+
+        from etdtransform.impute import calculate_average_diff_ibis
+
+        source = inspect.getsource(calculate_average_diff_ibis)
+        assert "grid_minutes = dataset_grid_minutes()" in source

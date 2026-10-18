@@ -13,6 +13,8 @@ two households and is not the same as zero.
 import pandas as pd
 import pytest
 
+from conftest import project_averages
+
 from etdtransform.presence import (
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
@@ -310,7 +312,7 @@ class TestAThinProjectLosesItsAverage:
         assert values.isna().all()
 
 
-class TestBothAveragingPathsApplyTheGates:
+class TestTheAveragingAppliesTheGates:
     """The ibis path is what production runs; the pandas path is what the tests
     reason about. A gate in one and not the other makes them two algorithms."""
 
@@ -340,43 +342,31 @@ class TestBothAveragingPathsApplyTheGates:
             "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
         })
 
-    def _both(self, frame):
-        import ibis
-
-        from etdtransform.impute import (
-            calculate_average_diff,
-            calculate_average_diff_ibis,
-        )
-
-        cadence = self._cadence(frame)
-        pandas_result = calculate_average_diff(
-            frame.copy(), "ProjectIdBSV", [COL], cadence=cadence, grid_minutes=5
+    def _averaged(self, frame):
+        return project_averages(
+            frame, "ProjectIdBSV", [COL],
+            cadence=self._cadence(frame), grid_minutes=5,
         )[COL]["avg_diff"]
-        ibis_result = calculate_average_diff_ibis(
-            ibis.memtable(frame), "ProjectIdBSV", [COL],
-            cadence=cadence, grid_minutes=5,
-        )[COL]["avg_diff"]
-        merged = pandas_result.merge(
-            ibis_result, on=["ProjectIdBSV", "ReadingDate"],
-            suffixes=("_pandas", "_ibis"),
-        )
-        assert len(merged) == len(pandas_result), "the two paths report different slots"
-        return merged
 
-    def test_they_agree_where_everyone_covers_the_day(self):
-        merged = self._both(self._frame({h: _day() for h in range(1, 5)}))
-        for _, row in merged.iterrows():
-            a, b = row[f"{COL}_avg_pandas"], row[f"{COL}_avg_ibis"]
-            assert (pd.isna(a) and pd.isna(b)) or float(a) == pytest.approx(float(b))
+    def test_a_day_everyone_covers_is_averaged_throughout(self):
+        """Slot 0 has no average: an interval series has no reading before its
+        first, so there is nothing for that slot to average."""
+        avg = self._averaged(
+            self._frame({h: _day() for h in range(1, 5)})
+        ).sort_values("ReadingDate")
+        assert len(avg) == SLOTS_PER_DAY
+        assert pd.isna(avg[f"{COL}_avg"].iloc[0])
+        assert avg[f"{COL}_avg"].iloc[1:].notna().all()
 
-    def test_they_agree_on_the_slots_a_thin_day_removes(self):
+    def test_a_thin_day_still_averages_the_slots_the_others_cover(self):
+        """A household covering only the first twelve slots is excluded from the
+        rest of the day rather than removing it: the three that did cover it
+        still have an average."""
         frame = self._frame({
             1: _day(), 2: _day(), 3: _day(),
             4: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
         })
-        merged = self._both(frame)
-        pandas_missing = merged[f"{COL}_avg_pandas"].isna()
-        ibis_missing = merged[f"{COL}_avg_ibis"].isna()
-        pd.testing.assert_series_equal(
-            pandas_missing, ibis_missing, check_names=False
-        )
+        avg = self._averaged(frame).sort_values("ReadingDate")
+        covered = avg[f"{COL}_avg"].notna()
+        assert bool(covered.iloc[1:12].all())
+        assert int(covered.sum()) == SLOTS_PER_DAY - 1
