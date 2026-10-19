@@ -365,6 +365,6 @@ DESCRIPTIONS = {
     ),
     "SPARSE_AVERAGE": (
         "RESERVED. No stage sets this yet. The average the fill used was "
-        "built from one or two contributing households."
+        "built from fewer than ten contributing households."
     ),
 }
