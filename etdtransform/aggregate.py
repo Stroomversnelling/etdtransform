@@ -1127,7 +1127,7 @@ def impute_hh_data_5min_chunked(
     bounded by chunk_size rather than the full dataset.
 
     Requires avg_diffs.parquet to already exist -- run
-    prepare_diff_averages_for_impute / prepare_diff_averages_for_impute_ibis first.
+    prepare_diff_averages_for_impute_ibis first.
 
     Parameters
     ----------

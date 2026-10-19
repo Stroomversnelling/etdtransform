@@ -420,6 +420,93 @@ class TestTheCumulativeBranchIsUnchangedApartFromItsSignal:
         assert not any(_has(out, ImputeType.DELIVERED_INTERVAL_IMPUTATION))
 
 
+class TestARegisterCombinedFromTariffRegisters:
+    """Where a supplier sends peak and off-peak registers, mapping adds the root
+    they sum to, and the root is the column the averaging and the fill work on.
+    Cadence is measured before that combination, so the sidecar records the
+    quantity only under the names it arrived as: the root has no row of its own.
+
+    Reading only the root's own name calls a register with a full year of
+    readings nothing-delivered, which stops its fill outright -- 177 of the 423
+    households in the mapped estate deliver these two registers this way.
+    """
+
+    SPLITS = (f"{CUM}Hoog", f"{CUM}Laag")
+
+    def _split_rows(self, household, hoog, laag):
+        """A household whose register arrived split in two, so the sidecar names
+        the splits and not the root."""
+        return [
+            (household, "ReadingDate", GRID, N),
+            (household, self.SPLITS[0], GRID, N if hoog else 0),
+            (household, self.SPLITS[1], GRID, N if laag else 0),
+        ]
+
+    def test_a_split_register_takes_the_cumulative_logic(self):
+        paths = delivery_paths(
+            _register_frame(), CUM, DIFF,
+            _cadence(self._split_rows(1, hoog=True, laag=True)),
+        )
+        assert bool(paths.cumulative.all())
+        assert not bool(paths.nothing.any())
+
+    def test_one_tariff_alone_is_still_a_delivery(self):
+        """A single-tariff contract sends one of the two, and the root mapping
+        builds from it is as real as a root built from both."""
+        paths = delivery_paths(
+            _register_frame(), CUM, DIFF,
+            _cadence(self._split_rows(1, hoog=True, laag=False)),
+        )
+        assert bool(paths.cumulative.all())
+
+    def test_splits_recording_no_readings_deliver_nothing(self):
+        """The fallback reads the splits' counts; it does not assume a delivery
+        from the pair being named."""
+        paths = delivery_paths(
+            _register_frame(), CUM, DIFF,
+            _cadence(self._split_rows(1, hoog=False, laag=False)),
+        )
+        assert bool(paths.nothing.all())
+
+    def test_the_gap_is_filled_as_it_is_for_an_unsplit_register(self):
+        split = _impute(
+            _register_frame(), _cadence(self._split_rows(1, True, True))
+        )
+        whole = _impute(
+            _register_frame(), _cadence(_form_rows(1, CUM, DIFF, True, False))
+        )
+        assert split.loc[8:11, DIFF].notna().all()
+        assert split.loc[8:11, DIFF].astype(float).tolist() == pytest.approx(
+            whole.loc[8:11, DIFF].astype(float).tolist()
+        )
+        assert _types(split).tolist() == _types(whole).tolist()
+
+    def test_the_splits_own_delivery_is_read_under_their_own_names(self):
+        """The fallback goes root -> splits only. Asking about a split reads that
+        split, never its sibling and never the root."""
+        from etdtransform.bounds import delivered_by_household
+
+        cadence = _cadence(self._split_rows(1, hoog=True, laag=False))
+        assert delivered_by_household(self.SPLITS[0], cadence) == {1: True}
+        assert delivered_by_household(self.SPLITS[1], cadence) == {1: False}
+
+    def test_a_delivered_root_does_not_need_the_fallback(self):
+        """A supplier sending the combined register directly has a root row, and
+        it answers on its own."""
+        from etdtransform.bounds import delivered_by_household
+
+        cadence = _cadence(_form_rows(1, CUM, DIFF, True, False))
+        assert delivered_by_household(CUM, cadence) == {1: True}
+
+    def test_the_interval_form_is_not_delivered_by_a_split_register(self):
+        """The splits' own interval columns are differenced at mapping, like the
+        root's, so no interval form arrives for either."""
+        from etdtransform.bounds import delivered_by_household
+
+        cadence = _cadence(self._split_rows(1, hoog=True, laag=True))
+        assert delivered_by_household(DIFF, cadence) == {}
+
+
 class TestTheIntervalBranchReadsTheRuleBounds:
     """The average the fill reads is clipped into each row's narrowed bound
     before any route sees it, and the narrowing comes from the constraint

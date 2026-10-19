@@ -47,6 +47,7 @@ from etdmap.data_model import (
     cadence_lookup_names,
     cumulative_column,
     scale_bounds,
+    tariff_root_to_splits,
     thresholds_dict,
 )
 from etdmap.flags import MappingFlag, _as_limit, flag_column
@@ -454,18 +455,28 @@ def usable_readings(df, column):
 
 def delivered_by_household(column, cadence) -> dict:
     """
-    Whether *column* itself carried delivered readings, per household.
+    Whether *column* carried delivered readings, per household.
 
     Read from ``n_readings``, counted on the data as delivered before any fill.
     A household with no row for *column*, or a row recording no readings, did
     not have that form delivered.
 
-    The column's **own** row is the only one read. A variable delivered in both
-    forms has a row for each, and one delivered as intervals only still has a
-    row for its absent register, so resolving a column through the variable it
-    is paired with -- as :func:`cadence_minutes_by_household` does, for the
-    stages asking about a column derived later -- would report a delivery that
-    never happened.
+    The cumulative/interval pairing is **not** followed. A variable delivered in
+    both forms has a row for each, and one delivered as intervals only still has
+    a row for its absent register, so resolving a column through its partner --
+    as :func:`cadence_minutes_by_household` does, for the stages asking about a
+    column derived later -- would report a delivery that never happened.
+
+    A tariff root resolves through its splits as well. Where a supplier sends
+    peak and off-peak registers, ``combine_tariff_registers`` adds the root they
+    sum to, and the root is the column the averaging and the fill work on
+    (:func:`etdtransform.vectorized_impute.without_tariff_splits`) -- but
+    cadence is measured before the combination, so the root has no row of its
+    own and the quantity is recorded only under the names it arrived as.
+    Delivery is therefore an OR over the names it may have arrived under, not a
+    precedence between them: cadence needs one value and so has a winner, while
+    a reading under any of these names is a reading of the same quantity. Pair
+    membership comes from the data model's own structures, never from the name.
 
     Metadata, not data: a delivered register whose every reading is later
     condemned still *was* delivered, and reading the values would say otherwise.
@@ -480,7 +491,8 @@ def delivered_by_household(column, cadence) -> dict:
     Returns
     -------
     dict
-        HuisIdBSV -> bool, for every household the table has a row for.
+        HuisIdBSV -> bool, for every household the table has a row for under any
+        of the names read.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -492,11 +504,15 @@ def delivered_by_household(column, cadence) -> dict:
     if "n_readings" not in cadence.columns:
         return {}
 
-    rows = cadence[cadence["column"] == column]
-    return {
-        int(r.HuisIdBSV): bool(pd.notna(r.n_readings) and r.n_readings > 0)
-        for r in rows.itertuples()
-    }
+    names = [column, *tariff_root_to_splits.get(column, ())]
+    rows = cadence[cadence["column"].isin(names)]
+    delivered = {}
+    for r in rows.itertuples():
+        household = int(r.HuisIdBSV)
+        delivered[household] = delivered.get(household, False) or bool(
+            pd.notna(r.n_readings) and r.n_readings > 0
+        )
+    return delivered
 
 
 def grid_minutes_by_household(cadence, date_column="ReadingDate") -> dict:
