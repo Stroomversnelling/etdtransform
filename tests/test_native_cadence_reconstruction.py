@@ -26,6 +26,7 @@ from etdmap.flags import contiguous_runs
 from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household,
     _treat_frozen_spans,
+    add_diff_columns,
 )
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 from conftest import cadence_table
@@ -71,8 +72,13 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
     delivered = df[CUM].copy()
     if gap is not None:
         df.loc[list(gap), CUM] = pd.NA
-    df[DIFF] = df[CUM].diff().round(10)
-    df.loc[0, DIFF] = 0
+    # Through add_diff_columns rather than a hand-rolled .diff(), so the
+    # interval carries INTERVAL_FROM_DELIVERED_CUMULATIVE as production sets
+    # it. Frozen-span detection and treatment read that bit to tell a derived
+    # interval from the supplier's own amounts, and the two are treated
+    # differently on purpose: a frame without it is read as delivered, where
+    # the catch-up is spread in mapping rather than left for imputation.
+    df = add_diff_columns(df, context="native-cadence fixture")
     df[f"{DIFF}_avg"] = pd.array([NORMAL] * n, dtype="Float64")
     return df, delivered
 
