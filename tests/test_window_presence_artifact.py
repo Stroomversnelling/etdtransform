@@ -70,13 +70,8 @@ def _counts(timestamps, window_minutes, n_slots, n_delivered):
 
 
 class TestTheAveragingReturnsTheFrame:
-    """Through ``calculate_average_diff_ibis`` -- the engine the pipeline runs.
-
-    These cases used to go through ``apply_presence_filter``, the pandas twin of
-    the gates, which lost its production caller when the pandas averaging engine
-    was deleted. Judging the artifact by a function nothing runs says nothing
-    about the artifact the pipeline writes.
-    """
+    """Through ``calculate_average_diff_ibis``, the engine that writes this
+    artifact in the pipeline."""
 
     def _presence(self, frame, **kwargs):
         kwargs.setdefault("min_eligible", 1)

@@ -1,15 +1,12 @@
 """A coarsely delivered interval column, end to end through the fill.
 
-The generated mapped fixture carries exactly this shape --
-`WarmteproductieRuimteverwarmingDiff` delivered hourly on a five-minute grid with
-its register absent and one tick dropped -- and nothing in any suite asserted
-anything about it. The spread was covered only by frames built to exercise the
-spread, never by a column whose delivery shape is the reason the spread exists.
+The shape is a column delivered hourly on a five-minute grid with its register
+absent and one tick dropped -- the delivery shape the spread exists for.
 
-This file builds that shape synthetically and small. Nothing is read from disk
-and no fixture is committed: the shape is three facts -- a register that never
-arrived, readings at one tick per hour, one of those ticks missing -- and a frame
-stating them directly is both cheaper and clearer than a generated dataset.
+Built synthetically and small. Nothing is read from disk and no fixture is
+committed: the shape is three facts -- a register that never arrived, readings
+at one tick per hour, one of those ticks missing -- and a frame stating them
+directly is cheaper and clearer than a generated dataset.
 
 What the fill does with it, and the distinction worth holding on to: the spread
 **redistributes** what was delivered, while the fill **adds** an estimate where

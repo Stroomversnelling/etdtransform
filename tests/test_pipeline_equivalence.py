@@ -137,15 +137,14 @@ class TestAggregationEquivalence:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Diffs step -- none here, deliberately
+# Tests: Diffs step -- none here
 # ---------------------------------------------------------------------------
-# There is one averaging engine (calculate_average_diff_ibis) and every shell
-# calls it, so comparing two shells' averages compared a function with itself.
-# The canonical shell is covered by
-# test_sharded_impute.py::TestShardedChainEquivalence::test_avg_diffs_equal,
-# and the engine's behaviour by the synthetic suites
-# (test_averaging_shards_by_project_cadence.py,
-# test_averaging_records_what_it_decided.py, test_avg_diffs_partition_layout.py).
+# One averaging engine, called by every shell, so there is no equivalence to
+# compare. The sharded shell is covered by
+# test_sharded_impute.py::TestShardedChainEquivalence::test_avg_diffs_equal and
+# the engine by test_averaging_shards_by_project_cadence.py,
+# test_averaging_records_what_it_decided.py and
+# test_avg_diffs_partition_layout.py.
 
 
 # ---------------------------------------------------------------------------

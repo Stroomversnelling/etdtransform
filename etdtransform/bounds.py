@@ -563,17 +563,15 @@ def grid_minutes_by_project(
     This is the interval the averages are sharded on, together with the project.
     A project reporting quarter-hourly is spread over quarter-hourly steps and
     its average means energy per quarter hour, whatever any other project
-    reports at. There is no dataset-wide grid in the averaging to fall back to.
+    reports at.
 
     Raises
     ------
     ValueError
-        When a project's households declare more than one grid. Averaging such
-        a project is refused because the machinery to do it correctly is not
-        built: there is no checked rule for which grid the project's average
-        sits on, and picking one would either invent slots the project never
-        reported at or discard volume. A refusal is a thing to build on; a
-        number nobody has verified is not.
+        When a project's households declare more than one grid. There is no
+        rule for which grid such a project's average sits on, and picking one
+        would either invent slots the project never reported at or discard
+        volume.
 
     Parameters
     ----------

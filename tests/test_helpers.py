@@ -79,20 +79,14 @@ def store_sample_from_valid_run(path_to_file, save_name):
 def store_sample_and_metadata_for_all_transformed_files(path_to_folder):
     """Refresh the committed pins from a run's output.
 
-    Two rules this follows, both of which cost nothing and both of which were
-    learned the hard way:
+    **Each artifact is resolved the way a reader resolves it.** A stage artifact
+    is either a single parquet file or a directory of partitions, and the
+    aggregate folder can hold a stale file beside the directory that superseded
+    it, so a hardcoded ``<name>.parquet`` can sample the stale one. A directory
+    has no single footer to sample or read statistics from and is skipped.
 
-    **Resolve each artifact the way a reader does.** A stage artifact is either a
-    single parquet file or a directory of partitions, and the aggregate folder
-    can hold a stale file beside the directory that superseded it. Trusting
-    ``<name>.parquet`` samples that stale file as if it were this run's output.
-    A directory has no single footer to sample or read statistics from, so it is
-    skipped -- as the two comparison tests already skip an artifact they find no
-    file for.
-
-    **Refresh only pins that already exist.** Writing a pin for an artifact that
-    had none enables a comparison that was not being made, which is a decision
-    to take deliberately rather than a side effect of regenerating.
+    **Only pins that already exist are refreshed.** Writing a pin for an
+    artifact that has none enables a comparison that was not being made.
     """
     data_folder = "tests/data"
     for file in file_names:

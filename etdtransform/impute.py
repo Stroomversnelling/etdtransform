@@ -410,12 +410,12 @@ def calculate_average_diff_ibis(
     if cadence is None:
         cadence = load_column_cadence()
 
-    # Which project each household is in, in one round trip. The averages are
-    # sharded on (project, cadence), so the grid is resolved per project and the
-    # projects are then grouped by it: one pass per distinct grid, never one per
-    # project. PROFILING_GUIDANCE.md -- a per-project pass would rebuild every
-    # presence aggregate once per project per column, and the number of distinct
-    # grids is bounded by the declarations while the number of projects is not.
+    # Which project each household is in, in one round trip. The grid is
+    # resolved per project and the projects grouped by it, so there is one pass
+    # per distinct grid rather than one per project: a per-project pass would
+    # rebuild every presence aggregate once per project per column, and the
+    # number of distinct grids is bounded by the declarations while the number
+    # of projects is not (PROFILING_GUIDANCE.md).
     membership = tbl.select("HuisIdBSV", project_id_column).distinct().execute()
     project_by_household = {}
     unassigned = []
@@ -825,10 +825,9 @@ def _resample_average_ibis(
     # the average's. An interval-sourced window is its cadence and cannot span
     # one.
     #
-    # Marked rather than dropped outright: an average thinned because a meter
-    # was out and one thinned because nobody delivered are different facts about
-    # the project, and the counts that survive cannot tell them apart. The rows
-    # are still excluded from placement -- only the record is added.
+    # Marked as well as excluded: an average thinned because a meter was out
+    # and one thinned because nobody delivered are different facts about the
+    # project, and the surviving counts cannot tell them apart.
     _has_length = _._length.notnull() & (_._length > 0)
     marked = readings.mutate(
         _outage=(

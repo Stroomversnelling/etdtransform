@@ -1,16 +1,14 @@
 """Each project's average on the grid that project reports at.
 
-The averages used to be one lattice shared by every project, at the finest grid
-any of them declared. A project reporting less often than that was spread over
-slots it has no rows for: the per-slot share was divided by the lattice's slot
-count instead of the project's, and the placed slots that fell between the
-project's rows were dropped by the final join. A quarter-hourly project on a
-five-minute lattice therefore published a third of its volume, at a third of the
-right level, and nothing said so.
+The averages are sharded on (project, cadence), so within a pass there is one
+grid and the spreading denominator and the step-back are that grid.
 
-Sharding on (project, cadence) removes the shared lattice rather than correcting
-arithmetic on it: within a pass there is one grid, so the spreading denominator
-and the step-back are that grid.
+One grid shared by every project spreads a project reporting less often over
+slots it has no rows for: the per-slot share is divided by the shared slot count
+instead of the project's, and the placed slots falling between the project's
+rows are dropped by the final join. A quarter-hourly project on a five-minute
+grid publishes a third of its volume, at a third of the right level.
+``grid_minutes`` forces that case on request -- ``TestWhatOneSharedGridDoes``.
 
 Frames here are built in the test. Two projects, their declared grids and a
 reading an hour is the whole of the case, and the cadence table is **measured**
@@ -114,7 +112,7 @@ def _covering_window(avg, project, grid, ends_at):
 
 class TestTheFixtureHoldsTwoGrids:
     """If the grids do not resolve per project, nothing below is testing the
-    lattice."""
+    per-project spreading."""
 
     def test_the_grids_resolve_from_the_measured_cadence(self):
         frame, cadence = _estate()
@@ -136,10 +134,8 @@ class TestTheFixtureHoldsTwoGrids:
 
 
 class TestTheCoarseProjectKeepsItsVolume:
-    """The regression this change exists for. On a shared five-minute lattice
-    the quarter-hourly project's hour summed to a third of its reading: each of
-    its four real slots held ``READING / 12`` and the eight placed slots between
-    them had no row to land on."""
+    """A quarter-hourly project's hour sums to its delivered reading, spread
+    over the four slots the project reports at."""
 
     def test_the_quarter_hourly_project_sums_to_its_reading(self):
         frame, cadence = _estate()
@@ -150,8 +146,8 @@ class TestTheCoarseProjectKeepsItsVolume:
         assert int(window.notna().sum()) == DELIVERED_EVERY // GRIDS[2]
         assert float(window.sum()) == pytest.approx(READING, abs=1e-9)
 
-    def test_the_five_minute_project_is_unchanged(self):
-        """The grid it was already being spread on, so this is the control."""
+    def test_the_five_minute_project_sums_to_its_reading_too(self):
+        """The project whose grid is the finer of the two, as the control."""
         frame, cadence = _estate()
         avg = _averages(frame, cadence)["avg_diff"]
         window = _covering_window(
@@ -172,14 +168,12 @@ class TestTheCoarseProjectKeepsItsVolume:
             assert float(value) == pytest.approx(expected, abs=1e-9)
 
 
-class TestWhatTheSharedLatticeDid:
-    """``grid_minutes`` still forces one grid on every project, which is what
-    the dataset-wide figure used to do. So the defect stays measurable instead
-    of being a claim about a code path that no longer exists -- and these are
-    the numbers the tests above would have produced before the sharding.
+class TestWhatOneSharedGridDoes:
+    """``grid_minutes`` forces one grid on every project, which is the case the
+    sharding exists to avoid. These are the numbers it produces.
     """
 
-    def test_the_coarse_project_published_a_third_of_its_volume(self):
+    def test_the_coarse_project_loses_two_thirds_of_its_volume(self):
         frame, cadence = _estate()
         avg = _averages(frame, cadence, grid_minutes=GRIDS[1])["avg_diff"]
         window = _covering_window(
@@ -191,9 +185,10 @@ class TestWhatTheSharedLatticeDid:
         for value in window:
             assert float(value) == pytest.approx(READING / 12, abs=1e-9)
 
-    def test_the_five_minute_project_was_already_right(self):
-        """Which is why the defect was invisible: the project on the finest
-        grid -- the one the lattice was taken from -- is unaffected."""
+    def test_the_project_on_the_shared_grid_is_unaffected(self):
+        """The project whose own grid is the shared one reaches the same
+        numbers either way, which is why the shared grid is not self-evidently
+        wrong from one project's output."""
         frame, cadence = _estate()
         forced = _averages(frame, cadence, grid_minutes=GRIDS[1])["avg_diff"]
         sharded = _averages(frame, cadence)["avg_diff"]
@@ -306,18 +301,16 @@ class TestAGridThatDividesNothing:
 class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
     """End to end: the average this file is about, used by the fill.
 
-    The average is derived rather than handed in, because handing it in would
-    assume the number the sharding exists to get right.
+    The average is derived rather than handed in, so the number under test is
+    the one the averaging produces.
 
-    **Measured, and not what was predicted.** The published average was a third
-    of the project's interval under the shared lattice -- but the filled cell
-    was not, because this route scales the average's *shape* to the household
-    and a uniformly wrong average cancels in the scale factor. So the lattice
-    defect reached the artifact a consumer reads and did not reach a
-    household-scaled fill. Where it does reach the fill is coverage: when a
-    reading has to cover several of the project's slots, the lattice places them
-    at the wrong spacing and those slots get no average at all, and no scaling
-    recovers a shape that is absent. That is ``TestTheCoarseProjectKeepsItsVolume``.
+    A shared grid reaches the published average but not a filled cell on this
+    route: ``HOUSEHOLD_SCALED_AVERAGE`` scales the average's *shape* to the
+    household, and a uniformly wrong average cancels in the scale factor. What
+    it does reach is coverage -- where a reading covers several of the project's
+    slots, a shared grid places them at the wrong spacing and those slots get
+    no average at all, which no scaling recovers. That is
+    ``TestTheCoarseProjectKeepsItsVolume``.
     """
 
     #: Delivered at the project's own grid, so nothing about the *column*
@@ -399,7 +392,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         imputed = filled[f"{DIFF}_is_imputed"].fillna(False).astype(bool)
         assert bool(imputed.iloc[self.GAP].all())
 
-    def test_the_shared_lattice_published_a_third_of_the_interval(self):
+    def test_one_shared_grid_publishes_a_third_of_the_interval(self):
         """What the dataset-wide grid did to the artifact itself. A consumer
         reading an average of a quarter-hourly project got a third of the
         energy that interval carries."""
@@ -412,15 +405,12 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         for value in published:
             assert float(value) == pytest.approx(self.AT_GRID / 3, abs=1e-9)
 
-    def test_but_a_household_scaled_fill_cancelled_it(self):
-        """The reach of the defect, which is narrower than it looks and is worth
-        knowing before the imputation phase reads any of this.
-
-        This route is ``HOUSEHOLD_SCALED_AVERAGE``: the average supplies a shape
-        and the household's own level scales it. A uniformly wrong average
-        therefore produces an exactly compensating factor, so the filled cell
-        came out right from a published number that was wrong. What it cannot
-        compensate for is a slot with no average at all.
+    def test_but_a_household_scaled_fill_cancels_it(self):
+        """``HOUSEHOLD_SCALED_AVERAGE``: the average supplies a shape and the
+        household's own level scales it, so a uniformly wrong average produces
+        an exactly compensating factor and the filled cell comes out right from
+        a published number that is wrong. What it cannot compensate for is a
+        slot with no average at all.
         """
         filled = self._averaged_then_filled(grid_minutes=5)
         window = filled[DIFF].iloc[self.GAP]

@@ -2,9 +2,7 @@
 
 ``_row_bounds_per_cadence`` exists because a constraint package fixes one
 cadence while households report at several, so the frame is resolved in groups
-and each group narrowed with its own package. Every caller before this file
-handed it one cadence for every household, which is the one case where the
-grouping cannot be wrong.
+and each group narrowed with its own package.
 
 The number that matters is the ratio. A reading covering twelve intervals is not
 twelve times one interval's plausible maximum -- consumption averages out over
@@ -12,8 +10,6 @@ an hour -- so the bound grows as the square root of the ratio: 1.732x at fifteen
 minutes and 3.464x at sixty, which is what
 ``docs/checks/imputation-coarse-cadence-findings-2026-10-17.md`` recorded.
 
-This is the mechanism behind the unanchored-clip change in the imputation phase,
-so it is pinned before that change rather than after.
 """
 
 import pandas as pd

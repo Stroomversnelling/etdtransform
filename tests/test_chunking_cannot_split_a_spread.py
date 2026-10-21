@@ -1,17 +1,13 @@
 """A chunk is a memory window, and the spread must not be able to see it.
 
-This file replaces a case that could not be written. The plan asked for "a
-spread window straddling a chunk boundary", and there is no such thing: both
-chunkers batch by **household** -- ``_chunk_ids_by_project`` returns household
-ids and ``impute_hh_data_5min_chunked`` reads "batches of chunk_size
-households" -- so a household's whole series is always in one chunk, and a
-spread window lives inside one household's series.
+Both chunkers batch by **household**: ``_chunk_ids_by_project`` returns
+household ids and ``impute_hh_data_5min_chunked`` reads batches of
+``chunk_size`` households. So a household's whole series is always in one
+chunk, and a spread window -- which lives inside one household's series --
+cannot straddle a chunk boundary.
 
-So the property worth holding is the stronger one the premise was reaching for:
-chunking cannot change a spread cell, because it cannot divide the series a
-spread is computed over. Two halves, both asserted here rather than argued:
-the chunker never splits a household, and a household's spread is identical
-alone and among peers.
+Two halves, both asserted rather than argued: the chunker never splits a
+household, and a household's spread is identical alone and among peers.
 """
 
 import pandas as pd

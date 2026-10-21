@@ -92,11 +92,6 @@ def _cadence_for(frame, minutes=GRID):
 def _averaged(frame, **kwargs):
     """The averaging engine the pipeline runs, on *frame*.
 
-    The gates are judged here rather than by the pandas twin that used to stand
-    in for them: that twin lost its production caller when the pandas averaging
-    engine was deleted, so what it decided was no longer what the pipeline
-    decides.
-
     *min_eligible* defaults to 1 because these frames hold a handful of
     households, which is below the production floor by construction. The floor
     itself is exercised at its production value in ``TestTheHouseholdFloor``.
@@ -489,8 +484,8 @@ class TestTheHouseholdFloor:
         )[f"{COL}_avg"].isna().all()
 
     def test_the_averaging_applies_the_floor_too(self):
-        """The ibis path is what production runs. A floor in the pandas twin
-        and not in it would make them two algorithms."""
+        """The engine the pipeline runs applies the floor, not only the
+        per-row helper that computes it."""
         cum = "ElektriciteitNetgebruik"
         parts = []
         for household in range(1, 10):

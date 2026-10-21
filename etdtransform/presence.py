@@ -1,9 +1,9 @@
 """How much of a project has to be present before its average means anything.
 
-A project average was the mean of whatever values existed at a slot, with no
-minimum. The contributor set then changes as households come and go, so the
-average changes shape for reasons that have nothing to do with consumption: a
-household joining mid-month moves the level, and one dropping out moves it back.
+A project average is the mean of the values at a slot. Without a minimum, the
+contributor set changes as households come and go, so the average changes shape
+for reasons that have nothing to do with consumption: a household joining
+mid-month moves the level, and one dropping out moves it back.
 
 Three gates close that:
 
@@ -29,12 +29,9 @@ Coverage is measured on the resampled column, after the outage windows have
 been dropped, so it counts slots a meter actually delivered for rather than
 slots a fill occupied.
 
-This module holds the constants and the judgements. The gates themselves are
-applied by the averaging engine (``impute.calculate_average_diff_ibis``), which
-supplies the counts to :func:`window_presence_frame` and reads its verdicts.
-There is no second, pandas-side implementation: the one that existed lost its
-caller with the pandas averaging engine and was removed, because a gate judged
-by code nothing runs says nothing about the averages that ship.
+This module holds the constants and the judgements. The gates are applied by
+the averaging engine (``impute.calculate_average_diff_ibis``), which supplies
+the counts to :func:`window_presence_frame` and reads its verdicts.
 """
 
 import logging
@@ -57,10 +54,10 @@ SUFFICIENCY_SHAPE = 25
 SUFFICIENCY_FRACTION = 0.5
 
 #: The eligible households a window needs before its average is published at
-#: all. A project average is a shape taken from the project, and the fraction
-#: alone does not say there is a project behind it: at one eligible household
-#: the fraction demands one, so that household's own readings were published as
-#: the project's average, with nothing in the number saying so.
+#: all. A project average is a shape taken from the project, and the slot
+#: fraction alone does not say there is a project behind it: at one eligible
+#: household it demands one contributor, which that household always meets, so
+#: its own readings would be published as the project's average.
 MIN_ELIGIBLE_HOUSEHOLDS = 10
 
 
@@ -145,8 +142,8 @@ def window_presence_frame(
     :func:`window_index` value) and the two raw counts ``n_slots`` and
     ``n_delivered``. Everything else -- eligibility, the per-window household
     tallies, the slot minimum and whether the window is averageable at all --
-    is derived here, so the two averaging implementations that supply counts
-    share one definition of the judgements.
+    is derived here, so a caller supplies counts and reads verdicts rather than
+    carrying its own copy of the rules.
 
     ``n_contributing`` tallies the eligible households that delivered at least
     one slot of the window. At the default coverage minimum it equals
@@ -158,9 +155,8 @@ def window_presence_frame(
     separate them.
 
     ``n_outage_windows``, ``n_outage_slots`` and ``source`` are carried through
-    from *counts* when it has them. They are measurements of the spreading, not
-    judgements derivable here, so a caller that does not spread simply omits
-    them.
+    from *counts* when present. They are measurements of the spreading rather
+    than judgements derivable here, so a caller that does not spread omits them.
     """
     out = counts.copy()
     out["n_slots"] = out["n_slots"].astype("Int64")
@@ -213,10 +209,8 @@ def window_presence_frame(
         "slot_minimum",
         "averageable",
     ]
-    # Measurements the caller made that this function cannot derive, carried
-    # through rather than required: the spreading path can say how many windows
-    # it dropped as meter outages and which source fed each household, and the
-    # pandas filter, which does not spread, has neither to offer.
+    # Measurements the caller made that this function cannot derive. Optional:
+    # a caller that does not spread has none of them to offer.
     ordered += [
         name for name in ("n_outage_windows", "n_outage_slots", "source")
         if name in out.columns
