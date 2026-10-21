@@ -1103,8 +1103,6 @@ def impute_and_normalize(
     for cum_col in cumulative_columns:
         logging.info(f"Starting {cum_col} vectorized imputation")
 
-        temp_cols = ["gap_length", "cumulative_value_group"]
-
         diff_col = interval_column(cum_col)
         old_diff_col = f"{cum_col}OldDiff"
         is_imputed_col = f"{diff_col}_is_imputed"
@@ -2466,17 +2464,6 @@ def process_imputation_vectorized(
             df[impute_type_col].fillna(ImputeType.NONE.value)
             | ImputeType.CLIPPED_AVERAGE.value
         )
-
-    # Households without a cumulative sum above 0 or all cum_col values are NA
-    house_no_cum_sum = (
-        df.groupby("HuisIdBSV")[cum_col].transform("sum").fillna(0) <= 0
-    ) | (df.groupby("HuisIdBSV")[cum_col].transform("count") == 0)
-
-    # Households where max - min cumulative sum is not > 0
-    houses_cum_min_max = (
-        df[cum_col].groupby(df["HuisIdBSV"]).transform("max")
-        - df[cum_col].groupby(df["HuisIdBSV"]).transform("min")
-    ).fillna(0) <= 0
 
     drop_temp_cols(df, temp_cols=temp_cols)
 

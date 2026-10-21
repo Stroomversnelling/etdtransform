@@ -25,9 +25,11 @@ def sympy_to_ibis(expr, table):
     missing solar term returns minus the exported amount.
 
     A column that genuinely means zero when absent -- a device that is not
-    installed -- is filled by name through ``fillna_vars`` in
-    ``add_calculated_columns_to_hh_data_ibis``, before availability analysis.
-    Filling here as well overrode that list and filled everything.
+    installed -- is handled by ``specialize_catalog_for_absent``, which
+    substitutes zero inside the expression for that household, from its own
+    declaration. The substitution is per household because the fact is: one
+    household's missing solar is an unknown, another's absent booster is a
+    real zero, and only the metadata separates them.
 
     Parameters
     ----------

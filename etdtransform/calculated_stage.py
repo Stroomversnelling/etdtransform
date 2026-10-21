@@ -92,7 +92,6 @@ def add_calculated_columns_to_hh_data_ibis(
     output_path: str,
     catalog_df=None,
     target_columns=None,
-    fillna_vars: list = None,
     partition_output: bool = False,
 ) -> None:
     """
@@ -115,11 +114,6 @@ def add_calculated_columns_to_hh_data_ibis(
         Path to household_imputed.parquet (input).
     output_path : str
         Path for household_calculated.parquet (output).
-    fillna_vars : list, optional
-        Column names to fill with 0 before availability analysis and derivation.
-        Use for device columns that were not installed (all-null in the source)
-        but must be treated as 0 for downstream calculations to be correct.
-        Columns not present in the source parquet are logged and skipped.
     partition_output : bool
         When True, write hive shards (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/) under
         output_path (a directory, cleared before writing) instead of one
@@ -237,22 +231,6 @@ def add_calculated_columns_to_hh_data_ibis(
         )
 
     effective_cols = set(tbl.columns)
-
-    # fillna_vars shim: fill specified absent-device columns with 0 before availability
-    # analysis so they are treated as available (not missing) by the adaptive planner.
-    _fillna_vars = list(fillna_vars) if fillna_vars else []
-    _present_fillna = [c for c in _fillna_vars if c in effective_cols]
-    _missing_fillna = [c for c in _fillna_vars if c not in effective_cols]
-    if _present_fillna:
-        tbl = tbl.mutate(**{c: tbl[c].fillna(0) for c in _present_fillna})
-        logging.info(f"[calc ibis] fillna(0) applied to existing columns: {_present_fillna}")
-    if _missing_fillna:
-        logging.warning(
-            f"[calc ibis] fillna_vars columns not in source parquet -- "
-            f"creating as all-zero: {_missing_fillna}"
-        )
-        tbl = tbl.mutate(**{c: ibis.literal(0.0) for c in _missing_fillna})
-        effective_cols = effective_cols | set(_missing_fillna)
 
     # Candidate input columns: catalog rhs_vars + performance data cols, present in parquet
     all_rhs_vars = {v for vars_list in catalog_df["rhs_vars"] for v in vars_list}
@@ -435,14 +413,6 @@ def add_calculated_columns_to_hh_data_ibis(
                     )
                 if has_zon_rename:
                     scoped = scoped.rename({"ZonopwekBruto": "Zon-opwekTotaalDiff"})
-                if _present_fillna:
-                    scoped = scoped.mutate(
-                        **{c: scoped[c].fill_null(0.0) for c in _present_fillna}
-                    )
-                if _missing_fillna:
-                    scoped = scoped.mutate(
-                        **{c: ibis.literal(0.0) for c in _missing_fillna}
-                    )
 
                 derived = []
                 undefined = {}

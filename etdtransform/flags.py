@@ -253,7 +253,13 @@ DESCRIPTIONS = {
     "POSITIVE_END_VALUE": "No opening cumulative reading, and the closing one is positive.",
     "NO_END_VALUE": "An opening cumulative reading and no closing one.",
     "THRESHOLD_ADJUSTED": "DEPRECATED. Duplicates THRESHOLD_VIOLATED.",
-    "ZERO_FILL": "A zero written into the cell.",
+    "ZERO_FILL": (
+        "Every cell of a gap filled with zero, because the gap's own total "
+        "gives it nothing to distribute: the cumulative went backwards over "
+        "the gap, or did not advance. Set beside whichever of "
+        "NEGATIVE_GAP_JUMP or NEAR_ZERO_GAP_JUMP says which, and never on its "
+        "own."
+    ),
     "UNSCALED_AVERAGE": "The project average, unscaled.",
     "HOUSEHOLD_SCALED_AVERAGE": "The project average, multiplied by this household's own factor.",
     "GAP_NOT_FILLED": "A cell inside a gap that holds no value.",
@@ -301,7 +307,10 @@ DESCRIPTIONS = {
     ),
     "CALCULATED_THRESHOLD_VIOLATED": (
         "A calculated value outside its own column's threshold, scaled to the "
-        "cadence that column reports at."
+        "dataset grid. The derivation runs after imputation, by which point "
+        "every variable it reads sits on the grid, so one grid interval is "
+        "what a calculated cell covers -- the cadence a column's readings "
+        "arrived at does not enter into it."
     ),
     "CALCULATED_FROM_RULE_BOUND": (
         "The rules narrowed this row to a single value for the column -- the "
@@ -341,9 +350,9 @@ DESCRIPTIONS = {
         "inside a gap, whatever the fill then did about it."
     ),
     "CALCULATED_FROM_ROW_FORMULA": (
-        "RESERVED. No stage sets this yet. An empty cell filled from a "
-        "formula chosen for that row, rather than by deriving the whole "
-        "column. Which formula is the calculation_fill_plan sidecar."
+        "An empty cell filled from a formula chosen for that row, rather than "
+        "by deriving the whole column. Which formula is the "
+        "calculation_fill_plan sidecar."
     ),
     "CALCULATED_FROM_HARD_KNOWNS": (
         "RESERVED. No stage sets this yet. Every input the formula read was a "

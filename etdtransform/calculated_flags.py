@@ -1,9 +1,13 @@
 """Flags the calculated stage writes, and the threshold scan behind them.
 
-Three members of ``ImputeType`` belong to this stage: ``CALCULATED_COLUMN``
-marks a value as produced by a catalog formula rather than measured, and the two
-``CALCULATED_*`` violation flags mark it as outside a bound. They go into the
-same impute-type column the fill writes, so one decode reads both stages.
+Three mechanisms here write a calculated value, and each names itself:
+``CALCULATED_COLUMN`` for deriving a whole column for a household group,
+``CALCULATED_FROM_ROW_FORMULA`` for filling one empty cell from a formula
+chosen for that row, and ``CALCULATED_FROM_RULE_BOUND`` for writing the single
+value the rules pin a row to. ``CALCULATED_VALUE`` matches any of the three.
+The two ``CALCULATED_*`` violation flags mark a value as outside a bound. All
+of them go into the same impute-type column the fill writes, so one decode
+reads both stages.
 
 Why a flag and not a sidecar. Which columns a household gets derived is
 decided from what that household delivers, so two households in the same
@@ -356,9 +360,9 @@ def derive_from_rule_bound(df: pd.DataFrame, targets, package,
     Only cells that are pd.NA are touched; a delivered or already-derived
     value is never overwritten. Each filled cell is flagged
     ``CALCULATED_FROM_RULE_BOUND``, which is an ACTION distinct from
-    ``CALCULATED_COLUMN``: the value came from the constraint system rather
-    than from evaluating a formula, and a reader needs to be able to tell
-    those apart. ``CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS`` is added where the
+    ``CALCULATED_FROM_ROW_FORMULA``: the value came from the constraint system
+    rather than from evaluating a formula, and a reader needs to be able to
+    tell those apart. ``CALCULATED_RULE_BOUND_FROM_SOFT_KNOWNS`` is added where the
     bound rested on a cell the fill wrote.
 
     Returns *df* with the values written and the flags OR-ed in, plus a
@@ -460,8 +464,9 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
 
     Only pd.NA cells are written. A delivered or already-derived value is
     never overwritten, and the cells written are flagged
-    ``CALCULATED_COLUMN``, which is how a later reader tells them from
-    measurements in the same column.
+    ``CALCULATED_FROM_ROW_FORMULA``, which is how a later reader tells them
+    both from measurements in the same column and from a cell produced by
+    deriving the whole column, which carries ``CALCULATED_COLUMN`` instead.
 
     Returns *df*, a per-column count of what was filled, and a plan frame
     recording the formula used for each (mask, target) so the provenance of
@@ -535,7 +540,8 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
                     df[flag_column] = pd.array([0] * len(df), dtype="Int64")
                 df[flag_column] = df[flag_column].fillna(0).astype("Int64")
                 df.loc[written, flag_column] = (
-                    df.loc[written, flag_column] | ImputeType.CALCULATED_COLUMN.value
+                    df.loc[written, flag_column]
+                    | ImputeType.CALCULATED_FROM_ROW_FORMULA.value
                 )
                 filled[target] = filled.get(target, 0) + len(written)
 
@@ -557,8 +563,8 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
 
     if filled:
         logging.info(
-            "[calc flags] CALCULATED_COLUMN filled %s gap cell(s) from "
-            "formulas: %s",
+            "[calc flags] CALCULATED_FROM_ROW_FORMULA filled %s gap cell(s) "
+            "from formulas: %s",
             f"{sum(filled.values()):,}",
             ", ".join(f"{c} {n:,}" for c, n in sorted(filled.items())),
         )
@@ -730,9 +736,10 @@ def fill_calculated_gaps(df: pd.DataFrame, targets, catalog, package,
     value in its row afterwards and can narrow another cell's bound to a
     point. The reverse order would leave those cells unfilled.
 
-    Each route writes its own ACTION flag -- ``CALCULATED_COLUMN`` and
-    ``CALCULATED_FROM_RULE_BOUND`` -- so which route produced a value is
-    readable per cell, and ``CALCULATED_VALUE`` matches either.
+    Each route writes its own ACTION flag -- ``CALCULATED_FROM_ROW_FORMULA``
+    and ``CALCULATED_FROM_RULE_BOUND`` -- so which route produced a value is
+    readable per cell, and ``CALCULATED_VALUE`` matches either, as it also
+    matches pass 1's ``CALCULATED_COLUMN``.
 
     Returns *df*, a report of the per-column counts for each route, and the
     formula route's plan frame.
