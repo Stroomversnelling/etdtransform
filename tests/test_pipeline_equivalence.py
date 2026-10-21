@@ -18,8 +18,8 @@ Aggregation  : aggregate_hh_data_5min (pandas)
                aggregate_hh_data_duckdb (DuckDB union_by_name)
                -> household_default.parquet
 
-Diffs        : prepare_diff_averages_for_impute_ibis -- one engine, called by
-               every shell, so the diffs comparison is across shells
+Diffs        : prepare_diff_averages_for_impute_ibis -- one engine, so there is
+               nothing to compare here; see the Diffs section below
                -> avg_diffs/ProjectIdBSV=*/cadence_minutes=*/
 
 Imputation   : impute_hh_data_5min (pandas)
@@ -46,8 +46,6 @@ the test.
 
 import pandas as pd
 import pytest
-
-from etdtransform.impute import read_diffs
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -139,32 +137,15 @@ class TestAggregationEquivalence:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Diffs step
+# Tests: Diffs step -- none here, deliberately
 # ---------------------------------------------------------------------------
-
-class TestDiffsEquivalence:
-    """The averages, across two pipeline shells.
-
-    Not pandas versus ibis: there is one averaging engine and all three shells
-    call it, so what this compares is that the same data through two different
-    aggregation and I/O paths produces the same averages.
-    """
-
-    def test_the_averages_do_not_depend_on_the_shell(
-        self, pandas_pipeline, ibis_pipeline
-    ):
-        key = ["ProjectIdBSV", "ReadingDate"]
-        frames = []
-        for folder in (pandas_pipeline, ibis_pipeline):
-            # Read through the artifact's own reader: it is a directory of
-            # (project, cadence) partitions, which pd.read_parquet cannot take
-            # with the nullable backend.
-            frames.append(
-                read_diffs(folder, with_cadence=True)
-                .sort_values(key)
-                .reset_index(drop=True)
-            )
-        _assert_frames_equal(frames[0], frames[1], "pandas shell", "ibis shell")
+# There is one averaging engine (calculate_average_diff_ibis) and every shell
+# calls it, so comparing two shells' averages compared a function with itself.
+# The canonical shell is covered by
+# test_sharded_impute.py::TestShardedChainEquivalence::test_avg_diffs_equal,
+# and the engine's behaviour by the synthetic suites
+# (test_averaging_shards_by_project_cadence.py,
+# test_averaging_records_what_it_decided.py, test_avg_diffs_partition_layout.py).
 
 
 # ---------------------------------------------------------------------------

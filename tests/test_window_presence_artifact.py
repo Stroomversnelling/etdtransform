@@ -5,20 +5,18 @@ window; this artifact is that record, one row per project, household, column
 and presence window, with the raw counts so every judgement can be re-derived.
 """
 
+import ibis
 import pandas as pd
 import pytest
 
-from etdtransform.impute import write_window_presence
-from etdtransform.presence import (
-    apply_presence_filter,
-    window_index,
-    window_presence_frame,
-)
+from etdtransform.impute import calculate_average_diff_ibis, write_window_presence
+from etdtransform.presence import window_index, window_presence_frame
 
 COL = "ElektriciteitNetgebruikDiff"
+CUM = "ElektriciteitNetgebruik"
 
-#: What window_presence_frame derives from counts alone, which is what the
-#: pandas presence filter can supply.
+#: What window_presence_frame derives from counts alone. A caller that does not
+#: spread supplies only these.
 ARTIFACT_COLUMNS = [
     "column", "ProjectIdBSV", "HuisIdBSV", "window_start", "window_minutes",
     "n_slots", "n_delivered", "eligible", "n_eligible", "n_contributing",
@@ -46,6 +44,21 @@ def _frame(values_by_household, project=1, freq_minutes=15):
     return pd.concat(frames, ignore_index=True)
 
 
+def _cadence_for(frame, minutes=15):
+    """A cadence table for *frame*'s households, recorded under the cumulative
+    name -- which is where cadence is recorded, and where the interval column
+    resolves it from -- plus the ReadingDate row carrying the grid."""
+    households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
+    rows = [
+        {"HuisIdBSV": household, "column": column, "cadence_minutes": minutes}
+        for household in households
+        for column in (CUM, "ReadingDate")
+    ]
+    return pd.DataFrame(rows).astype({
+        "HuisIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+    })
+
+
 def _counts(timestamps, window_minutes, n_slots, n_delivered):
     return pd.DataFrame({
         "ProjectIdBSV": pd.array([1] * len(timestamps), dtype="Int64"),
@@ -56,7 +69,25 @@ def _counts(timestamps, window_minutes, n_slots, n_delivered):
     })
 
 
-class TestTheFilterReturnsTheFrame:
+class TestTheAveragingReturnsTheFrame:
+    """Through ``calculate_average_diff_ibis`` -- the engine the pipeline runs.
+
+    These cases used to go through ``apply_presence_filter``, the pandas twin of
+    the gates, which lost its production caller when the pandas averaging engine
+    was deleted. Judging the artifact by a function nothing runs says nothing
+    about the artifact the pipeline writes.
+    """
+
+    def _presence(self, frame, **kwargs):
+        kwargs.setdefault("min_eligible", 1)
+        result = calculate_average_diff_ibis(
+            ibis.memtable(frame), "ProjectIdBSV", [COL],
+            cadence=_cadence_for(frame), grid_minutes=15, **kwargs
+        )
+        return result[COL]["window_presence"].sort_values(
+            ["HuisIdBSV", "window_start"]
+        ).reset_index(drop=True)
+
     def test_counts_and_judgements_match_the_gates(self):
         # A 15-minute day is 96 slots. Household 1 covers it; household 2
         # delivers 10 slots and is ineligible.
@@ -64,11 +95,11 @@ class TestTheFilterReturnsTheFrame:
             1: [1.0] * 96,
             2: [1.0] * 10 + [pd.NA] * 86,
         })
-        _, _, presence = apply_presence_filter(
-            frame, COL, "ProjectIdBSV", window_minutes=1440
-        )
+        presence = self._presence(frame, min_eligible=10)
 
-        assert list(presence.columns) == ARTIFACT_COLUMNS
+        # The engine spreads, so its artifact carries the measurements the
+        # derived judgements cannot supply as well as the judgements.
+        assert list(presence.columns) == ARTIFACT_COLUMNS + SPREAD_MEASUREMENTS
         assert len(presence) == 2
         assert presence["n_slots"].tolist() == [96, 96]
         assert presence["n_delivered"].tolist() == [96, 10]
@@ -86,12 +117,15 @@ class TestTheFilterReturnsTheFrame:
         assert presence["window_start"].tolist() == (
             [pd.Timestamp("2026-01-05")] * 2
         )
+        # Every row says which source fed the household: it is decided for all
+        # of them, so a null would mean the record was lost rather than that
+        # there was nothing to record.
+        assert set(presence["source"]) == {"interval"}
+        assert int(presence["n_outage_windows"].sum()) == 0
 
     def test_a_household_spanning_two_windows_gets_a_row_per_window(self):
         frame = _frame({1: [1.0] * 192})
-        _, _, presence = apply_presence_filter(
-            frame, COL, "ProjectIdBSV", window_minutes=1440
-        )
+        presence = self._presence(frame)
         assert presence["window_start"].tolist() == [
             pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-06"),
         ]
@@ -179,28 +213,3 @@ class TestTheWriter:
         )
         assert out.empty
         assert not (tmp_path / "avg_window_presence.parquet").exists()
-
-
-@pytest.mark.integration
-@pytest.mark.pipeline
-class TestBothAveragingPathsWriteIt:
-    def test_the_pandas_and_ibis_runs_both_produced_the_artifact(
-        self, pandas_pipeline, ibis_pipeline
-    ):
-        frames = {}
-        for name, out_dir in (("pandas", pandas_pipeline), ("ibis", ibis_pipeline)):
-            path = out_dir / "avg_window_presence.parquet"
-            assert path.exists(), f"the {name} averaging wrote no window presence"
-            frames[name] = pd.read_parquet(path, dtype_backend="numpy_nullable")
-        for name, stored in frames.items():
-            # The averaging spreads, so its artifact carries the measurements
-            # the pandas filter cannot make as well as the derived judgements.
-            assert list(stored.columns) == (
-                ARTIFACT_COLUMNS + SPREAD_MEASUREMENTS
-            ), name
-            assert len(stored) > 0, name
-            # Every row says which source fed the household: it is decided for
-            # all of them, so a null would mean the record was lost, not that
-            # there was nothing to record.
-            assert int(stored["source"].notna().sum()) == len(stored), name
-            assert set(stored["source"]) <= {"cumulative", "interval"}, name

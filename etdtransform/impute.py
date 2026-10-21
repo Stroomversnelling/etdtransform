@@ -25,7 +25,6 @@ from etdtransform.presence import (
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
     WINDOW_MINUTES,
-    apply_presence_filter,
     window_minutes_for_column,
     window_presence_frame,
 )
