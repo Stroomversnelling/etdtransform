@@ -17,11 +17,18 @@ from etdtransform.presence import (
 
 COL = "ElektriciteitNetgebruikDiff"
 
+#: What window_presence_frame derives from counts alone, which is what the
+#: pandas presence filter can supply.
 ARTIFACT_COLUMNS = [
     "column", "ProjectIdBSV", "HuisIdBSV", "window_start", "window_minutes",
     "n_slots", "n_delivered", "eligible", "n_eligible", "n_contributing",
-    "slot_minimum",
+    "slot_minimum", "averageable",
 ]
+
+#: Measurements only the spreading can make, carried through rather than
+#: derived: how many windows it skipped as meter outages, and which of a
+#: household's two possible sources supplied its volume.
+SPREAD_MEASUREMENTS = ["n_outage_windows", "n_outage_slots", "source"]
 
 
 def _frame(values_by_household, project=1, freq_minutes=15):
@@ -71,6 +78,10 @@ class TestTheFilterReturnsTheFrame:
         assert presence["n_eligible"].tolist() == [1, 1]
         assert presence["n_contributing"].tolist() == [1, 1]
         assert presence["slot_minimum"].tolist() == [1, 1]
+        # ...and the window is still not averageable, which is the fact the
+        # counts alone do not carry: the fraction is satisfied by that one
+        # household while the project floor is not.
+        assert presence["averageable"].tolist() == [False, False]
         assert (presence["column"] == COL).all()
         assert presence["window_start"].tolist() == (
             [pd.Timestamp("2026-01-05")] * 2
@@ -182,5 +193,14 @@ class TestBothAveragingPathsWriteIt:
             assert path.exists(), f"the {name} averaging wrote no window presence"
             frames[name] = pd.read_parquet(path, dtype_backend="numpy_nullable")
         for name, stored in frames.items():
-            assert list(stored.columns) == ARTIFACT_COLUMNS, name
+            # The averaging spreads, so its artifact carries the measurements
+            # the pandas filter cannot make as well as the derived judgements.
+            assert list(stored.columns) == (
+                ARTIFACT_COLUMNS + SPREAD_MEASUREMENTS
+            ), name
             assert len(stored) > 0, name
+            # Every row says which source fed the household: it is decided for
+            # all of them, so a null would mean the record was lost, not that
+            # there was nothing to record.
+            assert int(stored["source"].notna().sum()) == len(stored), name
+            assert set(stored["source"]) <= {"cumulative", "interval"}, name

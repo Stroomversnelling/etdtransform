@@ -134,6 +134,10 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+        # Two households, which is smaller than a project: the household floor
+        # would empty every slot, and what is under test here is which values
+        # reach the mean.
+        min_eligible=1,
     )
 
     avg = result_ibis["ZonopwekVerbruikDiff"]["avg_diff"]
@@ -169,6 +173,10 @@ def test_empty_project_edge_cases():
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+        # Two households, which is smaller than a project: the household floor
+        # would empty every slot, and what is under test here is which values
+        # reach the mean.
+        min_eligible=1,
     )
 
     result = result_ibis
@@ -226,6 +234,10 @@ def test_flagged_values_excluded_in_both_paths():
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+        # Two households, which is smaller than a project: the household floor
+        # would empty every slot, and what is under test here is which values
+        # reach the mean.
+        min_eligible=1,
     )
 
     result = result_ibis
@@ -259,6 +271,10 @@ def test_all_null_diffs_edge_case():
     result_ibis = calculate_average_diff_ibis(
         ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
+        # Two households, which is smaller than a project: the household floor
+        # would empty every slot, and what is under test here is which values
+        # reach the mean.
+        min_eligible=1,
     )
 
     result = result_ibis

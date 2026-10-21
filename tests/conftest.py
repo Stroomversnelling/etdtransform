@@ -165,6 +165,18 @@ def mapped_dataset(tmp_path_factory):
 # lifting these to conftest, both files share the same fixture instance.
 # ---------------------------------------------------------------------------
 
+#: The fixture dataset is ten households across two projects, so a project
+#: window holds four or five eligible households -- below the production floor
+#: of ten by construction. Left at the production value, the averaging would
+#: publish no average at all and every column in every pipeline test would take
+#: the no-average path: the tests would still pass, comparing one degenerate
+#: output against another, and the averaging would be covered by nothing.
+#:
+#: The floor itself is exercised at its production value in
+#: test_minimum_household_presence.py::TestTheHouseholdFloor.
+FIXTURE_MIN_ELIGIBLE = 1
+
+
 def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
     old = etdtransform.options.aggregate_folder_path
     etdtransform.options.aggregate_folder_path = out_dir
@@ -174,6 +186,7 @@ def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
             ibis.read_parquet(str(out_dir / "household_default.parquet")),
             project_id_column="ProjectIdBSV",
             cumulative_columns=cum_cols,
+            min_eligible=FIXTURE_MIN_ELIGIBLE,
         )
         # Read after the averaging, which writes avg_diffs.parquet that the fill
         # loads. Unsorted on read, so the fill sorts it.
@@ -192,7 +205,8 @@ def _run_ibis_pipeline(out_dir: Path, cum_cols: list) -> None:
         aggregate_hh_data_5min_ibis()
         tbl = ibis.read_parquet(str(out_dir / "household_default.parquet"))
         prepare_diff_averages_for_impute_ibis(
-            tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols
+            tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols,
+            min_eligible=FIXTURE_MIN_ELIGIBLE,
         )
         impute_hh_data_5min_chunked(
             source_path=out_dir / "household_default.parquet",
@@ -216,6 +230,7 @@ def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
             ibis.read_parquet(str(out_dir / "household_default.parquet")),
             project_id_column="ProjectIdBSV",
             cumulative_columns=cum_cols,
+            min_eligible=FIXTURE_MIN_ELIGIBLE,
         )
         df = read_hh_data(interval="default")
         df_imputed = impute_hh_data_5min(df, cum_cols=cum_cols, sorted=False)
@@ -474,6 +489,12 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
     ``test_minimum_household_presence.py``; behaviour over a realistic span in
     ``test_averaging_coarse_delivery.py``.
 
+    *grid_minutes* is the spacing the rows sit on. Pass a dict of
+    ``ProjectIdBSV -> minutes`` for a frame whose projects sit on different
+    grids: each project is then spread over its own slots, one pass per distinct
+    grid, which is what the averaging itself does. A scalar means every project
+    shares that grid.
+
     Returns ``(avg, coverage, duty)``.
     """
     import ibis
@@ -494,27 +515,57 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
         frame[cum_col].where(on_register, frame[diff_col])
         if cum_col in frame.columns else frame[diff_col]
     )
-    prepared = ibis.memtable(
-        frame.assign(
-            _value=source.astype("Float64"),
-            _minutes=frame["HuisIdBSV"].map(minutes).astype("Float64"),
-            _on_cumulative=on_register.astype("boolean"),
-        )
-    )
-    total_slots = int(
-        frame[["ProjectIdBSV", "ReadingDate"]].drop_duplicates().shape[0]
-    )
     coarsest = max(cadence["cadence_minutes"].dropna())
-    max_slots = max(1, int(round(float(coarsest) / grid_minutes)))
+    projects = sorted(int(p) for p in frame["ProjectIdBSV"].dropna().unique())
+    grids = (
+        {int(p): float(m) for p, m in grid_minutes.items()}
+        if isinstance(grid_minutes, dict)
+        else {p: float(grid_minutes) for p in projects}
+    )
+    by_grid = {}
+    for project in projects:
+        by_grid.setdefault(grids[project], []).append(project)
 
-    avg, coverage, duty, _presence = _resample_average_ibis(
-        prepared, diff_col, "ProjectIdBSV", grid_minutes,
-        max_slots=max_slots, total_slots=total_slots,
-        window_minutes=grid_minutes,
+    assigned = frame.assign(
+        _value=source.astype("Float64"),
+        _minutes=frame["HuisIdBSV"].map(minutes).astype("Float64"),
+        _on_cumulative=on_register.astype("boolean"),
+    )
+
+    frames = []
+    total = present = consuming = 0
+    for grid, group in sorted(by_grid.items()):
+        rows = assigned[assigned["ProjectIdBSV"].isin(group)]
+        total_slots = int(
+            rows[["ProjectIdBSV", "ReadingDate"]].drop_duplicates().shape[0]
+        )
+        avg, _coverage, _duty, _presence = _resample_average_ibis(
+            ibis.memtable(rows), diff_col, "ProjectIdBSV", grid,
+            max_slots=max(1, int(round(float(coarsest) / grid))),
+            total_slots=total_slots,
+            window_minutes=grid,
+            # Both presence gates neutralised, not just the coverage one: these
+            # frames are a handful of rows so a case can be spelled out, and the
+            # household floor would empty every one of them. The floor itself is
+            # tested at its production value in test_minimum_household_presence.
+            min_eligible=1,
+        )
+        values = avg[f"{diff_col}_avg"]
+        total += total_slots
+        present += int(values.notna().sum())
+        consuming += int((values.fillna(0) > 0).sum())
+        frames.append(avg)
+
+    out = pd.concat(frames, ignore_index=True).sort_values(
+        ["ProjectIdBSV", "ReadingDate"]
     )
     if drop_na:
-        avg = avg[avg[f"{diff_col}_avg"].notna()]
-    return avg.reset_index(drop=True), coverage, duty
+        out = out[out[f"{diff_col}_avg"].notna()]
+    return (
+        out.reset_index(drop=True),
+        float(present / total) if total else 0.0,
+        float(consuming / present) if present else 0.0,
+    )
 
 
 def project_averages(df, project_id_column, diff_columns, **kwargs):

@@ -1,7 +1,9 @@
 import logging
 import os
+import shutil
 from math import floor, isclose, log10
 
+import duckdb
 import numpy as np
 import pandas as pd
 from etdmap.data_model import (
@@ -16,6 +18,7 @@ from etdmap.data_model import (
 from etdmap.flags import MappingFlag, flag_column
 
 from etdtransform.presence import (
+    MIN_ELIGIBLE_HOUSEHOLDS,
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
@@ -29,7 +32,7 @@ from etdtransform.bounds import (
     cadence_minutes_by_household,
     column_bound,
     column_bound_by_household,
-    dataset_grid_minutes,
+    grid_minutes_by_project,
     load_column_cadence,
 )
 
@@ -40,6 +43,11 @@ from etdtransform.vectorized_impute import impute_and_normalize, without_tariff_
 #: written by the pipeline rather than measured, or it was measured over a
 #: window rather than at the interval it sits on.
 _NOT_MEASURED_HERE = MappingFlag.NOT_A_MEASUREMENT.value
+
+#: The averages artifact, named without a suffix because it is a directory of
+#: (project, cadence) partitions. ``resolve_source_path`` takes this name and
+#: falls back to ``avg_diffs.parquet`` for a run that predates the partitioning.
+AVG_DIFFS_ARTIFACT = "avg_diffs"
 
 
 def assert_no_negative_interval(column, smallest) -> None:
@@ -177,7 +185,9 @@ def assert_bounds_not_inverted(diff_col, cadence) -> None:
         )
 
 
-def _coverage_duty_by_project(avg, col, project_id_column) -> pd.DataFrame:
+def _coverage_duty_by_project(
+    avg, col, project_id_column, discarded=None, flagged=None
+) -> pd.DataFrame:
     """One row per project: how much of the average exists, and how much of it moves.
 
     *coverage* is the share of the project's slots the average has a value for.
@@ -187,6 +197,14 @@ def _coverage_duty_by_project(avg, col, project_id_column) -> pd.DataFrame:
 
     Computed from the returned average frame rather than from either path's own
     intermediates, so the pandas and ibis paths cannot drift apart on it.
+
+    *discarded* and *flagged* are project -> count of readings the averaging
+    threw out before taking the mean -- over the column's bound, and written by
+    the pipeline rather than measured. They are computed to make that decision
+    and then have nowhere to go, so a thin average could not be traced to the
+    readings removed behind it. An absent mapping means nothing was removed,
+    which at this grain is a measured zero rather than an unknown: the averaging
+    looked at every row.
     """
     average = f"{col}_avg"
     frame = avg[[project_id_column, average]].copy()
@@ -207,10 +225,105 @@ def _coverage_duty_by_project(avg, col, project_id_column) -> pd.DataFrame:
     out["duty"] = (
         (out["consuming"] / out["present"]).where(out["present"] > 0, 0.0)
     ).astype("Float64")
+    for name, counts in (
+        ("n_discarded", discarded), ("n_flagged", flagged),
+    ):
+        out[name] = pd.array(
+            [(counts or {}).get(int(p), 0) for p in out[project_id_column]],
+            dtype="Int64",
+        )
     return out[
         [project_id_column, "column", "slots", "present", "consuming",
-         "coverage", "duty"]
+         "coverage", "duty", "n_discarded", "n_flagged"]
     ]
+
+
+def _empty_average(project_id_column, col) -> pd.DataFrame:
+    """The average frame of a column no household delivered.
+
+    A frame with the right columns and no rows, rather than nothing: the merge
+    in :func:`concatenate_avg_diff_columns` and every caller read these column
+    names, and an absent column is a different failure from an empty one.
+    """
+    return pd.DataFrame(
+        {
+            project_id_column: pd.array([], dtype="Int64"),
+            "ReadingDate": pd.array([], dtype="datetime64[us]"),
+            f"{col}_avg": pd.array([], dtype="Float64"),
+            f"{col}_contributors": pd.array([], dtype="Int64"),
+            f"{col}_n_eligible": pd.array([], dtype="Int64"),
+            "cadence_minutes": pd.array([], dtype="Int64"),
+        }
+    )
+
+
+def _combine_cadence_groups(per_grid, project_id_column, diff_columns) -> dict:
+    """One result per column out of the per-grid passes.
+
+    A project sits on one grid, so the passes cover disjoint projects: the
+    average frames concatenate rather than merge, the discard counts add, and
+    the per-project coverage rows are already distinct. Sorting the result by
+    (project, ReadingDate) leaves a single-grid run with exactly the frame one
+    pass produced, plus ``cadence_minutes``.
+
+    *per_grid* is ``(grid_minutes, result)`` pairs. An empty *per_grid* means no
+    household at all, which still has to yield each column's empty frame.
+    """
+    combined = {}
+    for col in diff_columns:
+        frames = []
+        presence = []
+        coverage_duty = []
+        n_discarded = 0
+        n_flagged = 0
+        for grid, result in per_grid:
+            data = result[col]
+            frame = data["avg_diff"].copy()
+            # The interval one average covers, and the partition the artifact
+            # is written under. Whole minutes: a sub-minute grid cannot be
+            # recorded in the cadence table it is read from.
+            frame["cadence_minutes"] = pd.array(
+                [int(round(float(grid)))] * len(frame), dtype="Int64"
+            )
+            frames.append(frame)
+            if data.get("window_presence") is not None:
+                presence.append(data["window_presence"])
+            if data.get("coverage_duty") is not None:
+                coverage_duty.append(data["coverage_duty"])
+            n_discarded += int(data["n_discarded"])
+            n_flagged += int(data["n_flagged"])
+
+        avg = (
+            pd.concat(frames, ignore_index=True) if frames
+            else _empty_average(project_id_column, col)
+        )
+        avg = avg.sort_values(
+            [project_id_column, "ReadingDate"]
+        ).reset_index(drop=True)
+
+        duty_frame = (
+            pd.concat(coverage_duty, ignore_index=True) if coverage_duty
+            else _coverage_duty_by_project(avg, col, project_id_column)
+        )
+        # Recombined from the per-project rows rather than from each pass's own
+        # figure: the rows partition the slots, so summing them gives the
+        # dataset-wide share exactly, with no weighting to get wrong.
+        slots = int(duty_frame["slots"].sum()) if len(duty_frame) else 0
+        present = int(duty_frame["present"].sum()) if len(duty_frame) else 0
+        consuming = int(duty_frame["consuming"].sum()) if len(duty_frame) else 0
+
+        combined[col] = {
+            "avg_diff": avg,
+            "n_discarded": n_discarded,
+            "n_flagged": n_flagged,
+            "coverage": float(present / slots) if slots else 0.0,
+            "duty": float(consuming / present) if present else 0.0,
+            "coverage_duty": duty_frame,
+            "window_presence": (
+                pd.concat(presence, ignore_index=True) if presence else None
+            ),
+        }
+    return combined
 
 
 def calculate_average_diff_ibis(
@@ -220,6 +333,7 @@ def calculate_average_diff_ibis(
     bounds: dict | None = None,
     cadence: pd.DataFrame | None = None,
     grid_minutes: float | None = None,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
 ) -> dict:
     """
     The project average of each interval column, per project and reading date.
@@ -254,15 +368,22 @@ def calculate_average_diff_ibis(
         contribute to the level but not to the shape. Defaults to the sidecar
         written at mapping; an empty frame makes this the arithmetic mean.
     grid_minutes : float, optional
-        The grid the data sits on. Resolved from the household batches'
-        declared Gegevensfrequentie when not given.
+        Forces one grid on every project. Leave unset in the pipeline: the grid
+        is then resolved per project from the cadence table, which is what makes
+        a project's average sit on the interval that project reports at. Pass it
+        only to state the grid of a frame built at a known spacing.
+    min_eligible : int
+        Eligible households a window needs before its average is published at
+        all (:func:`etdtransform.presence.window_is_averageable`). Lower it only
+        for a frame deliberately smaller than a project.
 
     Returns
     -------
     dict
         One entry per column in *diff_columns*, each a dict of:
 
-        - ``avg_diff`` -- DataFrame of the average per (project, ReadingDate)
+        - ``avg_diff`` -- DataFrame of the average per (project, ReadingDate),
+          carrying ``cadence_minutes`` -- the interval one average covers
         - ``n_discarded`` -- values dropped for exceeding the column threshold
         - ``n_flagged`` -- values excluded as invented or mistimed
         - ``coverage`` -- the share of slots the average has a value for
@@ -276,8 +397,6 @@ def calculate_average_diff_ibis(
     than an average of zero, and that is logged: no average is not the same
     fact as no consumption.
     """
-    import ibis
-
     logging.info("Calculating Diff column averages (Ibis).")
     assert_averageable(diff_columns)
 
@@ -289,8 +408,94 @@ def calculate_average_diff_ibis(
         }
     if cadence is None:
         cadence = load_column_cadence()
+
+    # Which project each household is in, in one round trip. The averages are
+    # sharded on (project, cadence), so the grid is resolved per project and the
+    # projects are then grouped by it: one pass per distinct grid, never one per
+    # project. PROFILING_GUIDANCE.md -- a per-project pass would rebuild every
+    # presence aggregate once per project per column, and the number of distinct
+    # grids is bounded by the declarations while the number of projects is not.
+    membership = tbl.select("HuisIdBSV", project_id_column).distinct().execute()
+    project_by_household = {}
+    unassigned = []
+    for household, project in zip(
+        membership["HuisIdBSV"], membership[project_id_column]
+    ):
+        if pd.isna(project):
+            unassigned.append(int(household))
+        else:
+            project_by_household[int(household)] = int(project)
+    if unassigned:
+        raise ValueError(
+            f"{len(unassigned)} household(s) carry no {project_id_column}, so "
+            f"their readings belong to no project average: "
+            f"{sorted(unassigned)[:10]}. The project is joined from the index "
+            f"before averaging; a household missing from it cannot contribute."
+        )
+
     if grid_minutes is None:
-        grid_minutes = dataset_grid_minutes()
+        grid_by_project = grid_minutes_by_project(cadence, project_by_household)
+        unresolved = sorted(
+            set(project_by_household.values()) - set(grid_by_project)
+        )
+        if unresolved:
+            raise ValueError(
+                f"Project(s) {unresolved} resolve no grid, so there is no "
+                f"interval for their average to sit on. It is declared per "
+                f"household batch as Gegevensfrequentie and recorded on the "
+                f"ReadingDate row of the column cadence sidecar, which "
+                f"detect_column_cadence writes at mapping."
+            )
+    else:
+        grid_by_project = {
+            project: float(grid_minutes)
+            for project in set(project_by_household.values())
+        }
+
+    households_by_grid = {}
+    for household, project in project_by_household.items():
+        households_by_grid.setdefault(grid_by_project[project], []).append(
+            household
+        )
+
+    per_grid = [
+        (
+            grid,
+            _average_at_one_cadence(
+                tbl, project_id_column, diff_columns, bounds, cadence,
+                grid_minutes=grid, included_ids=sorted(households),
+                min_eligible=min_eligible,
+            ),
+        )
+        for grid, households in sorted(households_by_grid.items())
+    ]
+    return _combine_cadence_groups(per_grid, project_id_column, diff_columns)
+
+
+def _average_at_one_cadence(
+    tbl,
+    project_id_column: str,
+    diff_columns: list[str],
+    bounds: dict,
+    cadence: pd.DataFrame | None,
+    grid_minutes: float,
+    included_ids: list[int],
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
+) -> dict:
+    """
+    One pass of the averaging, over the households that share one grid.
+
+    Split out from :func:`calculate_average_diff_ibis` so the spreading
+    denominator and the step-back can take a literal: within a pass there is one
+    grid, and ``_resample_average_ibis`` needs the slot spacing as a number.
+
+    *included_ids* is the pass's households, resolved by the caller from the
+    (household, project) membership it already read, so this costs no round trip
+    of its own.
+    """
+    import ibis
+
+    tbl = tbl.filter(tbl["HuisIdBSV"].isin(included_ids)) if included_ids else tbl
 
     # Properties of the frame rather than of any column, so they are computed
     # once here instead of once per column inside the loop below.
@@ -305,7 +510,9 @@ def calculate_average_diff_ibis(
     _max_slots = max(1, int(round(float(_coarsest) / float(grid_minutes))))
 
     # Every column's flagged count in one aggregate, so the loop below does not
-    # make a round trip per column.
+    # make a round trip per column. Grouped by project, which costs the same
+    # round trip and is the grain the counts are published at -- a dataset-wide
+    # total cannot say which project lost readings.
     _guard_agg = {}
     for i, c in enumerate(diff_columns):
         _guard_agg[f"_min_{i}"] = tbl[c].min()
@@ -315,21 +522,34 @@ def calculate_average_diff_ibis(
                 (tbl[findings].fill_null(0) & _NOT_MEASURED_HERE) != 0
             ).sum()
     _guards = (
-        tbl.aggregate(**_guard_agg).execute().iloc[0].to_dict()
-        if _guard_agg else {}
+        tbl.group_by(project_id_column).aggregate(**_guard_agg).execute()
+        if _guard_agg else pd.DataFrame()
     )
 
-    # Every household contributes, so this is the same list for every column and
-    # is resolved once rather than per column.
-    included_ids = tbl.select("HuisIdBSV").distinct().execute()["HuisIdBSV"].tolist()
+    def _by_project(field):
+        """A per-project figure from the grouped guard aggregate."""
+        if field not in _guards.columns:
+            return {}
+        return {
+            int(project): value
+            for project, value in zip(_guards[project_id_column], _guards[field])
+            if pd.notna(project)
+        }
 
     avg_diff_dict = {}
 
     for col in diff_columns:
         logging.info(f"Handling column (Ibis): {col}")
-        assert_no_negative_interval(
-            col, _guards.get(f"_min_{diff_columns.index(col)}")
-        )
+        # The smallest across the projects, since the guard is about the column.
+        # NaN means a project delivered nothing of it, which is not a smallest.
+        _smallest = [
+            value
+            for value in _by_project(f"_min_{diff_columns.index(col)}").values()
+            if pd.notna(value)
+        ]
+        assert_no_negative_interval(col, min(_smallest) if _smallest else None)
+        discarded_by_project = {}
+        flagged_by_project = {}
         n_discarded = 0
         n_flagged = 0
         coverage = 0.0
@@ -343,15 +563,9 @@ def calculate_average_diff_ibis(
             logging.warning(
                 f"No households to average for column `{col}`; avg_diff will be empty."
             )
-            avg_diff = pd.DataFrame(
-                {
-                    project_id_column: pd.array([], dtype="Int64"),
-                    "ReadingDate": pd.array([], dtype="datetime64[us]"),
-                    f"{col}_avg": pd.array([], dtype="Float64"),
-                }
-            )
+            avg_diff = _empty_average(project_id_column, col)
         else:
-            included = tbl.filter(tbl["HuisIdBSV"].isin(included_ids))
+            included = tbl
             value = included[col].cast("float64")
 
             # The interval each household's reading covers. Households absent
@@ -370,9 +584,14 @@ def calculate_average_diff_ibis(
                 not_measured_here = (
                     included[findings].fill_null(0) & _NOT_MEASURED_HERE
                 ) != 0
-                n_flagged = int(
-                    _guards.get(f"_flagged_{diff_columns.index(col)}") or 0
-                )
+                flagged_by_project = {
+                    project: int(count)
+                    for project, count in _by_project(
+                        f"_flagged_{diff_columns.index(col)}"
+                    ).items()
+                    if pd.notna(count)
+                }
+                n_flagged = sum(flagged_by_project.values())
                 if n_flagged:
                     logging.info(
                         f"Excluded {n_flagged} value(s) from the {col} average: "
@@ -393,7 +612,23 @@ def calculate_average_diff_ibis(
                     bound,
                 )
                 over = value > scaled_bound
-                n_discarded = int(included.filter(over).count().execute())
+                # Per project in the same round trip the total already cost:
+                # which project's readings were thrown away is the question a
+                # reader of the average has, and a single total cannot answer it.
+                _over = included.filter(over)
+                _discarded = (
+                    _over.group_by(project_id_column)
+                    .aggregate(_n=_over.count())
+                    .execute()
+                )
+                discarded_by_project = {
+                    int(project): int(count)
+                    for project, count in zip(
+                        _discarded[project_id_column], _discarded["_n"]
+                    )
+                    if pd.notna(project) and pd.notna(count)
+                }
+                n_discarded = sum(discarded_by_project.values())
                 if n_discarded:
                     logging.info(
                         f"Discarded {n_discarded} value(s) above the column "
@@ -442,6 +677,7 @@ def calculate_average_diff_ibis(
                 window_minutes=window_minutes_for_column(
                     cadence_minutes_by_household(col, cadence).values()
                 ),
+                min_eligible=min_eligible,
             )
 
         avg_diff_dict[col] = {
@@ -451,7 +687,8 @@ def calculate_average_diff_ibis(
             "coverage": coverage,
             "duty": duty,
             "coverage_duty": _coverage_duty_by_project(
-                avg_diff, col, project_id_column
+                avg_diff, col, project_id_column,
+                discarded=discarded_by_project, flagged=flagged_by_project,
             ),
             "window_presence": window_presence,
         }
@@ -515,6 +752,7 @@ def _match_reading_date_dtype(frame):
 def _resample_average_ibis(
     prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots,
     window_minutes=WINDOW_MINUTES,
+    min_eligible=MIN_ELIGIBLE_HOUSEHOLDS,
 ):
     """
     The project average of *diff_col*, computed in SQL by resampling.
@@ -547,6 +785,10 @@ def _resample_average_ibis(
     window_minutes : float
         The window presence is judged over, as in
         :mod:`etdtransform.presence`.
+    min_eligible : int
+        Eligible households a window needs before its average is published.
+        Lower it only for a frame deliberately smaller than a project, the same
+        way a one-slot *window_minutes* neutralises the coverage gate.
 
     Returns
     -------
@@ -583,11 +825,20 @@ def _resample_average_ibis(
     # outage. Spreading measured consumption across it is imputation's work, not
     # the average's. An interval-sourced window is its cadence and cannot span
     # one.
-    readings = readings.filter(
-        _._length.notnull()
-        & (_._length > 0)
-        & (~_._on_cumulative | (_._gap.notnull() & (_._gap <= _._slots)))
+    #
+    # Marked rather than dropped outright: an average thinned because a meter
+    # was out and one thinned because nobody delivered are different facts about
+    # the project, and the counts that survive cannot tell them apart. The rows
+    # are still excluded from placement -- only the record is added.
+    _has_length = _._length.notnull() & (_._length > 0)
+    marked = readings.mutate(
+        _outage=(
+            _has_length
+            & _._on_cumulative
+            & ~(_._gap.notnull() & (_._gap <= _._slots))
+        )
     )
+    readings = marked.filter(_has_length & ~_._outage)
     readings = readings.mutate(_per_slot=_._volume / _._length)
 
     # The offsets table is sized from the coarsest declared cadence rather than
@@ -600,6 +851,12 @@ def _resample_average_ibis(
             prepared.select(project_id_column, "ReadingDate").distinct().execute()
         )
         blank[f"{diff_col}_avg"] = pd.array([pd.NA] * len(blank), dtype="Float64")
+        # pd.NA, not zero: no gate ran, so these counts were never measured
+        # (ADR-022) -- unlike a slot the gates judged and found empty.
+        for _count in ("_contributors", "_n_eligible"):
+            blank[f"{diff_col}{_count}"] = pd.array(
+                [pd.NA] * len(blank), dtype="Int64"
+            )
         return _match_reading_date_dtype(blank), 0.0, 0.0, None
 
     offsets = ibis.memtable(
@@ -624,15 +881,35 @@ def _resample_average_ibis(
 
     # The denominator is every grid row the household has in the window, so a
     # window clipped by the edge of the dataset is judged on what it held.
+    #
+    # Which source fed the household rides out of the same aggregate. It is
+    # decided per household per column and then used and forgotten, so without
+    # this a reader cannot tell whether a household's volume came from its
+    # register or from its delivered intervals.
     grid = prepared.mutate(
         _window=(prepared["ReadingDate"].epoch_seconds() // 60) // window
     )
     held = grid.group_by([project_id_column, "HuisIdBSV", "_window"]).aggregate(
-        _held=_.count()
+        _held=_.count(),
+        _from_cumulative=_._on_cumulative.max(),
     )
     delivered = placed.group_by(
         [project_id_column, "HuisIdBSV", "_window"]
     ).aggregate(_delivered=_._per_slot.count())
+
+    # The windows the outage term above removed, attributed to the window the
+    # reading that closed the outage sits in. Joined into the presence read
+    # rather than executed on its own: these are (household, window) rows, and
+    # a separate execute would re-scan the data once more per column.
+    outages = (
+        marked.filter(_._outage)
+        .mutate(_window=(_.ReadingDate.epoch_seconds() // 60) // window)
+        .group_by([project_id_column, "HuisIdBSV", "_window"])
+        .aggregate(
+            _n_outage_windows=_.count(),
+            _n_outage_slots=_._length.sum(),
+        )
+    )
 
     coverage_keys = [project_id_column, "HuisIdBSV", "_window"]
 
@@ -643,16 +920,43 @@ def _resample_average_ibis(
     presence_counts = _to_nullable(
         held.left_join(delivered, coverage_keys)
         .select(~s_selectors.endswith("_right"))
+        .left_join(outages, coverage_keys)
+        .select(~s_selectors.endswith("_right"))
         .execute()
     )
     presence_counts = presence_counts.rename(
-        columns={"_held": "n_slots", "_delivered": "n_delivered"}
+        columns={
+            "_held": "n_slots",
+            "_delivered": "n_delivered",
+            "_n_outage_windows": "n_outage_windows",
+            "_n_outage_slots": "n_outage_slots",
+        }
     )
-    presence_counts["n_delivered"] = (
-        presence_counts["n_delivered"].fillna(0).astype("Int64")
+    # Zero rather than pd.NA on all three: a left join leaves nothing where the
+    # household delivered for no slot of the window or had no outage in it, and
+    # both of those are measured zeros rather than absences of measurement.
+    #
+    # Numeric before fillna, because the join can hand back an object column and
+    # filling that one downcasts (a pandas FutureWarning that becomes an error).
+    for _count in ("n_delivered", "n_outage_windows", "n_outage_slots"):
+        presence_counts[_count] = pd.array(
+            pd.to_numeric(presence_counts[_count], errors="coerce").fillna(0),
+            dtype="Int64",
+        )
+    # The source as a word rather than a flag, because "which of the two" is
+    # the question and a boolean named after one of them answers it backwards
+    # half the time.
+    presence_counts["source"] = pd.array(
+        [
+            "cumulative" if bool(flag) else "interval"
+            for flag in presence_counts["_from_cumulative"].fillna(False)
+        ],
+        dtype="string",
     )
+    presence_counts = presence_counts.drop(columns=["_from_cumulative"])
     window_presence = window_presence_frame(
-        presence_counts, diff_col, float(window), project_id_column
+        presence_counts, diff_col, float(window), project_id_column,
+        min_eligible=min_eligible,
     )
 
     eligible = (
@@ -689,9 +993,19 @@ def _resample_average_ibis(
             * covered["_n_eligible"].fill_null(0).cast("float64")
         ).ceil(),
     )
+    # Two gates, both required, and the second is not implied by the first: the
+    # fraction scales with the count it judges, so at one eligible household it
+    # demands one and that household's own readings are published as the
+    # project's average. presence.window_is_averageable is the same rule on the
+    # pandas side.
+    enough_households = (
+        covered["_n_eligible"].fill_null(0) >= int(min_eligible)
+    )
     covered = covered.mutate(
         **{
-            f"{diff_col}_avg": (covered["_contributors"] >= minimum).ifelse(
+            f"{diff_col}_avg": (
+                enough_households & (covered["_contributors"] >= minimum)
+            ).ifelse(
                 covered[f"{diff_col}_avg"], ibis.null().cast("float64")
             )
         }
@@ -710,16 +1024,31 @@ def _resample_average_ibis(
             slots["ReadingDate"] == covered["_slot"],
         ],
     )
+    # The two counts the gates judged come out with the average rather than
+    # being dropped by this projection. Neither is recoverable afterwards: the
+    # contributor count is per slot and depends on where each household's own
+    # readings fell, which the per-window presence artifact cannot say, and
+    # without the eligible count beside it a reader cannot tell a slot few
+    # households delivered for from a project that has few.
+    contributors = f"{diff_col}_contributors"
+    n_eligible_col = f"{diff_col}_n_eligible"
     avg = _to_nullable(
         joined.select(
-            slots[project_id_column], slots["ReadingDate"], covered[f"{diff_col}_avg"]
+            slots[project_id_column],
+            slots["ReadingDate"],
+            covered[f"{diff_col}_avg"],
+            covered["_contributors"].name(contributors),
+            covered["_n_eligible"].name(n_eligible_col),
         ).execute(),
         float_cols=[f"{diff_col}_avg"],
     )
     avg = _match_reading_date_dtype(avg)
-    avg = avg[[project_id_column, "ReadingDate", f"{diff_col}_avg"]].sort_values(
-        [project_id_column, "ReadingDate"]
-    ).reset_index(drop=True)
+    for _count in (contributors, n_eligible_col):
+        avg[_count] = avg[_count].astype("Int64")
+    avg = avg[[
+        project_id_column, "ReadingDate", f"{diff_col}_avg",
+        contributors, n_eligible_col,
+    ]].sort_values([project_id_column, "ReadingDate"]).reset_index(drop=True)
 
     # coverage over the slots the frame spans, not over the slots that survived.
     # total_slots is a property of the frame, not of the column, so the caller
@@ -741,16 +1070,22 @@ def concatenate_avg_diff_columns(avg_diff_dict, project_id_column):
     (e.g. one supplier vs another). An outer merge on the key columns is used
     so that projects missing a column receive pd.NA rather than being
     silently assigned another column's values via positional alignment.
+
+    ``cadence_minutes`` joins the key columns where it is present. It is a
+    property of the project, so every column's frame carries the same value for
+    a given project and merging on it changes no row -- but merging on only the
+    other two would leave a suffixed pair of it per column.
     """
+    keys = [project_id_column, "ReadingDate"]
     result_df = None
     for col, data in avg_diff_dict.items():
         df_col = data["avg_diff"]
         if result_df is None:
             result_df = df_col
+            if "cadence_minutes" in df_col.columns:
+                keys = [*keys, "cadence_minutes"]
         else:
-            result_df = result_df.merge(
-                df_col, on=[project_id_column, "ReadingDate"], how="outer"
-            )
+            result_df = result_df.merge(df_col, on=keys, how="outer")
     return result_df
 
 
@@ -1022,6 +1357,7 @@ def prepare_diff_averages_for_impute_ibis(
     tbl,
     project_id_column: str,
     cumulative_columns: list,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
 ):
     """
     Compute the project averages and save the artefacts imputation reads.
@@ -1038,6 +1374,13 @@ def prepare_diff_averages_for_impute_ibis(
         Name of the project ID column.
     cumulative_columns : list
         List of cumulative column names (without "Diff" suffix).
+    min_eligible : int
+        Eligible households a window needs before its average is published
+        (:func:`etdtransform.presence.window_is_averageable`). Lower it only for
+        a dataset deliberately smaller than a project -- a ten-household sample
+        is below the floor by construction, and leaving the floor there would
+        publish no average at all and send every column down the no-average
+        path, which looks like a passing run and tests almost nothing.
 
     Returns
     -------
@@ -1048,20 +1391,75 @@ def prepare_diff_averages_for_impute_ibis(
     diff_columns = get_diff_columns(cumulative_columns)
 
     logging.info("Starting to prepare diff averages (Ibis).")
-    avg_diff_dict = calculate_average_diff_ibis(tbl, project_id_column, diff_columns)
+    avg_diff_dict = calculate_average_diff_ibis(
+        tbl, project_id_column, diff_columns, min_eligible=min_eligible
+    )
 
     logging.info("Combining average diff columns.")
     diffs = concatenate_avg_diff_columns(avg_diff_dict, project_id_column)
 
-    logging.info("Saving average diff columns in avg_diffs.parquet")
-    diffs.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
-        engine="pyarrow",
-    )
+    write_diffs(diffs, project_id_column)
     write_coverage_duty(avg_diff_dict)
     write_window_presence(avg_diff_dict)
 
     return diff_columns, diffs
+
+
+def write_diffs(
+    diffs, project_id_column="ProjectIdBSV", aggregate_folder_path=None
+) -> str:
+    """Write the averages, partitioned on project and cadence.
+
+    One partition per (project, cadence). The cadence is the interval one
+    average covers, so it is what tells a reader what the number means -- and
+    putting it in the path rather than only in a column means a reader cannot
+    take a quarter-hourly average for a five-minute one by dropping a column.
+
+    Written as a directory named ``avg_diffs``, which is the partitioned
+    spelling of the canonical ``avg_diffs.parquet``
+    (``promote_aggregate_outputs._CANONICAL_STEMS``); promotion supersedes
+    whichever form the previous run left. Read it back with :func:`read_diffs`,
+    never with a bare ``pd.read_parquet`` -- the partition columns arrive
+    dictionary-encoded and the nullable backend refuses them.
+
+    Returns the path written.
+    """
+    if aggregate_folder_path is None:
+        aggregate_folder_path = etdtransform.options.aggregate_folder_path
+    target = os.path.join(str(aggregate_folder_path), AVG_DIFFS_ARTIFACT)
+
+    missing = [
+        key for key in (project_id_column, "cadence_minutes")
+        if key not in diffs.columns
+    ]
+    if missing:
+        raise ValueError(
+            f"write_diffs: the averages carry no {missing}, so they cannot be "
+            f"partitioned by project and cadence. Both are added by "
+            f"calculate_average_diff_ibis."
+        )
+
+    # The writer owns and clears its output directory, the same convention the
+    # other partitioned writers follow: a partition no longer produced would
+    # otherwise be read back beside this run's.
+    if os.path.isdir(target):
+        shutil.rmtree(target)
+
+    logging.info(
+        f"Saving average diff columns for "
+        f"{diffs[project_id_column].nunique()} project(s) over "
+        f"{diffs['cadence_minutes'].nunique()} cadence(s) in "
+        f"{AVG_DIFFS_ARTIFACT}"
+    )
+    with duckdb.connect() as con:
+        con.register("_avg_diffs", diffs)
+        con.execute(
+            f"COPY (SELECT * FROM _avg_diffs) TO '{target}' "
+            f"(FORMAT PARQUET, COMPRESSION SNAPPY, "
+            f'PARTITION_BY ("{project_id_column}", cadence_minutes), '
+            f"OVERWRITE_OR_IGNORE TRUE)"
+        )
+    return target
 
 
 def write_coverage_duty(avg_diff_dict, aggregate_folder_path=None) -> pd.DataFrame:
@@ -1122,31 +1520,76 @@ def write_window_presence(avg_diff_dict, aggregate_folder_path=None) -> pd.DataF
     return out
 
 
-def read_diffs():
+def read_diffs(
+    aggregate_folder_path=None, with_cadence=False, with_counts=False
+):
     """
-    Read average differences from a parquet file.
+    The project averages imputation fills from.
 
-    This function reads the average differences data from a parquet file
-    located in the aggregate folder specified in the etdtransform options.
+    The one reader for this artifact, in either layout: the ``avg_diffs``
+    directory of (project, cadence) partitions :func:`write_diffs` produces, or
+    the single ``avg_diffs.parquet`` a run predating the partitioning left.
+    ``resolve_source_path`` decides which is present.
+
+    A partitioned read goes through the engine, not ``pd.read_parquet``: the
+    partition columns arrive dictionary-encoded, which the nullable backend
+    raises on. Dtypes are restored on the way out, so both layouts return the
+    same ADR-005 frame.
+
+    By default the frame holds the keys and the averages and nothing else.
+    The fill merges it onto a chunk on (project, ReadingDate), so every other
+    column in it would ride into the written shards.
+
+    Parameters
+    ----------
+    aggregate_folder_path : str, optional
+        Where to read from. Defaults to the configured aggregate folder; the
+        sharded chain passes its own ``sharded`` area.
+    with_cadence : bool
+        Keep ``cadence_minutes`` -- the interval one average covers.
+    with_counts : bool
+        Keep ``<column>_contributors`` and ``<column>_n_eligible`` -- how many
+        households the slot's average rests on, and how many were eligible that
+        window.
 
     Returns
     -------
     pd.DataFrame
-        A DataFrame containing the average differences data.
-
-    Notes
-    -----
-    The function assumes that the 'avg_diffs.parquet' file exists in the
-    aggregate folder path specified in etdtransform.options.aggregate_folder_path.
-
-    This function is typically used to load pre-calculated average differences
-    for use in imputation processes.
-
+        The average per (project, ReadingDate), one ``<column>_avg`` per
+        averaged column.
     """
-    return pd.read_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet"),
-        dtype_backend="numpy_nullable",
-    )
+    from etdmap.storage import resolve_source_path
+
+    if aggregate_folder_path is None:
+        aggregate_folder_path = etdtransform.options.aggregate_folder_path
+    path = resolve_source_path(aggregate_folder_path, AVG_DIFFS_ARTIFACT)
+
+    if os.path.isdir(path):
+        import ibis
+
+        pattern = os.path.join(path, "**", "*.parquet").replace("\\", "/")
+        frame = ibis.read_parquet(
+            pattern, hive_partitioning=True, union_by_name=True
+        ).execute()
+        frame = _match_reading_date_dtype(
+            _to_nullable(
+                frame,
+                float_cols=[c for c in frame.columns if c.endswith("_avg")],
+            )
+        )
+    else:
+        frame = pd.read_parquet(path, dtype_backend="numpy_nullable")
+
+    dropped = []
+    if not with_cadence:
+        dropped.append("cadence_minutes")
+    if not with_counts:
+        dropped += [
+            c for c in frame.columns
+            if c.endswith(("_contributors", "_n_eligible"))
+        ]
+    present = [c for c in dropped if c in frame.columns]
+    return frame.drop(columns=present) if present else frame
 
 
 def process_and_impute(
@@ -1411,6 +1854,7 @@ def prepare_diff_averages_sharded(
     aggregate_folder_path=None,
     cumulative_columns: list = None,
     household_ids=None,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
 ):
     """
     Sharded version of the avg-diffs stage: compute the imputation estimation
@@ -1487,6 +1931,7 @@ def prepare_diff_averages_sharded(
             tbl,
             project_id_column="ProjectIdBSV",
             cumulative_columns=cumulative_columns,
+            min_eligible=min_eligible,
         )
     finally:
         etdtransform.options.aggregate_folder_path = previous

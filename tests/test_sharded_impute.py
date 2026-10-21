@@ -23,6 +23,7 @@ Batch-aware imputation is native-resolution-phase work; until then: loud stop.
 import shutil
 from pathlib import Path
 
+import conftest
 import pandas as pd
 import pytest
 
@@ -126,6 +127,10 @@ def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
         mapped_folder_path=sharded_fixture_mapped,
         aggregate_folder_path=agg,
         cumulative_columns=_cum_cols,
+        # The sharded chain is compared against the legacy one on the same
+        # fixture, so both have to publish averages at all -- see
+        # conftest.FIXTURE_MIN_ELIGIBLE.
+        min_eligible=conftest.FIXTURE_MIN_ELIGIBLE,
     )
     impute_mapped_households_sharded(
         mapped_folder_path=sharded_fixture_mapped,
@@ -139,6 +144,27 @@ def _read_parquet(p):
     return pd.read_parquet(p, dtype_backend="numpy_nullable")
 
 
+def _copy_artifact(src_folder, dst_folder, name):
+    """Copy a stage artifact in whichever layout the run that wrote it used.
+
+    An artifact is a single parquet file or a directory of partitions, and
+    which one a run produced is resolved by ``resolve_source_path`` rather than
+    assumed here -- a hardcoded ``<name>.parquet`` silently stops finding the
+    artifact the day it becomes partitioned.
+    """
+    from pathlib import Path
+
+    from etdmap.storage import resolve_source_path
+
+    src = Path(resolve_source_path(src_folder, name))
+    dst = Path(dst_folder) / src.name
+    if src.is_dir():
+        shutil.copytree(src, dst)
+    else:
+        shutil.copyfile(src, dst)
+    return dst
+
+
 @pytest.mark.integration
 @pytest.mark.pipeline
 class TestShardedChainEquivalence:
@@ -146,8 +172,10 @@ class TestShardedChainEquivalence:
     fixture (same data, same math, different I/O shell)."""
 
     def test_avg_diffs_equal(self, sharded_stage3, ibis_pipeline):
-        sharded = _read_parquet(sharded_stage3 / "avg_diffs.parquet")
-        legacy = _read_parquet(ibis_pipeline / "avg_diffs.parquet")
+        from etdtransform.impute import read_diffs
+
+        sharded = read_diffs(sharded_stage3, with_cadence=True)
+        legacy = read_diffs(ibis_pipeline, with_cadence=True)
         key = ["ProjectIdBSV", "ReadingDate"]
         pd.testing.assert_frame_equal(
             sharded.sort_values(key).reset_index(drop=True)[legacy.columns],
@@ -225,8 +253,8 @@ class TestBatchSafetyGuards:
     def _agg_with_artifacts(self, tmp_path, src_agg):
         agg = tmp_path / "agg"
         (agg / "sharded").mkdir(parents=True)
-        for name in ("avg_diffs.parquet",):
-            shutil.copyfile(src_agg / name, agg / "sharded" / name)
+        for name in ("avg_diffs",):
+            _copy_artifact(src_agg, agg / "sharded", name)
         return agg
 
     def test_multi_batch_household_raises_in_impute(self, tmp_path, ibis_pipeline, _cum_cols):

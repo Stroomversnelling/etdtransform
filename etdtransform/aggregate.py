@@ -1033,10 +1033,9 @@ def impute_mapped_households_sharded(
     # prepare_diff_averages_sharded) -- the sharded chain is self-contained under
     # <aggregate>/sharded/.
     sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
-    diffs = pd.read_parquet(
-        os.path.join(sharded_agg, "avg_diffs.parquet"),
-        dtype_backend="numpy_nullable",
-    )
+    from etdtransform.impute import read_diffs
+
+    diffs = read_diffs(sharded_agg)
     _constraints = _constraints_for_run(use_constraints)
     _coverage_duty = _read_coverage_duty(sharded_agg)
 

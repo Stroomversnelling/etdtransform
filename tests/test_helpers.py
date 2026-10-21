@@ -76,16 +76,51 @@ def store_sample_from_valid_run(path_to_file, save_name):
 
 
 def store_sample_and_metadata_for_all_transformed_files(path_to_folder):
+    """Refresh the committed pins from a run's output.
 
+    Two rules this follows, both of which cost nothing and both of which were
+    learned the hard way:
+
+    **Resolve each artifact the way a reader does.** A stage artifact is either a
+    single parquet file or a directory of partitions, and the aggregate folder
+    can hold a stale file beside the directory that superseded it. Trusting
+    ``<name>.parquet`` samples that stale file as if it were this run's output.
+    A directory has no single footer to sample or read statistics from, so it is
+    skipped -- as the two comparison tests already skip an artifact they find no
+    file for.
+
+    **Refresh only pins that already exist.** Writing a pin for an artifact that
+    had none enables a comparison that was not being made, which is a decision
+    to take deliberately rather than a side effect of regenerating.
+    """
+    from etdmap.storage import resolve_source_path
+
+    data_folder = "tests/data"
     for file in file_names:
-        path_to_file = os.path.join(path_to_folder, file)
         name = file.split('.parquet')[0]
+        resolved = resolve_source_path(path_to_folder, name)
+        if not os.path.isfile(resolved):
+            why = (
+                "a directory of partitions" if os.path.isdir(resolved)
+                else "not produced by this run"
+            )
+            print(f"skipping {name}: {why} ({resolved})")
+            continue
+
+        existing = os.path.join(data_folder, f"sample_{name}.parquet")
+        if not os.path.isfile(existing):
+            print(
+                f"skipping {name}: it has no pin yet, and adding one is a "
+                f"decision rather than a regeneration"
+            )
+            continue
+
         create_metadata_testfile_from_valid_run(
-            path_to_file,
+            resolved,
             save_name=f'metadata_{name}'
             )
         store_sample_from_valid_run(
-            path_to_file,
+            resolved,
             save_name=f'sample_{name}')
 
 if __name__ == "__main__":

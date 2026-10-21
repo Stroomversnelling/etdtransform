@@ -1,13 +1,24 @@
 """A project average requires enough of the project to be present.
 
-Without a minimum the average is the mean of whoever happened to report. Two
-gates fix that: a household counts toward a day only if it covered that day, and
-a slot has an average only if enough of the day's eligible households delivered
+Without a minimum the average is the mean of whoever happened to report. Three
+gates fix that: a household counts toward a day only if it covered that day; a
+day is averaged at all only if enough households were eligible for it; and a
+slot has an average only if enough of that day's eligible households delivered
 for it.
 
-Both gates remove values. Neither substitutes one: a slot with too few
+The household floor is not implied by the contributor fraction, because the
+fraction scales with the count it is judging: at one eligible household it
+demands one, so that household's own readings came out as the project's average
+with nothing in the number saying so.
+
+Every gate removes values. None substitutes one: a slot with too few
 contributors has no average, which is a different statement from an average of
 two households and is not the same as zero.
+
+Frames here hold a handful of households so a case can be spelled out, which is
+below the production floor. Those tests pass ``min_eligible=1`` to say so --
+the floor itself is exercised at its production value in
+``TestTheHouseholdFloor``.
 """
 
 import pandas as pd
@@ -16,6 +27,7 @@ import pytest
 from conftest import project_averages
 
 from etdtransform.presence import (
+    MIN_ELIGIBLE_HOUSEHOLDS,
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
@@ -25,6 +37,7 @@ from etdtransform.presence import (
     slot_minimum,
     window_coverage,
     window_index,
+    window_is_averageable,
     window_minutes_for_column,
 )
 
@@ -206,6 +219,9 @@ class TestTheSlotMinimum:
 
 class TestTheFilterRemovesRatherThanSubstitutes:
     def _filtered(self, frame, **kwargs):
+        # The coverage and contributor gates are what these cases are about,
+        # on frames of a few households so each removal is attributable.
+        kwargs.setdefault("min_eligible", 1)
         return apply_presence_filter(frame, COL, "ProjectIdBSV", **kwargs)
 
     def test_a_project_where_everyone_covers_the_day_keeps_everything(self):
@@ -268,6 +284,7 @@ class TestTheFilterRemovesRatherThanSubstitutes:
         assert stats["n_delivered"] == (
             stats["n_kept"]
             + stats["n_dropped_ineligible"]
+            + stats["n_dropped_thin_project"]
             + stats["n_dropped_insufficient"]
         )
 
@@ -291,25 +308,144 @@ class TestProjectsAreJudgedSeparately:
         thin[50] = pd.NA
         two = _frame({5: thin, 6: thin, 7: thin, 8: thin}, project=2)
         frame = pd.concat([one, two], ignore_index=True)
-        values, _, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, _, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV", min_eligible=1
+        )
         at_slot = frame["ReadingDate"] == frame["ReadingDate"].unique()[50]
         assert values[at_slot & (frame["ProjectIdBSV"] == 1)].notna().all()
         assert values[at_slot & (frame["ProjectIdBSV"] == 2)].isna().all()
 
 
 class TestAThinProjectLosesItsAverage:
-    def test_a_single_household_project_keeps_the_slots_it_delivered(self):
-        """One eligible household needs itself, so a project of one is not
-        silenced -- but it is also not padded out to look like more."""
+    def test_a_single_household_project_is_not_published_at_all(self):
+        """A project of one has no project average. The contributor fraction
+        cannot say so -- it demands one of one, which that household always
+        meets -- so this is the household floor's job, and until it existed one
+        household's own readings were published as its project's average."""
         frame = _frame({1: _day()})
-        values, stats, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, stats, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV"
+        )
+        assert values.isna().all()
+        assert stats["n_dropped_thin_project"] == stats["n_delivered"]
+        assert stats["n_dropped_insufficient"] == 0, (
+            "the fraction found nothing wrong, which is the point"
+        )
+
+    def test_it_keeps_the_slots_it_delivered_when_the_floor_is_lowered(self):
+        """The same frame with the floor lowered, so the removal above is
+        attributable to the floor and not to the other two gates."""
+        frame = _frame({1: _day()})
+        values, stats, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV", min_eligible=1
+        )
         assert values.notna().all()
         assert stats["n_dropped_insufficient"] == 0
 
     def test_a_single_household_project_that_stops_reporting_loses_the_day(self):
         frame = _frame({1: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
-        values, _, _presence = apply_presence_filter(frame, COL, "ProjectIdBSV")
+        values, _, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV", min_eligible=1
+        )
         assert values.isna().all()
+
+
+class TestTheHouseholdFloor:
+    """At the production value. Everything else in this file lowers the floor
+    to isolate another gate, so this is the only place the shipped number is
+    exercised."""
+
+    def test_the_floor_is_ten(self):
+        assert MIN_ELIGIBLE_HOUSEHOLDS == 10
+
+    @pytest.mark.parametrize("n", [0, 1, 2, 9])
+    def test_below_the_floor_is_not_averageable(self, n):
+        assert window_is_averageable(n) is False
+
+    @pytest.mark.parametrize("n", [10, 11, 400])
+    def test_at_or_above_the_floor_is(self, n):
+        assert window_is_averageable(n) is True
+
+    @pytest.mark.parametrize("n", [None, pd.NA])
+    def test_an_unknown_count_is_not_averageable(self, n):
+        """The gate exists to stop an average resting on households nobody
+        counted, so an uncounted window is exactly what it refuses."""
+        assert window_is_averageable(n) is False
+
+    def test_the_floor_carries_a_contributor_minimum_of_five(self):
+        """No second constant is needed: ten eligible households already
+        demand five contributors through the fraction."""
+        assert slot_minimum(MIN_ELIGIBLE_HOUSEHOLDS) == 5
+
+    def test_a_project_of_nine_loses_its_average(self):
+        frame = _frame({h: _day() for h in range(1, 10)})
+        values, stats, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV"
+        )
+        assert values.isna().all()
+        assert stats["n_kept"] == 0
+
+    def test_a_project_of_ten_keeps_it(self):
+        frame = _frame({h: _day() for h in range(1, 11)})
+        values, stats, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV"
+        )
+        assert values.notna().all()
+        assert stats["n_dropped_thin_project"] == 0
+
+    def test_eligibility_is_what_is_counted_not_household_rows(self):
+        """Eleven households of which two never covered the day leaves nine
+        eligible, so the day is not averageable even though eleven are present.
+        The floor is a statement about who was reporting, not about who exists
+        in the frame."""
+        absent = [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)
+        per_household = {h: _day() for h in range(1, 10)}
+        per_household[10] = list(absent)
+        per_household[11] = list(absent)
+
+        frame = _frame(per_household)
+        values, stats, _presence = apply_presence_filter(
+            frame, COL, "ProjectIdBSV"
+        )
+        assert int(stats["eligible_household_windows"]) == 9
+        assert values.isna().all()
+
+    def test_the_averaging_applies_the_floor_too(self):
+        """The ibis path is what production runs. A floor in the pandas twin
+        and not in it would make them two algorithms."""
+        import ibis
+
+        from etdtransform.impute import calculate_average_diff_ibis
+
+        cum = "ElektriciteitNetgebruik"
+        parts = []
+        for household in range(1, 10):
+            values = _day()
+            part = pd.DataFrame({
+                "HuisIdBSV": pd.array(
+                    [household] * len(values), dtype="Int64"
+                ),
+                "ProjectIdBSV": pd.array([1] * len(values), dtype="Int64"),
+                "ReadingDate": pd.date_range(
+                    "2026-01-01", periods=len(values), freq="5min"
+                ),
+                COL: pd.array(values, dtype="Float64"),
+            })
+            part[cum] = part[COL].fillna(0).cumsum().astype("Float64")
+            parts.append(part)
+        frame = pd.concat(parts, ignore_index=True)
+        households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
+        cadence = pd.DataFrame({
+            "HuisIdBSV": pd.array(households, dtype="Int64"),
+            "column": pd.array([cum] * len(households), dtype="string"),
+            "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
+        })
+
+        avg = calculate_average_diff_ibis(
+            ibis.memtable(frame), "ProjectIdBSV", [COL],
+            cadence=cadence, grid_minutes=5,
+        )[COL]["avg_diff"]
+        assert avg[f"{COL}_avg"].isna().all(), "nine households is not a project"
 
 
 class TestTheAveragingAppliesTheGates:
@@ -346,6 +482,9 @@ class TestTheAveragingAppliesTheGates:
         return project_averages(
             frame, "ProjectIdBSV", [COL],
             cadence=self._cadence(frame), grid_minutes=5,
+            # The two per-slot gates are what this class compares across the
+            # paths; the floor is compared in TestTheHouseholdFloor.
+            min_eligible=1,
         )[COL]["avg_diff"]
 
     def test_a_day_everyone_covers_is_averaged_throughout(self):

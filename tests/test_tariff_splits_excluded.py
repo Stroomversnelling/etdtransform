@@ -94,6 +94,9 @@ class TestAveragingMicroMixedSupplier:
             bounds={},
             cadence=cadence_table(df, [ROOT, WTW]),
             grid_minutes=5,
+            # Which columns are averaged at all is what is under test, so the
+            # frame is small and the household floor is lowered to match.
+            min_eligible=1,
         )
         assert set(avg_dict) == {ROOT_DIFF, WTW_DIFF}
 

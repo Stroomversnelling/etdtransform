@@ -127,6 +127,10 @@ def _placed(df, cadence):
     result = calculate_average_diff_ibis(
         ibis.memtable(df), "ProjectIdBSV", [DIFF],
         cadence=cadence, grid_minutes=GRID,
+        # One household contributes, which is the point of this file and is
+        # smaller than a project, so the household floor is lowered rather than
+        # the frame padded -- padding it would hide which reading went where.
+        min_eligible=1,
     )
     avg = result[DIFF]["avg_diff"].sort_values("ReadingDate")
     return avg[f"{DIFF}_avg"].reset_index(drop=True)

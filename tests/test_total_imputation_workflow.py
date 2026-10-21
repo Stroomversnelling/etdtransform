@@ -94,10 +94,19 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
         ),
         project_id_column="ProjectIdBSV",
         cumulative_columns=cum_cols_list,
+        min_eligible=conftest.FIXTURE_MIN_ELIGIBLE,
     )
-    # should create new files
-    path_avg_diffs = os.path.join(etdtransform.options.aggregate_folder_path, "avg_diffs.parquet")
-    assert os.path.isfile(path_avg_diffs)
+    # should create new files -- avg_diffs is a directory of (project, cadence)
+    # partitions, so what is checked is that the artifact resolves and reads,
+    # not that a particular layout is on disk.
+    from etdmap.storage import resolve_source_path
+    from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs
+
+    path_avg_diffs = resolve_source_path(
+        etdtransform.options.aggregate_folder_path, AVG_DIFFS_ARTIFACT
+    )
+    assert os.path.exists(path_avg_diffs)
+    assert not read_diffs().empty
 
     logging.info("Imputing data.")
     # "impute"

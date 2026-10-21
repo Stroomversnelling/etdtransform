@@ -44,6 +44,13 @@ SUFFICIENCY_SHAPE = 25
 #: The fraction of the eligible households demanded of a slot below that cap.
 SUFFICIENCY_FRACTION = 0.5
 
+#: The eligible households a window needs before its average is published at
+#: all. A project average is a shape taken from the project, and the fraction
+#: alone does not say there is a project behind it: at one eligible household
+#: the fraction demands one, so that household's own readings were published as
+#: the project's average, with nothing in the number saying so.
+MIN_ELIGIBLE_HOUSEHOLDS = 10
+
 
 def window_minutes_for_column(cadence_minutes, base=WINDOW_MINUTES) -> float:
     """The window length for a column reporting every *cadence_minutes*.
@@ -119,6 +126,23 @@ def slot_minimum(n_eligible, shape=SUFFICIENCY_SHAPE, fraction=SUFFICIENCY_FRACT
     return int(min(int(shape), ceil(float(fraction) * int(n_eligible))))
 
 
+def window_is_averageable(n_eligible, minimum=MIN_ELIGIBLE_HOUSEHOLDS) -> bool:
+    """Whether a window has enough eligible households to average at all.
+
+    A separate question from :func:`slot_minimum`, which asks how many of them a
+    slot needs, and both have to hold. A window of three households satisfies
+    the contributor fraction with two and still does not describe a project, so
+    the fraction cannot carry this on its own -- it scales with the count it is
+    meant to be judging.
+
+    An unknown count is not averageable: the gate exists to stop an average
+    resting on households nobody counted.
+    """
+    if n_eligible is None or pd.isna(n_eligible):
+        return False
+    return int(n_eligible) >= int(minimum)
+
+
 def window_presence_frame(
     counts,
     column,
@@ -128,6 +152,7 @@ def window_presence_frame(
     min_coverage=MIN_WINDOW_COVERAGE,
     shape=SUFFICIENCY_SHAPE,
     fraction=SUFFICIENCY_FRACTION,
+    min_eligible=MIN_ELIGIBLE_HOUSEHOLDS,
 ):
     """One row per (project, household, window): the counts the presence gates
     judged, and the judgements derived from them.
@@ -135,12 +160,23 @@ def window_presence_frame(
     *counts* carries *project_id_column*, *household_column*, ``_window`` (the
     :func:`window_index` value) and the two raw counts ``n_slots`` and
     ``n_delivered``. Everything else -- eligibility, the per-window household
-    tallies and the slot minimum -- is derived here, so the two averaging
-    implementations that supply counts share one definition of the judgements.
+    tallies, the slot minimum and whether the window is averageable at all --
+    is derived here, so the two averaging implementations that supply counts
+    share one definition of the judgements.
 
     ``n_contributing`` tallies the eligible households that delivered at least
     one slot of the window. At the default coverage minimum it equals
     ``n_eligible``; the two part when the minimum is lowered.
+
+    ``averageable`` is the household floor (:func:`window_is_averageable`).
+    Recorded per row rather than left implicit, because a window with no average
+    and a window with a thin one are different facts and the counts alone do not
+    separate them.
+
+    ``n_outage_windows``, ``n_outage_slots`` and ``source`` are carried through
+    from *counts* when it has them. They are measurements of the spreading, not
+    judgements derivable here, so a caller that does not spread simply omits
+    them.
     """
     out = counts.copy()
     out["n_slots"] = out["n_slots"].astype("Int64")
@@ -166,6 +202,10 @@ def window_presence_frame(
         [slot_minimum(n, shape, fraction) for n in out["n_eligible"]],
         dtype="Int64",
     )
+    out["averageable"] = pd.array(
+        [window_is_averageable(n, min_eligible) for n in out["n_eligible"]],
+        dtype="boolean",
+    )
     # The inverse of window_index: windows count int(window_minutes)-minute
     # steps from the epoch.
     out["window_start"] = pd.to_datetime(
@@ -187,6 +227,15 @@ def window_presence_frame(
         "n_eligible",
         "n_contributing",
         "slot_minimum",
+        "averageable",
+    ]
+    # Measurements the caller made that this function cannot derive, carried
+    # through rather than required: the spreading path can say how many windows
+    # it dropped as meter outages and which source fed each household, and the
+    # pandas filter, which does not spread, has neither to offer.
+    ordered += [
+        name for name in ("n_outage_windows", "n_outage_slots", "source")
+        if name in out.columns
     ]
     return (
         out[ordered]
@@ -205,19 +254,21 @@ def apply_presence_filter(
     min_coverage=MIN_WINDOW_COVERAGE,
     shape=SUFFICIENCY_SHAPE,
     fraction=SUFFICIENCY_FRACTION,
+    min_eligible=MIN_ELIGIBLE_HOUSEHOLDS,
 ):
     """Blank the values a project average may not be taken over.
 
     Returns ``(values, stats, window_presence)``: *column* with the excluded
-    values replaced by pd.NA, a dict describing what the two gates removed,
+    values replaced by pd.NA, a dict describing what the three gates removed,
     and the :func:`window_presence_frame` of the counts the gates judged.
     *frame* is not modified.
 
-    A value is kept when its (household, window) covered the window and its
-    (project, slot) has enough eligible households delivering for it. Both
-    gates remove values rather than substitute any: a slot no longer having an
-    average is the finding, and an average of a handful of households is not a
-    better answer than none.
+    A value is kept when its (household, window) covered the window, its
+    window has enough eligible households to be averaged at all, and its
+    (project, slot) has enough of them delivering for it. Every gate removes
+    values rather than substituting any: a slot no longer having an average is
+    the finding, and an average of a handful of households is not a better
+    answer than none.
     """
     work = frame[[household_column, project_id_column, date_column, column]].copy()
     work["_window"] = window_index(work[date_column], window_minutes)
@@ -253,8 +304,12 @@ def apply_presence_filter(
         dtype="Int64",
     )
 
+    averageable = pd.Series(
+        [window_is_averageable(n, min_eligible) for n in work["_n_eligible"]],
+        index=work.index,
+    )
     sufficient = (work["_contributors"] >= work["_minimum"]).fillna(False)
-    keep = eligible & sufficient
+    keep = eligible & averageable & sufficient
 
     delivered = work[column].notna()
     values = work[column].where(keep, pd.NA)
@@ -267,7 +322,7 @@ def apply_presence_filter(
     )
     window_presence = window_presence_frame(
         counts, column, window_minutes, project_id_column, household_column,
-        min_coverage, shape, fraction,
+        min_coverage, shape, fraction, min_eligible,
     )
 
     stats = {
@@ -275,7 +330,12 @@ def apply_presence_filter(
         "window_minutes": float(window_minutes),
         "n_delivered": int(delivered.sum()),
         "n_dropped_ineligible": int((delivered & ~eligible).sum()),
-        "n_dropped_insufficient": int((delivered & eligible & ~sufficient).sum()),
+        "n_dropped_thin_project": int(
+            (delivered & eligible & ~averageable).sum()
+        ),
+        "n_dropped_insufficient": int(
+            (delivered & eligible & averageable & ~sufficient).sum()
+        ),
         "n_kept": int((delivered & keep).sum()),
         "eligible_household_windows": int(
             work.loc[eligible, [household_column, "_window"]]
@@ -286,12 +346,18 @@ def apply_presence_filter(
             work[[household_column, "_window"]].drop_duplicates().shape[0]
         ),
     }
-    if stats["n_dropped_ineligible"] or stats["n_dropped_insufficient"]:
+    if (
+        stats["n_dropped_ineligible"]
+        or stats["n_dropped_thin_project"]
+        or stats["n_dropped_insufficient"]
+    ):
         logging.info(
             f"{column}: presence filter dropped "
             f"{stats['n_dropped_ineligible']} value(s) from households not "
-            f"covering their window and {stats['n_dropped_insufficient']} "
-            f"from slots with too few contributors; {stats['n_kept']} kept."
+            f"covering their window, {stats['n_dropped_thin_project']} from "
+            f"windows with fewer than {int(min_eligible)} eligible households "
+            f"and {stats['n_dropped_insufficient']} from slots with too few "
+            f"contributors; {stats['n_kept']} kept."
         )
 
     return values.astype("Float64"), stats, window_presence

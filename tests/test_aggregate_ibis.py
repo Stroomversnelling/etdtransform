@@ -579,14 +579,26 @@ def _write_cadence(mapped_dir: str, household_ids, columns, minutes=5) -> None:
     )
 
 
-def _write_impute_artifacts(agg_dir: str, dates, project_id: int = 1) -> None:
-    """Write a minimal avg_diffs.parquet."""
+def _write_impute_artifacts(
+    agg_dir: str, dates, project_id: int = 1, cadence_minutes: int = 5
+) -> None:
+    """Write a minimal averages artifact, through the writer the stage uses.
+
+    Not a hand-rolled ``to_parquet``: the artifact's layout is the writer's
+    business, so a fixture that spells it out stops matching production the
+    next time the layout moves.
+    """
+    from etdtransform.impute import write_diffs
+
     avg = pd.DataFrame({
         "ProjectIdBSV":   pd.array([project_id] * len(dates), dtype="Int64"),
         "ReadingDate":    dates,
         _IMPUTE_AVG_COL:  pd.array([0.5] * len(dates), dtype="Float64"),
+        "cadence_minutes": pd.array(
+            [cadence_minutes] * len(dates), dtype="Int64"
+        ),
     })
-    avg.to_parquet(os.path.join(agg_dir, "avg_diffs.parquet"), engine="pyarrow")
+    write_diffs(avg, aggregate_folder_path=agg_dir)
 
 
 class TestChunkedImpute:

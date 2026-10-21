@@ -46,6 +46,10 @@ def _average(frame):
     result = project_averages(
         frame, "ProjectIdBSV", [DIFF],
         cadence=cadence_table(frame, [CUM]), grid_minutes=5,
+        # These frames hold a few households so each one's contribution is
+        # readable; the household floor is about project size and is tested at
+        # its production value in test_minimum_household_presence.
+        min_eligible=1,
     )
     return result[DIFF]["avg_diff"]
 

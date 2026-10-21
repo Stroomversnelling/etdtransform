@@ -67,12 +67,17 @@ def _cadence(rows):
     })
 
 
-def _form_rows(household, cum_col, diff_col, register, intervals):
-    """Sidecar rows stating which forms arrived for one (household, variable)."""
+def _form_rows(household, cum_col, diff_col, register, intervals, grid=GRID):
+    """Sidecar rows stating which forms arrived for one (household, variable).
+
+    *grid* is a parameter because routing must not depend on it: which form
+    arrived is a fact about the delivery, and a household reporting hourly is
+    routed by the same rule as one reporting every five minutes.
+    """
     return [
-        (household, "ReadingDate", GRID, N),
-        (household, cum_col, GRID, N if register else 0),
-        (household, diff_col, GRID, N if intervals else 0),
+        (household, "ReadingDate", grid, N),
+        (household, cum_col, grid, N if register else 0),
+        (household, diff_col, grid, N if intervals else 0),
     ]
 
 
@@ -137,6 +142,72 @@ def _types(out, diff_col=DIFF):
 
 def _has(out, flag, diff_col=DIFF):
     return ((_types(out, diff_col) & flag.value) != 0).tolist()
+
+
+class TestRoutingAtACoarserGrid:
+    """Every other case in this file states the grid as five minutes, so a
+    routing rule that had quietly come to depend on it would pass throughout.
+    Routing reads reading *counts*, which is why it should not -- asserted here
+    rather than assumed, since adding a project at another grid is the thing
+    this has to stay safe for."""
+
+    @pytest.mark.parametrize("grid", [15, 60, 1440])
+    def test_a_register_at_a_coarser_grid_still_takes_the_cumulative_logic(
+        self, grid
+    ):
+        df = _register_frame()
+        paths = delivery_paths(
+            df, CUM, DIFF,
+            _cadence(_form_rows(1, CUM, DIFF, True, False, grid=grid)),
+        )
+        assert bool(paths.cumulative.all())
+        assert not bool(paths.interval.any())
+
+    @pytest.mark.parametrize("grid", [15, 60, 1440])
+    def test_intervals_alone_at_a_coarser_grid_still_take_the_interval_logic(
+        self, grid
+    ):
+        df = _interval_frame()
+        paths = delivery_paths(
+            df, CUM, DIFF,
+            _cadence(_form_rows(1, CUM, DIFF, False, True, grid=grid)),
+        )
+        assert bool(paths.interval.all())
+        assert not bool(paths.cumulative.any())
+
+    def test_two_households_at_sixty_on_different_forms_are_told_apart(self):
+        """One frame, one grid, two delivery forms -- which is the shape the
+        fill actually sees, and the one a per-frame routing decision would get
+        wrong."""
+        register = _register_frame(household=1)
+        intervals = _interval_frame(household=2)
+        df = pd.concat([register, intervals], ignore_index=True)
+        cadence = _cadence(
+            _form_rows(1, CUM, DIFF, True, False, grid=60)
+            + _form_rows(2, CUM, DIFF, False, True, grid=60)
+        )
+
+        paths = delivery_paths(df, CUM, DIFF, cadence)
+        first = df["HuisIdBSV"] == 1
+        assert bool(paths.cumulative[first].all())
+        assert bool(paths.interval[~first].all())
+        # The three masks partition the frame whatever the grid is.
+        assert bool(
+            (
+                paths.cumulative.astype(int)
+                + paths.interval.astype(int)
+                + paths.nothing.astype(int)
+                == 1
+            ).all()
+        )
+
+    def test_nothing_delivered_at_a_coarse_grid_is_still_nothing(self):
+        df = _interval_frame()
+        paths = delivery_paths(
+            df, CUM, DIFF,
+            _cadence(_form_rows(1, CUM, DIFF, False, False, grid=60)),
+        )
+        assert bool(paths.nothing.all())
 
 
 class TestTheFourDeliveryCombinations:

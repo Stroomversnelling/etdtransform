@@ -18,9 +18,9 @@ Aggregation  : aggregate_hh_data_5min (pandas)
                aggregate_hh_data_duckdb (DuckDB union_by_name)
                -> household_default.parquet
 
-Diffs        : prepare_diff_averages_for_impute (pandas)
-               prepare_diff_averages_for_impute_ibis (ibis)
-               -> avg_diffs.parquet
+Diffs        : prepare_diff_averages_for_impute_ibis -- one engine, called by
+               every shell, so the diffs comparison is across shells
+               -> avg_diffs/ProjectIdBSV=*/cadence_minutes=*/
 
 Imputation   : impute_hh_data_5min (pandas)
                impute_hh_data_5min_chunked (chunked pandas + parquet streaming)
@@ -141,12 +141,30 @@ class TestAggregationEquivalence:
 # ---------------------------------------------------------------------------
 
 class TestDiffsEquivalence:
-    """avg_diffs.parquet: pandas vs ibis."""
+    """The averages, across two pipeline shells.
 
-    def test_avg_diffs_ibis_matches_pandas(self, pandas_pipeline, ibis_pipeline):
-        p = _load(pandas_pipeline / "avg_diffs.parquet", ("ProjectIdBSV", "ReadingDate"))
-        i = _load(ibis_pipeline / "avg_diffs.parquet", ("ProjectIdBSV", "ReadingDate"))
-        _assert_frames_equal(p, i, "pandas", "ibis")
+    Not pandas versus ibis: there is one averaging engine and all three shells
+    call it, so what this compares is that the same data through two different
+    aggregation and I/O paths produces the same averages.
+    """
+
+    def test_the_averages_do_not_depend_on_the_shell(
+        self, pandas_pipeline, ibis_pipeline
+    ):
+        from etdtransform.impute import read_diffs
+
+        key = ["ProjectIdBSV", "ReadingDate"]
+        frames = []
+        for folder in (pandas_pipeline, ibis_pipeline):
+            # Read through the artifact's own reader: it is a directory of
+            # (project, cadence) partitions, which pd.read_parquet cannot take
+            # with the nullable backend.
+            frames.append(
+                read_diffs(folder, with_cadence=True)
+                .sort_values(key)
+                .reset_index(drop=True)
+            )
+        _assert_frames_equal(frames[0], frames[1], "pandas shell", "ibis shell")
 
 
 # ---------------------------------------------------------------------------

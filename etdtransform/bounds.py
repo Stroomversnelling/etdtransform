@@ -549,3 +549,81 @@ def grid_minutes_by_household(cadence, date_column="ReadingDate") -> dict:
     }
 
 
+def grid_minutes_by_project(
+    cadence, project_by_household, date_column="ReadingDate"
+) -> dict:
+    """
+    The one interval each project's rows sit on, in minutes.
+
+    A project average is a shape placed on the slots a project reports at, so it
+    needs one interval per project. Where every household in a project sits on
+    the same grid -- which is what declaring ``Gegevensfrequentie`` per batch is
+    for -- that interval is well defined and this returns it.
+
+    This is the interval the averages are sharded on, together with the project.
+    A project reporting quarter-hourly is spread over quarter-hourly steps and
+    its average means energy per quarter hour, whatever any other project
+    reports at. There is no dataset-wide grid in the averaging to fall back to.
+
+    Raises
+    ------
+    ValueError
+        When a project's households declare more than one grid. Averaging such
+        a project is refused because the machinery to do it correctly is not
+        built: there is no checked rule for which grid the project's average
+        sits on, and picking one would either invent slots the project never
+        reported at or discard volume. A refusal is a thing to build on; a
+        number nobody has verified is not.
+
+    Parameters
+    ----------
+    cadence : pd.DataFrame or None
+        The cadence table from :func:`load_column_cadence`.
+    project_by_household : dict
+        HuisIdBSV -> ProjectIdBSV, from the index rather than from the data:
+        which project a household belongs to is a registry fact, and a household
+        contributing no rows to the frame in hand still belongs to its project.
+        Every household the cadence table resolves a grid for must appear, or
+        its grid cannot be attributed to a project.
+    date_column : str
+        Name of the timestamp column, whose row carries the grid.
+
+    Returns
+    -------
+    dict
+        ProjectIdBSV -> minutes, omitting any project none of whose households
+        resolve a grid.
+    """
+    by_household = grid_minutes_by_household(cadence, date_column=date_column)
+    if not by_household:
+        return {}
+
+    found = {}
+    for household, minutes in by_household.items():
+        project = project_by_household.get(household)
+        if project is None:
+            continue
+        found.setdefault(int(project), {}).setdefault(minutes, []).append(
+            household
+        )
+
+    resolved = {}
+    for project, minutes_seen in sorted(found.items()):
+        if len(minutes_seen) > 1:
+            listed = ", ".join(
+                f"{m:g}" for m in sorted(minutes_seen)
+            )
+            raise ValueError(
+                f"Project {project} declares {len(minutes_seen)} household "
+                f"cadences ({listed} minutes). A project average requires one "
+                f"cadence per project, so it cannot be calculated. Households "
+                f"per cadence: "
+                + "; ".join(
+                    f"{m:g} min: {sorted(hh)}"
+                    for m, hh in sorted(minutes_seen.items())
+                )
+            )
+        resolved[project] = next(iter(minutes_seen))
+    return resolved
+
+

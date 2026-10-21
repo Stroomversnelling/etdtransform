@@ -110,13 +110,38 @@ class TestTheGridIsNotDefaultedDownstream:
         ]
         assert parameter.default is inspect.Parameter.empty
 
-    def test_the_averaging_resolves_the_grid_rather_than_assuming_one(self):
-        """calculate_average_diff_ibis accepts grid_minutes=None, and resolves it
-        from the index -- which raises when no batch declares one. Accepting None
-        is not the same as defaulting to a number."""
-        import inspect
+    def test_the_averaging_resolves_the_grid_per_project(self):
+        """``calculate_average_diff_ibis`` accepts ``grid_minutes=None`` and
+        resolves the grid per project from the cadence table. Accepting None is
+        not the same as defaulting to a number: a project that resolves none
+        raises, naming itself, rather than being averaged at some other
+        project's spacing."""
+        import ibis
 
         from etdtransform.impute import calculate_average_diff_ibis
 
-        source = inspect.getsource(calculate_average_diff_ibis)
-        assert "grid_minutes = dataset_grid_minutes()" in source
+        frame = pd.DataFrame({
+            "ProjectIdBSV": pd.array([4, 4], dtype="Int64"),
+            "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
+            "ReadingDate": pd.to_datetime(
+                ["2026-01-01 00:00", "2026-01-01 00:05"]
+            ),
+            "ElektriciteitNetgebruikDiff": pd.array(
+                [1.0, 1.0], dtype="Float64"
+            ),
+        })
+        # A cadence table with a row for the column but none for ReadingDate,
+        # which is where the household's grid is recorded.
+        cadence = pd.DataFrame({
+            "HuisIdBSV": pd.array([1], dtype="Int64"),
+            "column": pd.array(["ElektriciteitNetgebruik"], dtype="string"),
+            "cadence_minutes": pd.array([5], dtype="Int64"),
+        })
+
+        with pytest.raises(ValueError, match=r"Project\(s\) \[4\] resolve no grid"):
+            calculate_average_diff_ibis(
+                ibis.memtable(frame),
+                "ProjectIdBSV",
+                ["ElektriciteitNetgebruikDiff"],
+                cadence=cadence,
+            )
