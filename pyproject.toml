@@ -88,3 +88,13 @@ markers = [
     "integration: reads or writes parquet, or runs a pipeline stage end to end",
     "pipeline: needs a pipeline built by a session fixture, or the mapped dataset on disk",
 ]
+# The pipeline fixtures build whole pipelines into tmp_path: three session
+# pipelines plus the per-test monolith-vs-sharded pairs put a --full-suite run
+# at roughly 15 GB of scratch. pytest keeps the last three runs by default, so
+# the default is a 45 GB ceiling on a machine the pipeline also needs disk on.
+#
+# retention_count = 1 keeps only the newest run. "failed" additionally drops the
+# directories of tests that passed, so a green run leaves almost nothing while a
+# failure still leaves its inputs to look at.
+tmp_path_retention_count = 1
+tmp_path_retention_policy = "failed"
