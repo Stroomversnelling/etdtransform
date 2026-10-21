@@ -1,8 +1,14 @@
 """
 Tests for resample_hh_data_duckdb and aggregate_project_data_duckdb.
 
-Compares DuckDB outputs against the pandas path (resample_hh_data with df=)
-on the shared ibis_pipeline fixture from test_pipeline_equivalence.py.
+Asserts what each function produces, on the calculated output of the canonical
+chain (`sharded_calculated`): row count against the source at the passthrough
+interval, the configured columns present, the cumulative counterpart rebuilt
+from its Diff column, and the project average equal to the mean over
+households.
+
+Cross-FORMAT equivalence -- the same function over a monolith and over hive
+shards -- is test_sharded_resample.py and test_sharded_project.py, not here.
 
 Config isolation: uses _TEST_CONFIG to cover both active method patterns
 (Diff/sum-resample/avg-aggregate and non-Diff/sum-resample/avg-aggregate)
@@ -15,7 +21,6 @@ from unittest.mock import patch
 
 import etdtransform
 from etdtransform.aggregate import (
-    resample_hh_data,
     resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
 )
@@ -52,64 +57,32 @@ def _load(path, sort_cols=None):
     return df
 
 
-def _shared_cols(df_a, df_b):
-    return sorted(set(df_a.columns) & set(df_b.columns))
-
-
-def _assert_frames_equal(df_a, df_b, label_a, label_b):
-    shared = _shared_cols(df_a, df_b)
-    pd.testing.assert_frame_equal(
-        df_a[shared].reset_index(drop=True),
-        df_b[shared].reset_index(drop=True),
-        check_like=False,
-        rtol=REL_TOL,
-        obj=f"{label_a} vs {label_b}",
-    )
-
 
 # ---------------------------------------------------------------------------
-# Session fixtures: reuse the shared `ibis_pipeline` fixture from conftest.py
-# rather than building household_calculated.parquet again here.
+# Session fixtures: built on `sharded_calculated` from conftest.py -- the
+# calculated output of the canonical chain -- rather than resampling again here.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def resample_duckdb_dirs(tmp_path_factory, ibis_pipeline):
-    """
-    Run DuckDB and pandas resample on the shared ibis_pipeline's
-    household_calculated.parquet, each into its own temp directory.
-    Returns (duckdb_dir, pandas_dir).
-    """
-    calculated_path = str(ibis_pipeline / "household_calculated.parquet")
-
-    # -- DuckDB path (patched to use _TEST_CONFIG) --
-    duckdb_dir = tmp_path_factory.mktemp("resample_duckdb")
+def resample_duckdb_dir(tmp_path_factory, sharded_calculated):
+    """Resample the canonical chain's calculated output into a temp directory."""
+    out = tmp_path_factory.mktemp("resample_duckdb")
     with patch("etdmap.data_model.get_aggregation_config", return_value=_TEST_CONFIG):
         resample_hh_data_duckdb(
-            source_path=calculated_path,
-            output_dir=str(duckdb_dir),
+            source_path=str(sharded_calculated),
+            output_dir=str(out),
             intervals=("5min", "15min", "60min"),
         )
-
-    # -- Pandas path via resample_hh_data(df=...) --
-    pandas_dir = tmp_path_factory.mktemp("resample_pandas")
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = pandas_dir
-    try:
-        df_calc = pd.read_parquet(calculated_path, dtype_backend="numpy_nullable")
-        resample_hh_data(df=df_calc.copy(), intervals=("5min", "15min", "60min"))
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-    return duckdb_dir, pandas_dir
+    return out
 
 
 @pytest.fixture(scope="session")
-def aggregate_project_duckdb_dir(tmp_path_factory, resample_duckdb_dirs):
+def aggregate_project_duckdb_dir(tmp_path_factory, resample_duckdb_dir):
     """
     Run aggregate_project_data_duckdb on the DuckDB resample output.
     Returns the output directory.
     """
-    duckdb_dir, _ = resample_duckdb_dirs
+    duckdb_dir = resample_duckdb_dir
     out_dir = tmp_path_factory.mktemp("agg_project_duckdb")
 
     # Copy resample outputs to out_dir so aggregate reads them.
@@ -136,39 +109,22 @@ def aggregate_project_duckdb_dir(tmp_path_factory, resample_duckdb_dirs):
 # ---------------------------------------------------------------------------
 
 class TestResampleDuckdb:
-    def test_resample_5min_passthrough_row_count(self, resample_duckdb_dirs, ibis_pipeline):
-        duckdb_dir, _ = resample_duckdb_dirs
-        df_src = _load(str(ibis_pipeline / "household_calculated.parquet"))
-        df_5min = _load(str(duckdb_dir / "household_5min.parquet"))
+    def test_resample_5min_passthrough_row_count(
+        self, resample_duckdb_dir, sharded_calculated
+    ):
+        df_src = _load(str(sharded_calculated))
+        df_5min = _load(str(resample_duckdb_dir / "household_5min.parquet"))
         # Row count must match the source (column selection only, no aggregation)
         assert len(df_5min) == len(df_src)
 
-    def test_resample_5min_config_columns_present(self, resample_duckdb_dirs):
-        duckdb_dir, _ = resample_duckdb_dirs
-        df = _load(str(duckdb_dir / "household_5min.parquet"))
+    def test_resample_5min_config_columns_present(self, resample_duckdb_dir):
+        df = _load(str(resample_duckdb_dir / "household_5min.parquet"))
         for col in _TEST_CONFIG:
             assert col in df.columns, f"Column '{col}' missing from 5min output"
 
-    def test_resample_15min_equivalence(self, resample_duckdb_dirs):
-        duckdb_dir, pandas_dir = resample_duckdb_dirs
-        df_duckdb = _load(str(duckdb_dir / "household_15min.parquet"), SORT_COLS_HH)
-        df_pandas = _load(str(pandas_dir / "household_15min.parquet"), SORT_COLS_HH)
-        # Only compare columns in _TEST_CONFIG that exist in both outputs
-        cols = [c for c in _TEST_CONFIG if c in df_duckdb.columns and c in df_pandas.columns]
-        assert cols, "No config columns found in both outputs"
-        _assert_frames_equal(df_duckdb[cols], df_pandas[cols], "duckdb", "pandas")
-
-    def test_resample_60min_equivalence(self, resample_duckdb_dirs):
-        duckdb_dir, pandas_dir = resample_duckdb_dirs
-        df_duckdb = _load(str(duckdb_dir / "household_60min.parquet"), SORT_COLS_HH)
-        df_pandas = _load(str(pandas_dir / "household_60min.parquet"), SORT_COLS_HH)
-        cols = [c for c in _TEST_CONFIG if c in df_duckdb.columns and c in df_pandas.columns]
-        assert cols
-        _assert_frames_equal(df_duckdb[cols], df_pandas[cols], "duckdb", "pandas")
-
-    def test_cumulative_columns_rebuilt(self, resample_duckdb_dirs):
+    def test_cumulative_columns_rebuilt(self, resample_duckdb_dir):
         """Diff columns must produce cumulative counterparts in non-5min outputs."""
-        duckdb_dir, _ = resample_duckdb_dirs
+        duckdb_dir = resample_duckdb_dir
         diff_col = "ElektriciteitNetgebruikHoogDiff"
         base_col = "ElektriciteitNetgebruikHoog"
         for interval in ("15min", "60min"):
@@ -199,10 +155,12 @@ class TestAggregateProjectDuckdb:
                 f"project_{interval}.parquet not created"
             )
 
-    def test_project_aggregation_5min_equivalence(self, aggregate_project_duckdb_dir, resample_duckdb_dirs):
+    def test_project_average_is_the_mean_over_households(
+        self, aggregate_project_duckdb_dir, resample_duckdb_dir
+    ):
         """Project-level average must equal the mean over households for each timestamp."""
         out_dir = aggregate_project_duckdb_dir
-        duckdb_dir, _ = resample_duckdb_dirs
+        duckdb_dir = resample_duckdb_dir
         hh = _load(str(duckdb_dir / "household_5min.parquet"), SORT_COLS_HH)
         prj = _load(str(out_dir / "project_5min.parquet"), SORT_COLS_PRJ)
 

@@ -33,7 +33,14 @@ def _read_shards(shard_root: Path) -> pd.DataFrame:
     for p in sorted(glob_mod.glob(str(shard_root / "**" / "*.parquet"), recursive=True)):
         hid = int(Path(p).parent.parent.name.split("=")[1])
         g = pd.read_parquet(p, dtype_backend="numpy_nullable")
-        g.insert(0, "HuisIdBSV", pd.array([hid] * len(g), dtype="Int64"))
+        # The writer puts the partition keys in the path AND leaves them in the
+        # file, so take the column when it is there and supply it from the path
+        # when it is not. Either is a valid shard; assuming path-only makes the
+        # reader depend on which the writer did.
+        if "HuisIdBSV" not in g.columns:
+            g.insert(0, "HuisIdBSV", pd.array([hid] * len(g), dtype="Int64"))
+        else:
+            g["HuisIdBSV"] = g["HuisIdBSV"].astype("Int64")
         frames.append(g)
     return pd.concat(frames, ignore_index=True)
 

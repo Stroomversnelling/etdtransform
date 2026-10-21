@@ -101,46 +101,6 @@ class TestIncludedHouseholdIds:
             included_household_ids(mapped_folder_path=tmp_path)
 
 
-@pytest.fixture(scope="module")
-def sharded_fixture_mapped(tmp_path_factory, _include_updated):
-    """Sharded mapped copy of the CURRENT flat test fixture (10 HH), with the
-    fixture's index (`Meenemen`-populated -- depends on _include_updated,
-    which refreshes it). Built fresh so it cannot drift."""
-    src = Path(etdtransform.options.mapped_folder_path)
-    dst = tmp_path_factory.mktemp("sharded_mapped")
-    n = 0
-    for f in sorted(src.glob("household_*_table.parquet")):
-        hid = int(f.stem.split("_")[1])
-        d = dst / "sharded" / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hid}"
-        d.mkdir(parents=True)
-        shutil.copyfile(f, d / "part.parquet")
-        n += 1
-    assert n == 10, f"expected the 10-HH fixture, found {n}"
-    shutil.copyfile(src / "index.parquet", dst / "index.parquet")
-    return dst
-
-
-@pytest.fixture(scope="module")
-def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
-    """Run the FULL sharded stage-3 chain once: diffs -> impute (+ summaries)."""
-    agg = tmp_path_factory.mktemp("sharded_agg")
-    prepare_diff_averages_sharded(
-        mapped_folder_path=sharded_fixture_mapped,
-        aggregate_folder_path=agg,
-        cumulative_columns=_cum_cols,
-        # The sharded chain is compared against the legacy one on the same
-        # fixture, so both have to publish averages at all -- see
-        # conftest.FIXTURE_MIN_ELIGIBLE.
-        min_eligible=conftest.FIXTURE_MIN_ELIGIBLE,
-    )
-    impute_mapped_households_sharded(
-        mapped_folder_path=sharded_fixture_mapped,
-        aggregate_folder_path=agg,
-        cum_cols=_cum_cols,
-    )
-    return agg / "sharded"
-
-
 def _read_parquet(p):
     return pd.read_parquet(p, dtype_backend="numpy_nullable")
 
@@ -160,70 +120,6 @@ def _copy_artifact(src_folder, dst_folder, name):
     else:
         shutil.copyfile(src, dst)
     return dst
-
-
-@pytest.mark.integration
-@pytest.mark.pipeline
-class TestShardedChainEquivalence:
-    """Every artifact of the sharded chain equals its legacy counterpart on the
-    fixture (same data, same math, different I/O shell)."""
-
-    def test_avg_diffs_equal(self, sharded_stage3, ibis_pipeline):
-        sharded = read_diffs(sharded_stage3, with_cadence=True)
-        legacy = read_diffs(ibis_pipeline, with_cadence=True)
-        key = ["ProjectIdBSV", "ReadingDate"]
-        pd.testing.assert_frame_equal(
-            sharded.sort_values(key).reset_index(drop=True)[legacy.columns],
-            legacy.sort_values(key).reset_index(drop=True),
-        )
-
-    def test_imputed_values_equal(self, sharded_stage3, ibis_pipeline):
-        parts = sorted((sharded_stage3 / "household_imputed").glob(
-            "HuisIdBSV=*/HuisBatchIdBSV=*/part.parquet"))
-        assert len(parts) == 10
-        frames = []
-        for p in parts:
-            hid = int(p.parents[1].name.split("=")[1])
-            df = _read_parquet(p)
-            assert "HuisIdBSV" not in df.columns  # ids live in the path
-            df.insert(0, "HuisIdBSV", pd.array([hid] * len(df), dtype="Int64"))
-            frames.append(df)
-        sharded = pd.concat(frames, ignore_index=True)
-        legacy = _read_parquet(ibis_pipeline / "household_imputed.parquet")
-        common = [c for c in legacy.columns if c in sharded.columns]
-        key = ["HuisIdBSV", "ReadingDate"]
-        pd.testing.assert_frame_equal(
-            sharded[common].sort_values(key).reset_index(drop=True),
-            legacy[common].sort_values(key).reset_index(drop=True),
-            check_dtype=True,
-        )
-
-    def test_summaries_equal(self, sharded_stage3, ibis_pipeline):
-        # The in-run summary is the slim file (keys, value stats, factor
-        # record); the counts half and the project rollup are post-processing
-        # outputs, compared in etdworkflow's postprocess tests.
-        name, key = "impute_summary_household.parquet", ["HuisIdBSV", "column"]
-        sharded = _read_parquet(sharded_stage3 / name)
-        legacy = _read_parquet(ibis_pipeline / name)
-        cols = [c for c in legacy.columns if c != "methods"]  # set-valued lists
-        pd.testing.assert_frame_equal(
-            sharded[cols].sort_values(key).reset_index(drop=True),
-            legacy[cols].sort_values(key).reset_index(drop=True),
-            check_dtype=False,
-        )
-
-    def test_gap_accumulator_equal(self, sharded_stage3, ibis_pipeline):
-        # household_aggregated_diff left the run (post-processing output);
-        # the per-gap transient accumulator is what both paths must agree on.
-        name = "impute_volume_gap_accumulator.parquet"
-        sharded = _read_parquet(sharded_stage3 / name)
-        legacy = _read_parquet(ibis_pipeline / name)
-        key = ["column", "HuisIdBSV", "gap_start"]
-        pd.testing.assert_frame_equal(
-            sharded.sort_values(key).reset_index(drop=True)[legacy.columns],
-            legacy.sort_values(key).reset_index(drop=True),
-            check_dtype=False,
-        )
 
 
 @pytest.mark.integration
@@ -252,25 +148,25 @@ class TestBatchSafetyGuards:
             _copy_artifact(src_agg, agg / "sharded", name)
         return agg
 
-    def test_multi_batch_household_raises_in_impute(self, tmp_path, ibis_pipeline, _cum_cols):
+    def test_multi_batch_household_raises_in_impute(self, tmp_path, sharded_stage3, _cum_cols):
         # household 1 delivered in two batches (disjoint periods): imputing the
         # concatenated series would fill the BETWEEN-batch gap -> refuse.
         _write_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2025-01-01")
-        agg = self._agg_with_artifacts(tmp_path, ibis_pipeline)
+        agg = self._agg_with_artifacts(tmp_path, sharded_stage3)
         with pytest.raises(HouseBatchOverlapError):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,
                 cum_cols=_cum_cols, household_ids=[1],
             )
 
-    def test_duplicate_timestamps_raise_in_impute(self, tmp_path, ibis_pipeline, _cum_cols):
+    def test_duplicate_timestamps_raise_in_impute(self, tmp_path, sharded_stage3, _cum_cols):
         # overlapping batch periods: duplicate (HuisIdBSV, ReadingDate).
         _write_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2024-01-01")  # same period redelivered
-        agg = self._agg_with_artifacts(tmp_path, ibis_pipeline)
+        agg = self._agg_with_artifacts(tmp_path, sharded_stage3)
         with pytest.raises((HouseBatchOverlapError, ValueError)):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,

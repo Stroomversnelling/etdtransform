@@ -9,6 +9,7 @@ pass against that fixture; there are no "pre-existing" failures (see ADR-007).
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import etdmap
@@ -22,16 +23,10 @@ import yaml
 import etdtransform
 from etdmap.testing import generate_mapped_dataset, installed_fingerprint
 from etdtransform.aggregate import (
-    add_calculated_columns_to_hh_data,
     add_calculated_columns_to_hh_data_ibis,
-    aggregate_hh_data_5min,
-    aggregate_hh_data_5min_ibis,
-    aggregate_hh_data_duckdb,
-    impute_hh_data_5min,
-    impute_hh_data_5min_chunked,
-    read_hh_data,
+    impute_mapped_households_sharded,
 )
-from etdtransform.impute import prepare_diff_averages_for_impute_ibis
+from etdtransform.impute import prepare_diff_averages_sharded
 
 
 def pytest_configure(config):
@@ -150,21 +145,6 @@ def mapped_dataset(tmp_path_factory):
         etdtransform.options.mapped_folder_path = old_etdtransform
 
 
-# ---------------------------------------------------------------------------
-# Shared pipeline fixtures.
-#
-# These run the full aggregate -> diffs -> impute -> calc pipeline ONCE per
-# session into an isolated tmpdir, with three implementations: pandas, ibis,
-# and duckdb (aggregate via duckdb, rest via pandas). Tests across the whole
-# etdtransform suite share these outputs to compare implementations and
-# verify downstream stages (resample, project aggregation, etc.).
-#
-# Previously each test file (test_pipeline_equivalence.py, test_resample_duckdb.py)
-# defined its own copy of the ibis pipeline as a session fixture, causing the
-# same pipeline to run twice -- ~128s of duplicated work per suite run. By
-# lifting these to conftest, both files share the same fixture instance.
-# ---------------------------------------------------------------------------
-
 #: The fixture dataset is ten households across two projects, so a project
 #: window holds four or five eligible households -- below the production floor
 #: of ten by construction. Left at the production value, the averaging would
@@ -175,68 +155,6 @@ def mapped_dataset(tmp_path_factory):
 #: The floor itself is exercised at its production value in
 #: test_minimum_household_presence.py::TestTheHouseholdFloor.
 FIXTURE_MIN_ELIGIBLE = 1
-
-
-def _run_pandas_pipeline(out_dir: Path, cum_cols: list) -> None:
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_5min()
-        prepare_diff_averages_for_impute_ibis(
-            ibis.read_parquet(str(out_dir / "household_default.parquet")),
-            project_id_column="ProjectIdBSV",
-            cumulative_columns=cum_cols,
-            min_eligible=FIXTURE_MIN_ELIGIBLE,
-        )
-        # Read after the averaging, which writes avg_diffs.parquet that the fill
-        # loads. Unsorted on read, so the fill sorts it.
-        df = read_hh_data(interval="default")
-        df_imputed = impute_hh_data_5min(df, cum_cols=cum_cols, sorted=False)
-        # adaptive=True: matches the ibis path which uses the adaptive catalog-driven approach
-        add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-
-def _run_ibis_pipeline(out_dir: Path, cum_cols: list) -> None:
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_5min_ibis()
-        tbl = ibis.read_parquet(str(out_dir / "household_default.parquet"))
-        prepare_diff_averages_for_impute_ibis(
-            tbl, project_id_column="ProjectIdBSV", cumulative_columns=cum_cols,
-            min_eligible=FIXTURE_MIN_ELIGIBLE,
-        )
-        impute_hh_data_5min_chunked(
-            source_path=out_dir / "household_default.parquet",
-            cum_cols=cum_cols,
-        )
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=str(out_dir / "household_imputed.parquet"),
-            output_path=str(out_dir / "household_calculated.parquet"),
-        )
-    finally:
-        etdtransform.options.aggregate_folder_path = old
-
-
-def _run_duckdb_pipeline(out_dir: Path, cum_cols: list) -> None:
-    """DuckDB aggregation + the averaging + pandas impute + pandas adaptive calc columns."""
-    old = etdtransform.options.aggregate_folder_path
-    etdtransform.options.aggregate_folder_path = out_dir
-    try:
-        aggregate_hh_data_duckdb()
-        prepare_diff_averages_for_impute_ibis(
-            ibis.read_parquet(str(out_dir / "household_default.parquet")),
-            project_id_column="ProjectIdBSV",
-            cumulative_columns=cum_cols,
-            min_eligible=FIXTURE_MIN_ELIGIBLE,
-        )
-        df = read_hh_data(interval="default")
-        df_imputed = impute_hh_data_5min(df, cum_cols=cum_cols, sorted=False)
-        add_calculated_columns_to_hh_data(df_imputed, adaptive=True)
-    finally:
-        etdtransform.options.aggregate_folder_path = old
 
 
 @pytest.fixture(scope="session")
@@ -268,25 +186,64 @@ def _cum_cols():
     return etdmap.data_model.cumulative_columns[:10]
 
 
-@pytest.fixture(scope="session")
-def pandas_pipeline(tmp_path_factory, _cum_cols, _include_updated):
-    out = tmp_path_factory.mktemp("pandas_pipeline")
-    _run_pandas_pipeline(out, _cum_cols)
-    return out
-
-
-@pytest.fixture(scope="session")
-def ibis_pipeline(tmp_path_factory, _cum_cols, _include_updated):
-    out = tmp_path_factory.mktemp("ibis_pipeline")
-    _run_ibis_pipeline(out, _cum_cols)
-    return out
-
+# ---------------------------------------------------------------------------
+# The canonical chain, as the runner's default path runs it: no assembly step,
+# imputation reads the mapped shards directly. Session-scoped, so the files
+# that need a stage output as INPUT share one build.
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def duckdb_pipeline(tmp_path_factory, _cum_cols, _include_updated):
-    out = tmp_path_factory.mktemp("duckdb_pipeline")
-    _run_duckdb_pipeline(out, _cum_cols)
-    return out
+def sharded_fixture_mapped(tmp_path_factory, _include_updated):
+    """Sharded mapped copy of the flat test fixture (10 HH), with the fixture's
+    index (`Meenemen`-populated -- depends on _include_updated, which refreshes
+    it). Built fresh so it cannot drift."""
+    src = Path(etdtransform.options.mapped_folder_path)
+    dst = tmp_path_factory.mktemp("sharded_mapped")
+    n = 0
+    for f in sorted(src.glob("household_*_table.parquet")):
+        hid = int(f.stem.split("_")[1])
+        d = dst / "sharded" / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hid}"
+        d.mkdir(parents=True)
+        shutil.copyfile(f, d / "part.parquet")
+        n += 1
+    assert n == 10, f"expected the 10-HH fixture, found {n}"
+    shutil.copyfile(src / "index.parquet", dst / "index.parquet")
+    return dst
+
+
+@pytest.fixture(scope="session")
+def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
+    """The full sharded stage-3 chain once: diffs -> impute (+ summaries)."""
+    agg = tmp_path_factory.mktemp("sharded_agg")
+    prepare_diff_averages_sharded(
+        mapped_folder_path=sharded_fixture_mapped,
+        aggregate_folder_path=agg,
+        cumulative_columns=_cum_cols,
+        min_eligible=FIXTURE_MIN_ELIGIBLE,
+    )
+    impute_mapped_households_sharded(
+        mapped_folder_path=sharded_fixture_mapped,
+        aggregate_folder_path=agg,
+        cum_cols=_cum_cols,
+    )
+    return agg / "sharded"
+
+
+@pytest.fixture(scope="session")
+def sharded_calculated(sharded_stage3, tmp_path_factory):
+    """Stage 4 on the sharded imputed output, written flat.
+
+    Flat because the consumers hand the artifact to a function as a single
+    source path; `partition_output=False` is a supported shape, not a legacy
+    one -- it is how the project aggregates are written.
+    """
+    out = tmp_path_factory.mktemp("sharded_calculated")
+    path = out / "household_calculated.parquet"
+    add_calculated_columns_to_hh_data_ibis(
+        source_path=str(sharded_stage3 / "household_imputed"),
+        output_path=str(path),
+    )
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -391,23 +348,40 @@ def split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
 
 
 @pytest.fixture(scope="session")
-def aggregate_artifacts():
-    """The configured aggregate folder, with the stage inputs present.
+def aggregate_artifacts(tmp_path_factory, sharded_stage3, sharded_calculated):
+    """The stage artifacts as single-file monoliths.
 
-    Written by the pipeline-marked tests, which is why every consumer carries
-    that marker too. Requesting this fixture is how a test declares it reads
-    them; `ibis_pipeline` is not a substitute, since it builds a narrower
-    column set than these stage tests assert against.
+    The content is the canonical chain's: `household_imputed` read back out of
+    its shards and written as one file, and `household_calculated` as the
+    chain already wrote it. Same data, one file -- which is the whole point for
+    the cross-format gates, whose monolith and shard sides are both derived
+    from here via `split_monolith_to_shards`.
+
+    Built by this fixture rather than left behind by whichever pipeline-marked
+    test ran first: a fixture that depends on another test having executed is
+    order-dependent, and its failure mode is a missing file rather than a
+    named prerequisite.
     """
-    folder = Path(etdtransform.options.aggregate_folder_path)
-    required = ["household_imputed.parquet", "household_calculated.parquet"]
-    missing = [name for name in required if not (folder / name).is_file()]
-    if missing:
-        raise FileNotFoundError(
-            f"{folder} is missing {missing}. These are produced by the "
-            f"pipeline-marked tests: run `pytest --full-suite` once to create "
-            f"them."
-        )
+    from etdmap.storage import read_source_frame
+
+    def _as_monolith(source, dest):
+        """One file carrying what a monolith carries.
+
+        `HuisBatchIdBSV` is dropped: it is a partition key the hive path
+        supplies, not a column of the artifact -- `split_monolith_to_shards`,
+        the inverse of this, puts it back into the path and never into the
+        frame. `HuisIdBSV` is the opposite case and stays, as the real column
+        a monolith identifies households by.
+        """
+        df = read_source_frame(str(source))
+        df = df.drop(columns=["HuisBatchIdBSV"], errors="ignore")
+        df["HuisIdBSV"] = df["HuisIdBSV"].astype("Int64")
+        df.to_parquet(dest, engine="pyarrow", index=False)
+
+    folder = tmp_path_factory.mktemp("aggregate_artifacts")
+    _as_monolith(sharded_stage3 / "household_imputed",
+                 folder / "household_imputed.parquet")
+    _as_monolith(sharded_calculated, folder / "household_calculated.parquet")
     return folder
 
 

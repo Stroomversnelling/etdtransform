@@ -28,10 +28,6 @@ from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
-FILLNA_VARS = ["ElektriciteitsgebruikBoilervatDiff", "ElektriciteitsgebruikWTWDiff"]
-
-
-
 
 def _read_shards(shard_root: Path) -> pd.DataFrame:
     frames = []
@@ -52,12 +48,11 @@ class TestCalcCrossFormat:
         out_file = tmp_path / "household_calculated.parquet"
         add_calculated_columns_to_hh_data_ibis(
             source_path=str(source), output_path=str(out_file),
-            fillna_vars=FILLNA_VARS,
         )
         out_dir = tmp_path / "household_calculated_shards"
         add_calculated_columns_to_hh_data_ibis(
             source_path=str(shard_src), output_path=str(out_dir),
-            fillna_vars=FILLNA_VARS, partition_output=True,
+            partition_output=True,
         )
 
         a = pd.read_parquet(out_file, dtype_backend="numpy_nullable")
@@ -94,7 +89,7 @@ class TestCalcCrossFormat:
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(shard_src),
                 output_path=str(tmp_path / "out"),
-                fillna_vars=FILLNA_VARS, partition_output=True,
+                partition_output=True,
             )
 
     def test_partition_output_requires_batch_column(self, tmp_path,
@@ -106,5 +101,87 @@ class TestCalcCrossFormat:
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(source),
                 output_path=str(tmp_path / "out"),
-                fillna_vars=FILLNA_VARS, partition_output=True,
+                partition_output=True,
             )
+
+
+#: Per household: (teruglevering, netgebruik). Distinct per household and
+#: chosen so that a derivation reaching across households cannot land on the
+#: right answer -- the exchanges are 1.0, -4.0 and 7.0, and no two households
+#: share an input value.
+_PER_HOUSEHOLD = {1: (2.0, 3.0), 2: (5.0, 1.0), 3: (0.0, 7.0)}
+
+_TERUG = "ElektriciteitTerugleveringDiff"
+_NETG = "ElektriciteitNetgebruikDiff"
+_ROWS = 4
+
+
+def _household_frame(teruglevering, netgebruik):
+    """One household's rows, with both halves of each cumulative pair.
+
+    The stage asserts the pairing, and `HuisIdBSV` is left out because the hive
+    path supplies it -- the same split `split_monolith_to_shards` makes.
+    """
+    from etdmap.data_model import cumulative_column
+
+    df = pd.DataFrame({
+        "ProjectIdBSV": pd.array([1] * _ROWS, dtype="Int64"),
+        "ReadingDate": pd.date_range("2024-01-01", periods=_ROWS, freq="5min",
+                                     tz="UTC"),
+        _TERUG: pd.array([teruglevering] * _ROWS, dtype="Float64"),
+        _NETG: pd.array([netgebruik] * _ROWS, dtype="Float64"),
+    })
+    for root in (_TERUG, _NETG):
+        df[cumulative_column(root)] = pd.array(
+            [float(i) for i in range(_ROWS)], dtype="Float64"
+        )
+    return df
+
+
+class TestDerivationIsPerRow:
+    """A derived column is computed from its own row's inputs, so how rows are
+    grouped into files cannot change it.
+
+    This is the property the monolith-versus-shards comparison was protecting
+    indirectly. Asserted directly it is stronger: two layouts can agree while
+    both are wrong, which is how a 4.5 stood in for a 6.0 elsewhere in this
+    suite.
+    """
+
+    TARGETS = ["TerugleveringTotaalNetto", "ElektriciteitsgebruikTotaalNetto",
+               "Netuitwisseling"]
+
+    @pytest.fixture
+    def derived(self, tmp_path):
+        src = tmp_path / "imputed_shards"
+        for hid, (terug, netg) in _PER_HOUSEHOLD.items():
+            d = src / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hid}"
+            d.mkdir(parents=True)
+            _household_frame(terug, netg).to_parquet(d / "part.parquet",
+                                                     index=False)
+        out = tmp_path / "calculated_shards"
+        add_calculated_columns_to_hh_data_ibis(
+            source_path=str(src), output_path=str(out),
+            target_columns=self.TARGETS, partition_output=True,
+        )
+        from etdmap.storage import read_source_frame
+
+        return read_source_frame(str(out))
+
+    def test_every_household_keeps_its_own_values(self, derived):
+        for hid, (terug, netg) in _PER_HOUSEHOLD.items():
+            rows = derived[derived["HuisIdBSV"] == hid]
+            assert len(rows) == _ROWS, f"household {hid}: {len(rows)} rows"
+            assert rows["TerugleveringTotaalNetto"].astype(float).tolist() == [terug] * _ROWS
+            assert rows["ElektriciteitsgebruikTotaalNetto"].astype(float).tolist() == [netg] * _ROWS
+
+    def test_the_exchange_is_each_households_own_difference(self, derived):
+        # netgebruik - teruglevering, per household: 1.0, -4.0, 7.0. A
+        # derivation mixing households could not produce all three.
+        for hid, (terug, netg) in _PER_HOUSEHOLD.items():
+            rows = derived[derived["HuisIdBSV"] == hid]
+            assert rows["Netuitwisseling"].astype(float).tolist() == [netg - terug] * _ROWS
+
+    def test_no_household_is_dropped_or_duplicated(self, derived):
+        assert sorted(derived["HuisIdBSV"].unique().tolist()) == sorted(_PER_HOUSEHOLD)
+        assert len(derived) == _ROWS * len(_PER_HOUSEHOLD)

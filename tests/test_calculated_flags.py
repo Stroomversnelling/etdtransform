@@ -459,7 +459,13 @@ class TestFillFromFormula:
         )
         assert filled == {COLUMN: 1}
         assert float(df[COLUMN].iloc[0]) == pytest.approx(0.3)
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)
+        flags = _flags(df)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value)
+        # Not the whole-column bit: this cell was filled from a formula chosen
+        # for its row, and the plan recording that choice is
+        # calculation_fill_plan, not derivation_plan.
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED_VALUE.value)
         assert int(plan["cells_filled"].iloc[0]) == 1
 
     def test_a_row_missing_an_input_is_left_alone(self):
@@ -488,8 +494,8 @@ class TestFillFromFormula:
         assert float(df[COLUMN].iloc[0]) == pytest.approx(0.9)
         assert float(df[COLUMN].iloc[1]) == pytest.approx(0.3)
         flags = _flags(df)
-        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
-        assert bool(flags.iloc[1] & ImputeType.CALCULATED_COLUMN.value)
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value)
+        assert bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value)
 
     def test_a_value_outside_the_rows_rule_bound_is_rejected(self):
         from etdtransform.calculated_flags import fill_from_formula
@@ -627,9 +633,13 @@ class TestFillCalculatedGaps:
         assert report["from_rule_bound"] == {COLUMN: 1}
         assert report["cells"] == 2
         flags = _flags(df)
-        assert bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
+        assert bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value)
         assert not bool(flags.iloc[0] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
         assert bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_RULE_BOUND.value)
+        assert not bool(flags.iloc[1] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value)
+        # Neither gap-fill route claims the whole-column derivation, which is
+        # a third mechanism with its own plan sidecar.
+        assert not bool(flags.iloc[0] & ImputeType.CALCULATED_COLUMN.value)
         assert not bool(flags.iloc[1] & ImputeType.CALCULATED_COLUMN.value)
 
     def test_every_filled_cell_answers_to_the_composite(self):
@@ -746,4 +756,6 @@ class TestFillCalculatedGaps:
             TestDeriveFromRuleBound._package(0.4, 0.4),
         )
         assert report["from_rule_bound"] == {}
-        assert bool(_flags(df).iloc[0] & ImputeType.CALCULATED_COLUMN.value)
+        assert bool(
+            _flags(df).iloc[0] & ImputeType.CALCULATED_FROM_ROW_FORMULA.value
+        )

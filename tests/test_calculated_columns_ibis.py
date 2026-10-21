@@ -354,3 +354,65 @@ def test_undefined_where_is_none_for_a_non_ratio():
 
 def test_a_constant_denominator_is_never_undefined():
     assert undefined_where(sp.sympify("t/2"), _ratio_table()) is None
+
+
+class TestNothingSubstitutesZeroForAnAbsentColumn:
+    """The stage does not fill a column with zero before planning.
+
+    A removed shim took a named list of columns and zero-filled them ahead of
+    the availability scan. Two consequences, both of which these tests would
+    catch if it came back. The zero-filled column then scored fully available,
+    so it could never be chosen for derivation -- the scan reads
+    ``notnull().mean()`` and a filled column reads 1.0. And the list was
+    fleet-wide while the fact it encoded is per household, so a household that
+    merely had a data gap in that column got a fabricated zero.
+
+    Zero for a genuinely absent device is substituted inside the expression
+    per household by ``specialize_catalog_for_absent``, from that household's
+    own declaration. An input that is simply unknown stays unknown.
+    """
+
+    @staticmethod
+    def _run(tmp_path, catalog, targets):
+        df = _make_multi_schema_df()
+        src = str(tmp_path / "imputed.parquet")
+        out = str(tmp_path / "calculated.parquet")
+        df.to_parquet(src, engine="pyarrow")
+        add_calculated_columns_to_hh_data_ibis(
+            source_path=src, output_path=out,
+            catalog_df=catalog, target_columns=targets,
+        )
+        return pd.read_parquet(out, dtype_backend="numpy_nullable")
+
+    def test_an_all_null_input_leaves_the_target_empty(self, tmp_path):
+        # One rule only, so no fallback can mask the behaviour: household 2's
+        # B is all-NA, and A + B is the only way to Target. If anything
+        # substituted zero for B, household 2's Target would read its A (3.0)
+        # instead of staying empty -- a measured quantity of nothing, invented.
+        result = self._run(
+            tmp_path, _make_catalog(("Target", "A + B", ["A", "B"])), ["Target"]
+        )
+        household_2 = result[result["HuisIdBSV"] == 2]
+        assert household_2["Target"].isna().all()
+        assert not (household_2["Target"] == 3.0).any()
+
+    def test_the_households_that_can_be_derived_still_are(self, tmp_path):
+        # The companion direction: refusing to invent a zero must not cost the
+        # households whose inputs are present. 1 + 2 and 5 + 6.
+        result = self._run(
+            tmp_path, _make_catalog(("Target", "A + B", ["A", "B"])), ["Target"]
+        )
+        for household_id, expected in ((1, 3.0), (3, 11.0)):
+            values = result[result["HuisIdBSV"] == household_id]["Target"]
+            assert values.notna().all()
+            assert float(values.iloc[0]) == pytest.approx(expected)
+
+    def test_the_absent_input_does_not_read_as_available(self, tmp_path):
+        # Why the shim could never be chosen for derivation: with a fallback
+        # present, household 2 must take A + C. A zero-filled B would have
+        # scored 1.0 on the availability scan and won the preferred rule,
+        # yielding 3.0 from a column that holds nothing.
+        result = self._run(tmp_path, _multi_schema_catalog(), ["Target"])
+        household_2 = result[result["HuisIdBSV"] == 2]
+        assert household_2["Target"].notna().all()
+        assert float(household_2["Target"].iloc[0]) == pytest.approx(7.0)
