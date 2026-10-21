@@ -22,6 +22,7 @@ import pytest
 from conftest import cadence_table, project_averages
 
 from etdmap.flags import MappingFlag, flag_column
+from etdtransform.impute import read_diffs, write_diffs
 
 pytestmark = pytest.mark.unit
 
@@ -121,8 +122,6 @@ class TestTheFillIsNotGivenThem:
     the written shards."""
 
     def test_the_reader_hides_them_by_default(self, tmp_path):
-        from etdtransform.impute import read_diffs, write_diffs
-
         avg = _averaged(_frame({1: [READING] * N}))["avg_diff"].copy()
         avg["cadence_minutes"] = pd.array([GRID] * len(avg), dtype="Int64")
         write_diffs(avg, aggregate_folder_path=tmp_path)
@@ -136,8 +135,6 @@ class TestTheFillIsNotGivenThem:
         }
 
     def test_they_can_be_asked_for(self, tmp_path):
-        from etdtransform.impute import read_diffs, write_diffs
-
         avg = _averaged(_frame({1: [READING] * N}))["avg_diff"].copy()
         avg["cadence_minutes"] = pd.array([GRID] * len(avg), dtype="Int64")
         write_diffs(avg, aggregate_folder_path=tmp_path)

@@ -21,10 +21,12 @@ the floor itself is exercised at its production value in
 ``TestTheHouseholdFloor``.
 """
 
+import ibis
 import pandas as pd
 import pytest
 
 from conftest import project_averages
+from etdtransform.impute import calculate_average_diff_ibis
 
 from etdtransform.presence import (
     MIN_ELIGIBLE_HOUSEHOLDS,
@@ -413,10 +415,6 @@ class TestTheHouseholdFloor:
     def test_the_averaging_applies_the_floor_too(self):
         """The ibis path is what production runs. A floor in the pandas twin
         and not in it would make them two algorithms."""
-        import ibis
-
-        from etdtransform.impute import calculate_average_diff_ibis
-
         cum = "ElektriciteitNetgebruik"
         parts = []
         for household in range(1, 10):

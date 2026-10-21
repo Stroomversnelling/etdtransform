@@ -4,8 +4,10 @@ import shutil
 from math import floor, isclose, log10
 
 import duckdb
+import ibis
 import numpy as np
 import pandas as pd
+from etdmap.storage import resolve_source_path
 from etdmap.data_model import (
     complement_column,
     cumulative_column,
@@ -493,8 +495,6 @@ def _average_at_one_cadence(
     (household, project) membership it already read, so this costs no round trip
     of its own.
     """
-    import ibis
-
     tbl = tbl.filter(tbl["HuisIdBSV"].isin(included_ids)) if included_ids else tbl
 
     # Properties of the frame rather than of any column, so they are computed
@@ -1558,15 +1558,11 @@ def read_diffs(
         The average per (project, ReadingDate), one ``<column>_avg`` per
         averaged column.
     """
-    from etdmap.storage import resolve_source_path
-
     if aggregate_folder_path is None:
         aggregate_folder_path = etdtransform.options.aggregate_folder_path
     path = resolve_source_path(aggregate_folder_path, AVG_DIFFS_ARTIFACT)
 
     if os.path.isdir(path):
-        import ibis
-
         pattern = os.path.join(path, "**", "*.parquet").replace("\\", "/")
         frame = ibis.read_parquet(
             pattern, hive_partitioning=True, union_by_name=True

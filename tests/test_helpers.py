@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 from conftest import config, file_names
+from etdmap.storage import resolve_source_path
 
 import etdtransform
 
@@ -93,8 +94,6 @@ def store_sample_and_metadata_for_all_transformed_files(path_to_folder):
     had none enables a comparison that was not being made, which is a decision
     to take deliberately rather than a side effect of regenerating.
     """
-    from etdmap.storage import resolve_source_path
-
     data_folder = "tests/data"
     for file in file_names:
         name = file.split('.parquet')[0]

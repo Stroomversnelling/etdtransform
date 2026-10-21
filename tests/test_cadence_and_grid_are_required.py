@@ -7,11 +7,13 @@ leaves the dataset silently. The absence of either is therefore an error that
 names the fix, not a default.
 """
 
+import ibis
 import pandas as pd
 import pytest
 
 from etdmap.mapping_helpers import CADENCE_FILENAME
 from etdtransform.bounds import dataset_grid_minutes, load_column_cadence
+from etdtransform.impute import calculate_average_diff_ibis
 
 pytestmark = pytest.mark.unit
 
@@ -116,10 +118,6 @@ class TestTheGridIsNotDefaultedDownstream:
         not the same as defaulting to a number: a project that resolves none
         raises, naming itself, rather than being averaged at some other
         project's spacing."""
-        import ibis
-
-        from etdtransform.impute import calculate_average_diff_ibis
-
         frame = pd.DataFrame({
             "ProjectIdBSV": pd.array([4, 4], dtype="Int64"),
             "HuisIdBSV": pd.array([1, 1], dtype="Int64"),

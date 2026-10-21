@@ -20,6 +20,7 @@ from etdtransform.aggregate import (
     impute_hh_data_5min_chunked,
 )
 from conftest import cadence_table
+from etdtransform.impute import write_diffs
 
 pytestmark = pytest.mark.integration
 
@@ -588,8 +589,6 @@ def _write_impute_artifacts(
     business, so a fixture that spells it out stops matching production the
     next time the layout moves.
     """
-    from etdtransform.impute import write_diffs
-
     avg = pd.DataFrame({
         "ProjectIdBSV":   pd.array([project_id] * len(dates), dtype="Int64"),
         "ReadingDate":    dates,

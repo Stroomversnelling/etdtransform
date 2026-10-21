@@ -47,6 +47,8 @@ the test.
 import pandas as pd
 import pytest
 
+from etdtransform.impute import read_diffs
+
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 # Pipeline fixtures (pandas_pipeline, ibis_pipeline, duckdb_pipeline) and their
@@ -151,8 +153,6 @@ class TestDiffsEquivalence:
     def test_the_averages_do_not_depend_on_the_shell(
         self, pandas_pipeline, ibis_pipeline
     ):
-        from etdtransform.impute import read_diffs
-
         key = ["ProjectIdBSV", "ReadingDate"]
         frames = []
         for folder in (pandas_pipeline, ibis_pipeline):

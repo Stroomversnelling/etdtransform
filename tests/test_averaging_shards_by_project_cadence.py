@@ -18,13 +18,16 @@ by ``detect_column_cadence`` so the delivery form resolves the way it resolves
 in production.
 """
 
+import ibis
 import pandas as pd
 import pytest
 from conftest import spread_average
 
 from etdmap.mapping_helpers import detect_column_cadence
 from etdtransform.bounds import grid_minutes_by_project
+from etdtransform.flags import ImputeType
 from etdtransform.impute import calculate_average_diff_ibis
+from etdtransform.vectorized_impute import impute_and_normalize
 
 pytestmark = pytest.mark.unit
 
@@ -88,8 +91,6 @@ def _estate():
 
 
 def _averages(frame, cadence, **kwargs):
-    import ibis
-
     result = calculate_average_diff_ibis(
         ibis.memtable(frame), "ProjectIdBSV", [DIFF], cadence=cadence, **kwargs
     )
@@ -359,8 +360,6 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         return pd.concat(tables, ignore_index=True)
 
     def _averaged_then_filled(self, **kwargs):
-        from etdtransform.vectorized_impute import impute_and_normalize
-
         frame = self._frame()
         cadence = self._cadence(frame)
         avg = _averages(frame, cadence, **kwargs)["avg_diff"]
@@ -423,8 +422,6 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         came out right from a published number that was wrong. What it cannot
         compensate for is a slot with no average at all.
         """
-        from etdtransform.flags import ImputeType
-
         filled = self._averaged_then_filled(grid_minutes=5)
         window = filled[DIFF].iloc[self.GAP]
         for value in window:

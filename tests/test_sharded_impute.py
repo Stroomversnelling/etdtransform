@@ -29,8 +29,9 @@ import pytest
 
 import etdtransform
 from etdmap.index_helpers import HouseBatchOverlapError
+from etdmap.storage import resolve_source_path
 from etdtransform.aggregate import impute_mapped_households_sharded
-from etdtransform.impute import prepare_diff_averages_sharded
+from etdtransform.impute import prepare_diff_averages_sharded, read_diffs
 from etdtransform.load_data import included_household_ids
 
 
@@ -152,10 +153,6 @@ def _copy_artifact(src_folder, dst_folder, name):
     assumed here -- a hardcoded ``<name>.parquet`` silently stops finding the
     artifact the day it becomes partitioned.
     """
-    from pathlib import Path
-
-    from etdmap.storage import resolve_source_path
-
     src = Path(resolve_source_path(src_folder, name))
     dst = Path(dst_folder) / src.name
     if src.is_dir():
@@ -172,8 +169,6 @@ class TestShardedChainEquivalence:
     fixture (same data, same math, different I/O shell)."""
 
     def test_avg_diffs_equal(self, sharded_stage3, ibis_pipeline):
-        from etdtransform.impute import read_diffs
-
         sharded = read_diffs(sharded_stage3, with_cadence=True)
         legacy = read_diffs(ibis_pipeline, with_cadence=True)
         key = ["ProjectIdBSV", "ReadingDate"]

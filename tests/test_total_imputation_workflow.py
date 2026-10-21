@@ -30,7 +30,12 @@ from etdtransform.aggregate import (
     resample_hh_data,
 )
 from etdmap.data_model import test_aggregation_columns
-from etdtransform.impute import prepare_diff_averages_for_impute_ibis
+from etdmap.storage import resolve_source_path
+from etdtransform.impute import (
+    AVG_DIFFS_ARTIFACT,
+    prepare_diff_averages_for_impute_ibis,
+    read_diffs,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -99,9 +104,6 @@ def test_total_workflow_imputations(index_df, cum_cols_list):
     # should create new files -- avg_diffs is a directory of (project, cadence)
     # partitions, so what is checked is that the artifact resolves and reads,
     # not that a particular layout is on disk.
-    from etdmap.storage import resolve_source_path
-    from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs
-
     path_avg_diffs = resolve_source_path(
         etdtransform.options.aggregate_folder_path, AVG_DIFFS_ARTIFACT
     )

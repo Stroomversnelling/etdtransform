@@ -26,7 +26,7 @@ from etdtransform.calculated_stage import (  # noqa: F401
     add_calculated_columns_to_hh_data,
     add_calculated_columns_to_hh_data_ibis,
 )
-from etdtransform.impute import process_and_impute
+from etdtransform.impute import process_and_impute, read_diffs
 
 """
 Aggregating the data for a given time interval
@@ -1033,8 +1033,6 @@ def impute_mapped_households_sharded(
     # prepare_diff_averages_sharded) -- the sharded chain is self-contained under
     # <aggregate>/sharded/.
     sharded_agg = os.path.join(str(aggregate_folder_path), "sharded")
-    from etdtransform.impute import read_diffs
-
     diffs = read_diffs(sharded_agg)
     _constraints = _constraints_for_run(use_constraints)
     _coverage_duty = _read_coverage_duty(sharded_agg)
