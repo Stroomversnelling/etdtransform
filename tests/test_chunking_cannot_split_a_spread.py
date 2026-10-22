@@ -1,10 +1,10 @@
 """A chunk is a memory window, and the spread must not be able to see it.
 
-Both chunkers batch by **household**: ``_chunk_ids_by_project`` returns
-household ids and ``impute_hh_data_5min_chunked`` reads batches of
-``chunk_size`` households. So a household's whole series is always in one
-chunk, and a spread window -- which lives inside one household's series --
-cannot straddle a chunk boundary.
+Chunking batches by **household**: ``_chunk_ids_by_project`` returns household
+ids and ``impute_mapped_households_sharded`` reads batches of ``chunk_size``
+households. So a household's whole series is always in one chunk, and a spread
+window -- which lives inside one household's series -- cannot straddle a chunk
+boundary.
 
 Two halves, both asserted rather than argued: the chunker never splits a
 household, and a household's spread is identical alone and among peers.

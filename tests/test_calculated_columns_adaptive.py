@@ -15,10 +15,7 @@ import pandas as pd
 import pytest
 
 from etdtransform.catalog.query import DatasetAdapter
-from etdtransform.calculated_columns import (
-    add_calculated_columns_adaptive,
-    add_calculated_columns_imputed_data,
-)
+from etdtransform.calculated_columns import add_calculated_columns_adaptive
 
 pytestmark = pytest.mark.unit
 
@@ -284,12 +281,11 @@ class TestNoSilentlySkippedColumns:
 
 
 # ---------------------------------------------------------------------------
-# Standard path -- adaptive matches old (non-adaptive) approach
+# The standard path: every raw Diff column delivered, every composite derived
 # ---------------------------------------------------------------------------
 
-# Raw Diff columns that feed the old add_calculated_columns_imputed_data approach.
-# ZonopwekBruto is used directly here (post-shim name) to avoid the rename shim
-# from interfering with the column-naming comparison.
+# ZonopwekBruto is spelled in its post-shim form, so the rename shim does not
+# take part in what these tests assert.
 _RAW_DIFF_COLS = [
     "ElektriciteitTerugleveringLaagDiff",
     "ElektriciteitTerugleveringHoogDiff",
@@ -353,35 +349,12 @@ def real_catalog():
         ) from exc
 
 
-class TestStandardPathMatchesOldApproach:
+class TestTheStandardPathDerivesEveryComposite:
     def test_derived_columns_present(self, real_catalog):
         df = _standard_raw_df()
         result = add_calculated_columns_adaptive(df, real_catalog)
         for col in _DERIVED_COLS:
             assert col in result.columns, f"Expected derived column missing: {col}"
-
-    def test_derived_values_match_old_approach(self, real_catalog):
-        """Adaptive on full raw data must produce the same numeric values as the old approach."""
-        df_adaptive = _standard_raw_df()
-        result_adaptive = add_calculated_columns_adaptive(df_adaptive, real_catalog)
-
-        # Old approach requires Zon-opwekTotaalDiff (it renames internally to ZonopwekBruto).
-        # Build an equivalent df using the old column name.
-        df_old = _standard_raw_df().rename(columns={"ZonopwekBruto": "Zon-opwekTotaalDiff"})
-        # Drop HuisIdBSV -- old approach doesn't need it
-        df_old = df_old.drop(columns=["HuisIdBSV"])
-        result_old = add_calculated_columns_imputed_data(df_old, fillna=True)
-
-        for col in _DERIVED_COLS:
-            assert col in result_adaptive.columns, f"Adaptive missing: {col}"
-            assert col in result_old.columns, f"Old approach missing: {col}"
-            pd.testing.assert_series_equal(
-                result_adaptive[col].reset_index(drop=True).astype(float),
-                result_old[col].reset_index(drop=True).astype(float),
-                check_names=False,
-                rtol=1e-9,
-                obj=f"Column {col}",
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -553,32 +526,29 @@ class TestOcclusionBackCalculation:
 
     def test_full_loop_adaptive_recovers_occluded_component(self, real_catalog):
         """
-        Full-loop test:
+        A round trip, derive then invert:
         1. Build df with all raw diff cols at value 1.0.
-        2. Run old approach -> get all derived cols (incl.
-           ElektriciteitsgebruikTotaalWarmtepomp = 3.0, the sum of its three
-           components at 1.0 each).
+        2. Derive the composites, so ElektriciteitsgebruikTotaalWarmtepomp is
+           present at 3.0 -- the sum of its three components at 1.0 each.
         3. Occlude ElektriciteitsgebruikBoilervatDiff (set to all pd.NA).
-        4. Run adaptive -- it now has TotaalWarmtepomp=3.0, WarmtepompDiff=1.0
+        4. Derive again -- now with TotaalWarmtepomp=3.0, WarmtepompDiff=1.0
            and BoosterDiff=1.0 available.
         5. Verify derived BoilervatDiff == 1.0 (the original value:
            3.0 - 1.0 - 1.0 = 1.0).
+
+        Steps 2 and 4 run the same function but different catalog rules -- the
+        forward sum, then the inversion that solves for a missing addend -- so
+        the recovered value is evidence rather than a tautology.
 
         Vehicle changed from a tariff split on 2026-10-01 -- see the class
         docstring; the recovered value is still the original 1.0, so the
         assertion is unchanged.
         """
         n = 50
-        # Step 1+2: build full df with old approach
-        df_old = _standard_raw_df(n=n).rename(
-            columns={"ZonopwekBruto": "Zon-opwekTotaalDiff"}
-        ).drop(columns=["HuisIdBSV"])
-        df_with_derived = add_calculated_columns_imputed_data(df_old.copy(), fillna=True)
-        if "Zon-opwekTotaalDiff" in df_with_derived.columns:
-            df_with_derived = df_with_derived.rename(
-                columns={"Zon-opwekTotaalDiff": "ZonopwekBruto"}
-            )
-        df_with_derived.insert(0, "HuisIdBSV", pd.array([1] * n, dtype="Int64"))
+        # Step 1+2
+        df_with_derived = add_calculated_columns_adaptive(
+            _standard_raw_df(n=n), real_catalog
+        )
 
         # Step 3: occlude the raw component
         df_occluded = df_with_derived.copy()

@@ -1,145 +1,85 @@
-# Pipeline function variants
+# One implementation per pipeline step
 
-Each pipeline step has two or three implementations. The pandas path is the
-original reference. Ibis/DuckDB paths exist to reduce RAM footprint. Until the
-ibis paths are fully validated and the old code deleted, both must be kept in
-sync and cross-checked by `tests/test_pipeline_equivalence.py`.
+Each step of this pipeline has **one** implementation. It did not always: most
+steps were built two or three times over -- pandas, ibis, DuckDB -- because each
+was a *candidate*, written to be profiled against the others and chosen on
+measured performance and scaling. Proving the candidates produced identical
+output was the precondition for that comparison, which is what the equivalence
+tests between them were for.
 
-## Step 1 -- Household aggregation
+Those bake-offs are finished. This file records which implementation won each
+step, so a reader does not have to infer it, and so a future change knows where
+the one place to make it is.
 
-Reads individual mapped household parquets, combines into one aggregate file.
+The losing candidates were not deleted blind: each is archived with the
+measurement or decision record that retired it, outside this repo in the
+internal workflow repository's `archive/pipeline_variants/`. Their briefs are in
+`docs/performance/RESULTS.md` there.
 
-| Variant | Function | Output |
-|---------|----------|--------|
-| pandas | `aggregate_hh_data_5min()` | `household_default.parquet` |
-| ibis (batched) | `aggregate_hh_data_5min_ibis()` | `household_default.parquet` |
-| DuckDB (union) | `aggregate_hh_data_duckdb()` | `household_default.parquet` |
+## The canonical chain
 
-Notes:
-- The ibis variant batches household files to keep expression trees small.
-- The DuckDB variant uses `read_parquet(union_by_name=True)` and a JOIN on a
-  filename-to-ID mapping table; no intermediate pandas accumulation.
-- All three accept `sample_ratio` for stratified sampling by `ProjectIdBSV`.
-- Cleanup candidate: keep DuckDB variant (fastest, no ibis expression tree
-  size limit), delete pandas and ibis variants once validated.
+Stage numbers follow the pipeline documentation. There is no stage 2 -- the step
+that assembled the mapped data into one wide artifact was removed, because the
+assembling now happens while the data is read.
 
-## Step 2 -- Diff averages (interval averages)
+| Stage | Step | Function |
+|---|---|---|
+| 3 | Diff averages | `impute.prepare_diff_averages_sharded` -> `impute.calculate_average_diff_ibis` |
+| 3 | Imputation | `aggregate.impute_mapped_households_sharded` -> `aggregate._impute_chunk_core` -> `vectorized_impute.impute_and_normalize` |
+| 4 | Calculated columns | `calculated_stage.add_calculated_columns_to_hh_data_ibis` |
+| 5 | Resampling | `aggregate.resample_hh_data_duckdb` with `aggregate._resample_sql_expr` |
+| 6 | Project aggregation | `aggregate.aggregate_project_data_duckdb` |
 
-Computes per-project average `{col}Diff` values used as imputation priors.
+The engine choices, in short: DuckDB wherever the work is a bulk scan or a
+group-by over the whole population; ibis where expressions have to be built per
+household from a catalog; pandas only inside the vectorised imputation core,
+where the work is per household and already bounded.
 
-| Variant | Function | Input | Output |
-|---------|----------|-------|--------|
-| pandas | `prepare_diff_averages_for_impute(df, ...)` | pandas DataFrame | `avg_diffs.parquet`, `household_diff_max_bounds.parquet` |
-| ibis | `prepare_diff_averages_for_impute_ibis(tbl, ...)` | ibis Table | same files |
+Helpers the chain shares, which are not variants of each other:
 
-Notes:
-- Both call `calculate_average_diff` / `calculate_average_diff_ibis`
-  respectively for the heavy aggregation, then share
-  `concatenate_avg_diff_columns` and `concatenate_household_max_with_bounds`
-  for the combine step (these are pandas, but operate on small result frames).
-- Cleanup candidate: delete pandas variant once ibis path is validated.
+| Function | Location | Purpose |
+|---|---|---|
+| `impute_and_normalize` | `vectorized_impute.py` | the vectorised imputer: gap detection, fill routing, threshold checks |
+| `reconstruct_cumulative_columns` | `aggregate.py` | saves the original, rebuilds the cumulative column as a cumsum of its interval column, adds a Check column |
+| `sort_for_impute` | `impute.py` | sorts by `ProjectIdBSV`, `HuisIdBSV`, `ReadingDate` |
+| `read_diffs` | `impute.py` | loads the `avg_diffs` partitions with nullable dtypes |
+| `sympy_to_ibis` | `calculated_columns.py` | translates a catalog formula into an ibis column expression |
 
-### Sub-functions used in Step 2
+`reconstruct_cumulative_columns_ibis` exists beside the pandas one and is
+currently parked rather than canonical.
 
-| Function | Location | Called by | Purpose |
-|----------|----------|-----------|---------|
-| `calculate_average_diff` | `impute.py` | pandas variant | Per-project groupby mean of each `{col}Diff` |
-| `calculate_average_diff_ibis` | `impute.py` | ibis variant | Same via ibis aggregation (DuckDB) |
-| `concatenate_avg_diff_columns` | `impute.py` | both variants | Wide-pivots the per-column avg results into one frame |
-| `concatenate_household_max_with_bounds` | `impute.py` | both variants | Combines per-household max bounds across columns |
+## Storage layouts and format detection
 
-## Step 3 -- Imputation
+Reading and writing are not symmetric, and deliberately so.
 
-Fills missing values in cumulative columns using per-project diff averages.
-
-| Variant | Function | Input | Output |
-|---------|----------|-------|--------|
-| pandas (full load) | `impute_hh_data_5min(df, ...)` | pandas DataFrame in memory | `household_imputed.parquet` |
-| chunked pandas | `impute_hh_data_5min_chunked(source_path, ...)` | path to parquet | `household_imputed.parquet` |
-
-Notes:
-- Both variants use the same vectorised imputation engine
-  (`vectorized_impute.impute_and_normalize`).
-- The chunked variant reads `source_path` in batches of `chunk_size`
-  households and streams results via `pyarrow.ParquetWriter`; RAM is
-  bounded by chunk size rather than the full dataset.
-- Both require `avg_diffs.parquet` and `household_diff_max_bounds.parquet`
-  to already exist in `aggregate_folder_path`.
-- Both variants call `reconstruct_cumulative_columns` (pandas) after
-  imputation to rebuild the cumulative column values from their imputed
-  Diff columns via per-household `cumsum`. The chunked variant does this
-  per chunk (safe because chunks contain whole households).
-- Cleanup candidate: delete full-load variant once chunked path is validated.
-
-### Sub-functions used in Step 3
-
-| Function | Location | Called by | Purpose |
-|----------|----------|-----------|---------|
-| `impute_and_normalize` | `vectorized_impute.py` | both imputation variants | Core vectorised imputer: gap detection, fill strategies, threshold checks |
-| `impute_and_normalize_optimized` | `vectorized_impute.py` | `process_and_impute(optimized=True)` | Optimized variant (experimental, not in main path) |
-| `reconstruct_cumulative_columns` | `aggregate.py` | full-load and chunked variants | Pandas: saves Original col, rebuilds col via cumsum of Diff, adds Check col |
-| `reconstruct_cumulative_columns_ibis` | `aggregate.py` | (defined, not in main path) | Ibis/DuckDB lazy variant; has known TODO issues (36-level subquery depth, hangs on degenerate data) |
-| `process_and_impute` | `impute.py` | `impute_hh_data_5min` | Orchestrates sort, diff load, merge, impute, stats save for full-load path |
-| `sort_for_impute` | `impute.py` | both variants | Sorts by `ProjectIdBSV`, `HuisIdBSV`, `ReadingDate` |
-| `read_diffs` | `impute.py` | both variants | Loads `avg_diffs.parquet` with `dtype_backend="numpy_nullable"` |
-
-## Step 4 -- Calculated columns
-
-Derives columns defined in `catalog.parquet` from imputed source columns.
-
-| Variant | Function | Input | Output |
-|---------|----------|-------|--------|
-| pandas (full load) | `add_calculated_columns_to_hh_data(df, adaptive=True)` | pandas DataFrame in memory | `household_calculated.parquet` |
-| ibis/DuckDB | `add_calculated_columns_to_hh_data_ibis(source_path, output_path)` | path to parquet | `household_calculated.parquet` |
-
-Notes:
-- The ibis variant runs a GROUP BY availability analysis in one DuckDB pass,
-  groups households by schema (`frozenset` of available columns), derives
-  each schema group with `ibis.mutate`, and combines via DuckDB
-  `read_parquet(union_by_name=True)`.
-- SymPy expressions are translated to ibis column expressions via
-  `sympy_to_ibis` (uses `sp.lambdify`; ibis columns overload Python
-  arithmetic operators).
-- Cleanup candidate: delete pandas variant once ibis path is validated.
-
-## Sharded input and output
-
-Independently of the engine variants above, every stage works on both
-storage layouts (see "Storage layouts and format detection" in the README):
-
-- **Reading** is format-detected everywhere: a sharded folder source is read
-  with per-supplier column differences unified by name; a single parquet
-  file is read as before. This applies to the whole chain -- household
-  aggregation, diff averages, imputation, calculated columns, resampling,
-  project aggregation and the wide-stage statistics.
-- **Writing** is not a choice: each stage writes the one shape its artifact
-  has. `prepare_diff_averages_sharded` + `impute_mapped_households_sharded`,
-  the calculated stage and the resample all write hive shards. Project-level
-  outputs are single files (they are small), and that writer has no
+- **Reading** is format-detected everywhere. A sharded folder source is read
+  with per-supplier column differences unified by name; a single parquet file is
+  read as a file. Callers never pass a format, which is what keeps an older
+  single-file baseline readable. This applies to the whole chain, including the
+  wide-stage statistics.
+- **Writing** is not a choice: each stage writes the one shape its artifact has.
+  The household stages and the resampled household intervals are hive shard
+  trees, one shard per (household, batch). The project aggregates are single
+  files, because project-level data is small, and that writer has no
   partitioning option at all.
-- **Guards**: a household source is validated where computation starts --
-  duplicate (household, timestamp) rows or a household with data in more
-  than one batch raise an error rather than being silently combined. A source
-  with no `HuisBatchIdBSV` is refused, because that is the key the output is
-  filed under.
+- **Guards** run where computation starts. Duplicate (household, timestamp)
+  rows, or a household with data in more than one batch, raise rather than being
+  silently combined. A household source with no `HuisBatchIdBSV` is refused,
+  because that is the key the output is filed under.
 
-Reading both layouts is tested in etdmap, which owns the read layer
-(`test_storage_source_layout.py`, `test_storage_read_source_frame.py`). What
-the `tests/test_sharded_*.py` files assert here is this package's own
-behaviour: the values each stage computes, and what its writer refuses.
+Reading both layouts is tested in `etdmap`, which owns the read layer
+(`test_storage_source_layout.py`, `test_storage_read_source_frame.py`). The
+`tests/test_sharded_*.py` files here assert this package's own behaviour: the
+values each stage computes, and what its writer refuses.
 
 ## Cross-check tests
 
-There are none, by design. Three parallel pipelines and a frame-equality
-gate between them existed while the engines were being chosen; the choice is
-recorded above and in `docs/performance/RESULTS.md`, and the losing
-candidates are archived outside this repo. Each stage now has one
-implementation, so there is nothing to compare it against -- the per-stage
-test files assert values against hand-computed expectations instead, which
-also catches the case two implementations agreeing could not: both being
-wrong in the same way.
+There are none, by design.
 
-## Benchmarking
-
-See `TODO.md` for the planned `bench_operations.py` script:
-`--operation <name> --approaches pandas,ibis,duckdb --input-parquet <path> --sample-fraction 0.15`
+Three parallel pipelines and a frame-equality gate between them existed while
+the engines were being chosen. With one implementation per step there is nothing
+to compare against -- so each stage's tests assert values against expectations
+computed by hand from the fixture instead. That is stronger than the comparison
+it replaces, because two implementations can agree while both are wrong: a
+retired equivalence test in this suite asserted a project mean of 4.5 where the
+answer was 6.0, and passed for years because both paths shared the error.

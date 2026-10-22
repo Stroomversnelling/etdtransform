@@ -33,19 +33,11 @@ import etdmap.index_helpers
 
 import etdtransform
 from etdmap.storage import read_source_frame, resolve_source_path
-from etdtransform.aggregate import (
-    aggregate_project_data_duckdb,
-    resample_hh_data_duckdb,
-)
 from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
-#: Both interval forms the parser accepts: "Nmin" and "Nh". 5min is the
-#: passthrough branch, the other two are the grouping branch, so every code
-#: path through the resample is covered without paying for all five intervals
-#: the runner produces.
-INTERVALS = ("5min", "60min", "24h")
+from conftest import INTERVALS
 
 #: Composites the calculated stage derives for this fixture. Named rather than
 #: read from the catalog: the point is that the chain publishes them, and a
@@ -96,38 +88,6 @@ def test_include(index_df):
 def test_project_id(index_df):
     assert index_df['ProjectIdBSV'].notna().all(), 'column ProjectIdBSV has None values'
     assert index_df['ProjectIdBSV'].dtype in [int, 'int64', 'Int64', 'int32'], "Column 'ProjectIdBSV' is not an integer dtype"
-
-
-# ---------------------------------------------------------------------------
-# The chain. Stages 3 and 4 come from conftest (`sharded_stage3`,
-# `sharded_calculated`), which other files share; stages 5 and 6 are added
-# here because only the full-chain test needs them under the REAL aggregation
-# config rather than an isolated one.
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def full_chain(sharded_stage3, sharded_calculated, tmp_path_factory):
-    """Resample and aggregate the calculated output, and return where every
-    artifact of the run landed."""
-    agg = tmp_path_factory.mktemp("full_chain")
-    resample_hh_data_duckdb(
-        source_path=str(sharded_calculated),
-        output_dir=str(agg),
-        intervals=INTERVALS,
-    )
-    aggregate_project_data_duckdb(
-        intervals=INTERVALS, aggregate_folder_path=str(agg),
-    )
-    return {
-        # Two roots, because stage 3 writes to both: `avg_diffs` goes to the
-        # aggregate folder, while the imputed shards and the in-run summaries
-        # go to the `sharded` area inside it (aggregate.py:1098).
-        "agg_root": sharded_stage3.parent,
-        "sharded_area": sharded_stage3,
-        "imputed": sharded_stage3 / "household_imputed",
-        "calculated": sharded_calculated,
-        "resampled": agg,
-    }
 
 
 @pytest.fixture(scope="session")

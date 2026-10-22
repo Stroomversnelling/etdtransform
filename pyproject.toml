@@ -87,6 +87,7 @@ markers = [
     "unit: no disk IO; builds its frames in memory",
     "integration: reads or writes parquet, or runs a pipeline stage end to end",
     "pipeline: needs a pipeline built by a session fixture, or the mapped dataset on disk",
+    "regenerate: writes a committed reference file; deselected unless asked for",
 ]
 # The pipeline fixtures build whole pipelines into tmp_path: three session
 # pipelines plus the per-test monolith-vs-sharded pairs put a --full-suite run

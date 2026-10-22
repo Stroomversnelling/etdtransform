@@ -40,7 +40,7 @@
         "house_impute_factor": {
             "statistics": {
                 "min": "0.9950015964106812",
-                "max": "1.004048216825713",
+                "max": "1.0040480601306443",
                 "null_count": 30
             }
         },
@@ -60,15 +60,15 @@
         },
         "project_avg_median": {
             "statistics": {
-                "min": "0.1598808613071469",
-                "max": "0.1600484651307852",
+                "min": "0.1598804197471509",
+                "max": "0.16003621531526732",
                 "null_count": 50
             }
         },
         "comparable_counts": {
             "statistics": {
                 "min": "0",
-                "max": "104122",
+                "max": "104121",
                 "null_count": 30
             }
         },

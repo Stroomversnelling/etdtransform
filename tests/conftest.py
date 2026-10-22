@@ -6,7 +6,6 @@ config_test_template.yaml for the committed reference template). This is a
 small anonymised dataset -- NOT production data. All tests in this suite must
 pass against that fixture; there are no "pre-existing" failures (see ADR-007).
 """
-import json
 import logging
 import os
 import shutil
@@ -24,7 +23,9 @@ import etdtransform
 from etdmap.testing import generate_mapped_dataset, installed_fingerprint
 from etdtransform.aggregate import (
     add_calculated_columns_to_hh_data_ibis,
+    aggregate_project_data_duckdb,
     impute_mapped_households_sharded,
+    resample_hh_data_duckdb,
 )
 from etdtransform.impute import prepare_diff_averages_sharded
 
@@ -61,41 +62,6 @@ etdmap.options.mapped_folder_path = Path(config['etdmap_configuration']['mapped_
 etdmap.options.bsv_metadata_file = Path(config['etdmap_configuration']['bsv_metadata_file'])
 etdtransform.options.mapped_folder_path = Path(config['etdtransform_configuration']['mapped_folder_path'])
 etdtransform.options.aggregate_folder_path = Path(config['etdtransform_configuration']['aggregate_folder_path'])
-
-file_names = [
-    "household_24h.parquet",
-    "project_24h.parquet",
-    "household_6h.parquet",
-    "project_6h.parquet",
-    "avg_diffs.parquet",
-    "avg_coverage_duty.parquet",
-    "avg_window_presence.parquet",
-    "household_5min.parquet",
-    "household_aggregated_diff.parquet",
-    "household_calculated.parquet",
-    "household_default.parquet",
-    "household_imputed.parquet",
-    "impute_summary_household.parquet",
-    "impute_summary_project.parquet",
-    "impute_volume_gap.parquet",
-    "impute_volume_gap_accumulator.parquet",
-    "impute_volume_household.parquet",
-    "impute_volume_project.parquet",
-    "project_5min.parquet",
-    "household_60min.parquet",
-    "household_15min.parquet",
-    "project_60min.parquet",
-    "project_15min.parquet"
-]
-
-@pytest.fixture
-def load_metadata():
-    def _load_metadata(filepath):
-        with open(filepath, "r") as f:
-            return json.load(f)
-    # return inner function as ficture
-    return _load_metadata
-
 
 @pytest.fixture(scope="session")
 def mapped_dataset(tmp_path_factory):
@@ -161,9 +127,8 @@ FIXTURE_MIN_ELIGIBLE = 1
 def _include_updated(mapped_dataset):
     """Populate Meenemen from bsv_metadata_file before any pipeline runs.
 
-    aggregate_hh_data_5min (and ibis/duckdb variants) filter on Meenemen == 1.
-    Without this call the index has no Meenemen == True rows and every pipeline
-    exits early with no output.
+    The stages filter on Meenemen == 1. Without this call the index has no
+    Meenemen == True rows and every pipeline exits early with no output.
 
     update_include saves through save_index_to_parquet, which writes the
     index.parquet (including the household-batch
@@ -440,6 +405,42 @@ def calculated_shards(tmp_path_factory, sharded_stage3):
     return out
 
 
+#: Every interval the runner produces. Both forms the parser accepts, "Nmin"
+#: and "Nh", so the resample's two branches are both exercised.
+INTERVALS = ("5min", "15min", "60min", "6h", "24h")
+
+
+@pytest.fixture(scope="session")
+def full_chain(sharded_stage3, sharded_calculated, tmp_path_factory):
+    """The canonical chain run through to the project aggregates.
+
+    Stages 3 and 4 come from `sharded_stage3` and `sharded_calculated`; this
+    adds stages 5 and 6 under the REAL aggregation config rather than an
+    isolated one, so what it produces is what a run produces.
+
+    Returns where each artifact landed. Two roots, because stage 3 writes to
+    both: `avg_diffs` and the averaging reports go to the aggregate folder,
+    while the imputed shards and the in-run summaries go to the `sharded` area
+    inside it (aggregate.py:1098).
+    """
+    agg = tmp_path_factory.mktemp("full_chain")
+    resample_hh_data_duckdb(
+        source_path=str(sharded_calculated),
+        output_dir=str(agg),
+        intervals=INTERVALS,
+    )
+    aggregate_project_data_duckdb(
+        intervals=INTERVALS, aggregate_folder_path=str(agg),
+    )
+    return {
+        "agg_root": sharded_stage3.parent,
+        "sharded_area": sharded_stage3,
+        "imputed": sharded_stage3 / "household_imputed",
+        "calculated": sharded_calculated,
+        "resampled": agg,
+    }
+
+
 @pytest.fixture()
 def fresh_shards(tmp_path, imputed_shards, calculated_shards):
     """A private copy of a stage's shard tree, for a test that modifies it.
@@ -483,16 +484,39 @@ def pytest_addoption(parser):
             "and after changing anything a downstream repo depends on."
         ),
     )
+    parser.addoption(
+        "--regenerate-pins",
+        action="store_true",
+        default=False,
+        help=(
+            "Rewrite the committed reference pins under tests/data/ from a run "
+            "of the canonical chain, and run nothing else. Review why the "
+            "output moved before using this: it declares the current output "
+            "correct."
+        ),
+    )
 
 
 #: The expression pyproject sets in addopts. --full-suite clears this one and
 #: nothing else, so an explicit -m on the command line still wins.
 DEFAULT_MARKEXPR = "not pipeline"
 
+#: A test that WRITES a committed reference file rather than reading one. It is
+#: deselected unless --regenerate-pins asks for it: a run that quietly rewrote
+#: the thing it compares against would always be green. Deselection rather than
+#: a skip, because a skip reads as "not run" and this suite forbids them.
+_REGENERATE_ONLY = "regenerate"
+
 
 def pytest_configure(config):
     if config.getoption("--full-suite") and config.option.markexpr == DEFAULT_MARKEXPR:
         config.option.markexpr = ""
+    if config.getoption("--regenerate-pins"):
+        config.option.markexpr = _REGENERATE_ONLY
+    elif config.option.markexpr == DEFAULT_MARKEXPR:
+        config.option.markexpr = f"{DEFAULT_MARKEXPR} and not {_REGENERATE_ONLY}"
+    elif not config.option.markexpr:
+        config.option.markexpr = f"not {_REGENERATE_ONLY}"
 
 
 def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):

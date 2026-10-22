@@ -90,8 +90,31 @@ def test_stats_are_computed_over_each_households_own_rows(per_household_stats):
         assert float(row["max"]) == pytest.approx(expected["max"])
 
 
-def test_both_households_get_their_own_row(per_household_stats):
-    measured = per_household_stats[per_household_stats["column"] == "Measured"]
-    assert sorted(measured["HuisIdBSV"].unique().tolist()) == sorted(_PER_HOUSEHOLD)
+def test_a_household_holding_no_value_still_gets_a_row(tmp_path):
+    """A household present in the artifact but with nothing in a column gets a
+    row for it anyway, reporting count 0.
+
+    This is what the (household x column) cross product is reinstated for, and
+    it is the only shape in which the per-household row count can be wrong:
+    with every household holding values, any grouping at all returns one row
+    each, so a fixture without an empty household asserts nothing.
+
+    Absent rather than zero: a household with no reading for a variable has not
+    measured nothing, it has measured nothing at all, and the report says so by
+    carrying the row with a count of 0 instead of omitting it.
+    """
+    from conftest import household_frame, write_shard_tree
+
+    root = write_shard_tree(tmp_path / "stage", {
+        1: household_frame(n_rows=5, Measured=[0.0, 1.0, 2.0, 3.0, 4.0]),
+        2: household_frame(n_rows=5, Measured=[pd.NA] * 5),
+    })
+    stats = get_data_stats(str(root), precision="exact")
+
+    measured = stats[stats["column"] == "Measured"]
+    assert sorted(measured["HuisIdBSV"].unique().tolist()) == [1, 2]
+    empty = measured[measured["HuisIdBSV"] == 2]
+    assert len(empty) == 1
+    assert int(empty.iloc[0]["count"]) == 0
 
 

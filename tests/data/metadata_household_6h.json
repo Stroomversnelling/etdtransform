@@ -1,14 +1,7 @@
 {
     "num_rows": 14600,
-    "num_columns": 86,
+    "num_columns": 88,
     "column_details": {
-        "HuisIdBSV": {
-            "statistics": {
-                "min": "1",
-                "max": "10",
-                "null_count": 0
-            }
-        },
         "ProjectIdBSV": {
             "statistics": {
                 "min": "1",
@@ -230,14 +223,14 @@
             "statistics": {
                 "min": "47.09139044320001",
                 "max": "68.46884000280002",
-                "null_count": 0
+                "null_count": 10
             }
         },
         "ElektriciteitsgebruikTotaalGebouwgebonden": {
             "statistics": {
                 "min": "69.2696163218",
                 "max": "92.38396591109999",
-                "null_count": 0
+                "null_count": 10
             }
         },
         "ZonopwekBruto": {
@@ -250,8 +243,8 @@
         "ElektriciteitsgebruikTotaalHuishoudelijk": {
             "statistics": {
                 "min": "-69.6161559996",
-                "max": "-19.142425142999997",
-                "null_count": 0
+                "max": "-19.142425143",
+                "null_count": 10
             }
         },
         "Zelfgebruik": {
@@ -403,9 +396,9 @@
         },
         "WarmteproductieRuimteverwarmingDiff": {
             "statistics": {
-                "min": "1.5491948341999997",
-                "max": "2.6190837677000003",
-                "null_count": 0
+                "min": null,
+                "max": null,
+                "null_count": 14600
             }
         },
         "WatergebruikRuimteverwarmingDiff": {
@@ -502,7 +495,7 @@
         "ElektriciteitsgebruikBooster": {
             "statistics": {
                 "min": "10.614106722200004",
-                "max": "16884.16029747767",
+                "max": "16889.266423353998",
                 "null_count": 0
             }
         },
@@ -564,9 +557,9 @@
         },
         "WarmteproductieRuimteverwarming": {
             "statistics": {
-                "min": "1.947482183",
-                "max": "3037.5996563756003",
-                "null_count": 0
+                "min": null,
+                "max": null,
+                "null_count": 14600
             }
         },
         "WatergebruikRuimteverwarming": {
@@ -601,6 +594,27 @@
             "statistics": {
                 "min": "59.4785548885",
                 "max": "105404.88189301081",
+                "null_count": 0
+            }
+        },
+        "HuisBatchIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "HuisIdBSV": {
+            "statistics": {
+                "min": "1",
+                "max": "10",
+                "null_count": 0
+            }
+        },
+        "ZelfgebruikPercentage": {
+            "statistics": {
+                "min": "-146.84742343243403",
+                "max": "-8.956774528907747",
                 "null_count": 0
             }
         }

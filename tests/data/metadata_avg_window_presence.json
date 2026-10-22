@@ -1,6 +1,6 @@
 {
     "num_rows": 21900,
-    "num_columns": 11,
+    "num_columns": 15,
     "column_details": {
         "column": {
             "statistics": {
@@ -76,6 +76,34 @@
             "statistics": {
                 "min": "2",
                 "max": "3",
+                "null_count": 0
+            }
+        },
+        "averageable": {
+            "statistics": {
+                "min": "True",
+                "max": "True",
+                "null_count": 0
+            }
+        },
+        "n_outage_windows": {
+            "statistics": {
+                "min": "0",
+                "max": "8",
+                "null_count": 0
+            }
+        },
+        "n_outage_slots": {
+            "statistics": {
+                "min": "0",
+                "max": "16",
+                "null_count": 0
+            }
+        },
+        "source": {
+            "statistics": {
+                "min": "cumulative",
+                "max": "cumulative",
                 "null_count": 0
             }
         }

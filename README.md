@@ -360,24 +360,17 @@ df_calculated = get_hh_table('5min', 'calculated').select(
 
 # Transformations to prepare datasets for loading (advanced)
 
-After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks,  we first combine all data into a single dataset and then impute missing values where possible. Finally, we aggregate and resample data into the final datasets.
+After data from different data sources are mapped to the ETD data model using the `etdmap` package, data files are placed in the mapped folder. The mapped data folder contains an index file and a file per connected building unit. In order to prepare these files for loading in analytical workflows and notebooks, we impute missing values where possible, derive the calculated columns, and then aggregate and resample into the final datasets.
 
 _While most users will not need to apply these transformations as the datasets will already have been aggregated, some of the following operations require large amounts of RAM and can surpass 100GB of RAM to run efficiently. Please consider whether you have enough RAM and time available if you are processing the data. In the future, we could reduce the RAM requirements if needed._
 
-## Combining individual building unit data
-
-This step will create a single dataset and remove household batches marked in the metadata to not be used (`Meenemen`). Note that `Meenemen` is recorded per delivered batch of household data, not per household. Batches with poor data, including missing variables or large amounts of missing data or other data anomalies that cannot be automatically cleaned, are marked 0 so they are not included. All others are marked 1 to include in our transformations.
-
-For nearly 300 househoulds, it requires over 25GB of RAM to run efficiently. This function will save `household_default.parquet`.
-
-```python
-from etdtransform import aggregate_hh_data_5min
-
-etdtransform.options.mapped_folder = 'mapped_folder_path' # path to folder where mapping files are stored
-etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
-
-aggregate_hh_data_5min() # this will generate the `household_default.parquet` file in the aggregate data folder
-```
+There is no combining step. Each stage reads the mapped households through the
+shared read layer, which unions the per-supplier column sets by name as it
+reads, so no stage needs a single assembled copy of the dataset to exist first.
+Household batches marked `Meenemen = 0` in the metadata are excluded at that
+point. `Meenemen` is recorded per delivered batch, not per household: batches
+with poor data -- missing variables, large amounts of missing data, or other
+anomalies that cannot be automatically cleaned -- are marked 0, and all others 1.
 
 ## Imputation to fill gaps
 
@@ -400,78 +393,89 @@ The calculated ratio would be 100/50 = 2 so each average change is multiplied by
 
 Before the average is calculated, households with outliers are removed. The upper bound is double the 95th percentile value per project per registration at a specific time. If the household maximum for the variable is within this bound, it is included in the average difference calculation. By definition, this includes 100% to 95% of households in each registered moment per project so the resulting average should be representative and useful for imputation.
 
-### 1. Loading mapped data
+### 1. The average change per time step
 
-For this step, the data is read from the `household_default.parquet` in the path provided.
+The average `diff` or interval averages per cadence of the house batch dataset in a project is what the imputation fills a
+gap with. `prepare_diff_averages_sharded()` computes it, reading the mapped
+households directly.
 
 ```python
 import etdtransform
-from etdtransform.aggregate import read_hh_data
-from etdtransform.impute import sort_for_impute, prepare_diff_averages_for_impute, impute_hh_data_5min
+from etdtransform.impute import prepare_diff_averages_sharded
 
-etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
+etdtransform.options.mapped_folder_path = 'mapped_folder_path'
+etdtransform.options.aggregate_folder_path = 'aggregate_folder_path'
 
-df = read_hh_data(interval = 'default')
-
-```
-
-### 2. Calculating diff columns and average change per time step
-
-We prepare the imputation by first calculating the differences between the consecutive values in cumulative columns to get the change every 5 minutes. These `diff` columns will be added to the dataframe.
-
-The average `diff` per 5 minutes in a project is used to impute values.  The average difference between timesteps for all cumulative variables is saved in a series of files by `prepare_diff_averages_for_impute()`.
-
-```python
-# pre-sort rows to speed up the process
-df = sort_for_impute(df, project_id_column='ProjectIdBSV')
-
-# Optional: limit the operation to only a few columns of interest - otherwise leave the `cumulative_columns` parameter out
+# Optional: limit the operation to only a few columns of interest - otherwise
+# leave the `cumulative_columns` parameter out
 cum_cols_list = ['Zon-opwekTotaal', 'ElektriciteitsgebruikWarmtepomp']
 
-prepare_diff_averages_for_impute(df, project_id_column='ProjectIdBSV', cumulative_columns=cum_cols_list, sorted = True)
+prepare_diff_averages_sharded(
+    mapped_folder_path=etdtransform.options.mapped_folder_path,
+    aggregate_folder_path=etdtransform.options.aggregate_folder_path,
+    cumulative_columns=cum_cols_list,
+)
 ```
 
-Additional files saved to the aggregate folder are:
+Run this over the **whole** population once. The averages are grouped per
+project, so computing them from a subset makes every imputed value that uses
+them differ from a full run for reasons that have nothing to do with the data.
 
-- `household_diff_max_bounds.parquet `: maximum differences per variable and the boundary values used to exclude outliers
-- `avg_diffs.parquet`: the average difference per variable per project used for imputation
+Files saved to the aggregate folder are:
 
-### Imputation
+- `avg_diffs`: the average difference per variable per project used for imputation, partitioned by project and cadence
+- `avg_coverage_duty`, `avg_window_presence`: what the averaging decided, and over how many households
 
-Finally, `impute_hh_data_5min()` will save the imputed dataset in the aggregate folder.
+### 2. Imputation
+
+`impute_mapped_households_sharded()` reads the mapped households in chunks and
+writes the imputed shards.
 
 ```python
-impute_hh_data_5min(df, cum_cols=cum_cols_list, sorted=True, diffs_calculated=True)
+from etdtransform.aggregate import impute_mapped_households_sharded
+
+impute_mapped_households_sharded(
+    mapped_folder_path=etdtransform.options.mapped_folder_path,
+    aggregate_folder_path=etdtransform.options.aggregate_folder_path,
+    cum_cols=cum_cols_list,
+    chunk_size=50,
+)
 ```
 
 Files are:
 
-- `household_imputed.parquet`: the resulting imputed dataset with helper columns to identify imputation and methods of imputation
-- `impute_summary_project.parquet`: a summary of imputation per project
-- `impute_summary_household.parquet`: a summary of imputation per household
+- `household_imputed`: the imputed dataset, as one hive shard per (household, batch), with helper columns identifying what was imputed and how
+- `impute_summary_household.parquet`: the in-run summary per household
+- `impute_volume_gap_accumulator.parquet`: the state the post-processing step rolls up
 
-It is possible to use arguments to pass pre-processed or sampled households to this function and to avoid sorting the column or recalculating differences if they have already been calculated previously. This can be useful as the dataset generated is very large.
+`household_ids=` restricts the run to a subset of households, which is useful
+because the full dataset is very large. The project-level and volume summaries
+are derived afterwards by the post-processing step, not by this function.
 
 __As of Fall 2024, most of the imputation is now much faster with the use of a series of simple vectorized operations instead of applying functions over the data. The trade off is that the imputation code is a little less readable.__
 
 ## Add calculated columns
 
+`add_calculated_columns_to_hh_data_ibis` reads the imputed shards and writes the
+calculated ones. Nothing is materialised in pandas: it works out per household
+which catalog variables that household can derive from what it has, groups
+households by shared available-column schema, and derives per schema group
+through ibis.
+
 ```python
+from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 
-from etdtransform.aggregate import read_hh_data
-from etdtransform.calculated_columns import add_calculated_columns_to_hh_data
-etdtransform.options.aggregate_folder = 'aggregate_folder_path' # path to folder where aggregated files are stored
-
-df_imputed = read_hh_data(interval="imputed")
-df_calculated = add_calculated_columns_to_hh_data(df_imputed)
-
+agg = 'aggregate_folder_path/sharded'
+add_calculated_columns_to_hh_data_ibis(
+    source_path=f'{agg}/household_imputed',
+    output_path=f'{agg}/household_calculated',
+)
 ```
 
-The ibis/DuckDB variant (`add_calculated_columns_to_hh_data_ibis`) groups households by
-shared available-column schema and writes per-group temp parquets, then merges them using
-Polars streaming (`diagonal_relaxed`). This is 6x faster than DuckDB `union_by_name` at
-scale and does not materialise the full dataset in RAM.
-The full benchmark record and implementation notes are kept in the project performance documentation.
+The unit of work is one shard -- one (household, batch) pair -- derived, filled
+and written on its own, so the amount of data in flight does not depend on how
+many households there are. The full benchmark record and implementation notes
+are kept in the project performance documentation.
 
 ## Resampling to different time intervals
 

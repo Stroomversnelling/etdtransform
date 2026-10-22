@@ -1,6 +1,6 @@
 {
     "num_rows": 12,
-    "num_columns": 7,
+    "num_columns": 9,
     "column_details": {
         "ProjectIdBSV": {
             "statistics": {
@@ -48,6 +48,20 @@
             "statistics": {
                 "min": "1.0",
                 "max": "1.0",
+                "null_count": 0
+            }
+        },
+        "n_discarded": {
+            "statistics": {
+                "min": "0",
+                "max": "0",
+                "null_count": 0
+            }
+        },
+        "n_flagged": {
+            "statistics": {
+                "min": "5",
+                "max": "5395",
                 "null_count": 0
             }
         }

@@ -23,11 +23,7 @@ import ibis
 import pandas as pd
 
 import etdtransform
-from etdtransform.calculated_columns import (
-    _catalog_hash,
-    add_calculated_columns_adaptive,
-    add_calculated_columns_imputed_data,
-)
+from etdtransform.calculated_columns import _catalog_hash
 
 
 def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
@@ -545,45 +541,4 @@ def add_calculated_columns_to_hh_data_ibis(
     checkpoints.log_summary()
     checkpoints.write(output_path)
 
-
-
-def add_calculated_columns_to_hh_data(df, adaptive = False):
-    """
-    Add calculated columns to household data and save the result.
-
-    Parameters
-    ----------
-    df : pd.DataFrame, optional
-        The input DataFrame, if None it will be read from a file
-
-    Returns
-    -------
-    pd.DataFrame
-        The DataFrame with added calculated columns
-
-    Notes
-    -----
-    This function adds calculated columns to the household data and saves the result as a parquet file.
-    """
-    if df is None:
-        # Imported here, not at module level: aggregate.py imports this module
-        # to re-export the stage, so a module-level import would be a cycle.
-        from etdtransform.aggregate import read_hh_data
-
-        logging.info("Loading imputed data from parquet file.")
-        df = read_hh_data(interval="imputed")
-
-    logging.info("Calculating: ")
-    if adaptive:
-        df = add_calculated_columns_adaptive(df)
-    else:
-        df = add_calculated_columns_imputed_data(df)
-
-    logging.info("Saving calculated columns to file: household_calculated.parquet")
-    df.to_parquet(
-        os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet"),
-        engine="pyarrow",
-    )
-
-    return df
 
