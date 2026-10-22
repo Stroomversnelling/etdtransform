@@ -112,26 +112,32 @@ storage layouts (see "Storage layouts and format detection" in the README):
   file is read as before. This applies to the whole chain -- household
   aggregation, diff averages, imputation, calculated columns, resampling,
   project aggregation and the wide-stage statistics.
-- **Writing** sharded output is an explicit choice. The imputation stage has
-  a sharded version (`prepare_diff_averages_sharded` +
-  `impute_mapped_households_sharded`, sharing the exact same computation
-  core as the single-file shell); calculated columns and resampling take
-  `partition_output=True`. Project-level outputs stay single files (they
-  are small).
-- **Guards**: a sharded source is validated where computation starts --
+- **Writing** is not a choice: each stage writes the one shape its artifact
+  has. `prepare_diff_averages_sharded` + `impute_mapped_households_sharded`,
+  the calculated stage and the resample all write hive shards. Project-level
+  outputs are single files (they are small), and that writer has no
+  partitioning option at all.
+- **Guards**: a household source is validated where computation starts --
   duplicate (household, timestamp) rows or a household with data in more
-  than one batch raise an error rather than being silently combined.
+  than one batch raise an error rather than being silently combined. A source
+  with no `HuisBatchIdBSV` is refused, because that is the key the output is
+  filed under.
 
-Cross-format equivalence tests (`tests/test_sharded_*.py`,
-`tests/test_aggregate_read_layer.py`) assert that the same data stored flat
-and sharded produces identical results at every stage.
+Reading both layouts is tested in etdmap, which owns the read layer
+(`test_storage_source_layout.py`, `test_storage_read_source_frame.py`). What
+the `tests/test_sharded_*.py` files assert here is this package's own
+behaviour: the values each stage computes, and what its writer refuses.
 
 ## Cross-check tests
 
-`tests/test_pipeline_equivalence.py` runs all three pipelines on the test
-fixture (10 households, 2 projects) and asserts frame equality using
-`pd.testing.assert_frame_equal` with `rtol=1e-6`. Missingness is a
-first-class value: `pd.NA` in one path and `0.0` in the other is a failure.
+There are none, by design. Three parallel pipelines and a frame-equality
+gate between them existed while the engines were being chosen; the choice is
+recorded above and in `docs/performance/RESULTS.md`, and the losing
+candidates are archived outside this repo. Each stage now has one
+implementation, so there is nothing to compare it against -- the per-stage
+test files assert values against hand-computed expectations instead, which
+also catches the case two implementations agreeing could not: both being
+wrong in the same way.
 
 ## Benchmarking
 

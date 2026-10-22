@@ -1585,10 +1585,10 @@ def resample_hh_data_duckdb(
     source_path: str,
     output_dir: str,
     intervals: tuple = ("60min", "15min", "5min"),
-    partition_output: bool = False,
 ) -> None:
     """
-    Resample household_calculated.parquet to multiple time intervals using DuckDB.
+    Resample the calculated household artifact to multiple time intervals using
+    DuckDB.
 
     Reads resampling config from etdmap.data_model.get_aggregation_config() (ADR-004).
     Only processes columns present in the source parquet (guards against columns not
@@ -1608,9 +1608,12 @@ def resample_hh_data_duckdb(
     Parameters
     ----------
     source_path : str
-        Path to household_calculated.parquet.
+        The calculated household artifact: a hive shard directory, or a single
+        parquet file. Reads are format-detected.
     output_dir : str
-        Directory where household_{interval}.parquet files are written.
+        Directory under which a ``household_{interval}`` hive shard directory
+        is written per interval, partitioned on (HuisIdBSV, HuisBatchIdBSV).
+        Each is cleared before writing, so re-runs are idempotent.
     intervals : tuple
         Intervals to produce. Supported formats: Nmin (e.g. "5min", "15min", "60min")
         or Nh (e.g. "6h", "24h"). The "5min" interval is a column-selection passthrough
@@ -1631,9 +1634,9 @@ def resample_hh_data_duckdb(
     config = get_aggregation_config()
 
     # Source is format-detected (file or hive shard directory) by the shared
-    # read layer (union_by_name across per-supplier schemas -- the same union
-    # the legacy monolith concat produced). The SQL math below is identical
-    # for both layouts.
+    # read layer, which unions per-supplier schemas by name: suppliers deliver
+    # different column sets, so a positional union would misalign them. The SQL
+    # math below is identical for both layouts.
     from etdmap.storage import (
         source_is_sharded,
         source_schema_names as _schema_names_of,
@@ -1652,10 +1655,11 @@ def resample_hh_data_duckdb(
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(source_table(source_path))
 
-    if partition_output and "HuisBatchIdBSV" not in source_schema_names:
+    if "HuisBatchIdBSV" not in source_schema_names:
         raise ValueError(
-            "partition_output=True requires a HuisBatchIdBSV column in the "
-            "source; the source has none."
+            "resample_hh_data_duckdb: the output partitions on HuisBatchIdBSV "
+            "and the source has no such column. A household artifact always "
+            "carries the batch it was mapped in."
         )
 
     active_config = {
@@ -1709,27 +1713,24 @@ def resample_hh_data_duckdb(
     diff_cols = [col for col in active_config if cumulative_column(col)]
     cumul_cols = [cumulative_column(col) for col in diff_cols]
 
-    # The batch id rides along when the source carries it (hive shards);
-    # grouping by it does not change the grain while households are 1:1.
-    _batch_id = ["HuisBatchIdBSV"] if source_is_shards else []
+    # The batch id rides along in the grouping: it is a partition key of the
+    # output, so it has to survive the GROUP BY. Grouping by it does not change
+    # the grain while households are 1:1 with batches.
+    _batch_id = ["HuisBatchIdBSV"]
     id_cols = ["HuisIdBSV"] + _batch_id + ["ProjectIdBSV", "ReadingDate"]
     _group_ids_sql = ", ".join(["HuisIdBSV"] + _batch_id + ["ProjectIdBSV"])
 
     for interval in intervals:
-        if partition_output:
-            out_target = os.path.join(output_dir, f"household_{interval}")
-            # The writer owns and clears its output directory (idempotent
-            # re-runs; same convention as the other sharded writers).
-            if os.path.isdir(out_target):
-                shutil.rmtree(out_target)
-            os.makedirs(out_target, exist_ok=True)
-            _copy_opts = (
-                "FORMAT PARQUET, COMPRESSION SNAPPY, "
-                "PARTITION_BY (HuisIdBSV, HuisBatchIdBSV), OVERWRITE_OR_IGNORE TRUE"
-            )
-        else:
-            out_target = os.path.join(output_dir, f"household_{interval}.parquet")
-            _copy_opts = "FORMAT PARQUET, COMPRESSION SNAPPY"
+        out_target = os.path.join(output_dir, f"household_{interval}")
+        # The writer owns and clears its output directory (idempotent
+        # re-runs; same convention as the other sharded writers).
+        if os.path.isdir(out_target):
+            shutil.rmtree(out_target)
+        os.makedirs(out_target, exist_ok=True)
+        _copy_opts = (
+            "FORMAT PARQUET, COMPRESSION SNAPPY, "
+            "PARTITION_BY (HuisIdBSV, HuisBatchIdBSV), OVERWRITE_OR_IGNORE TRUE"
+        )
         logging.info(f"resample_hh_data_duckdb: writing {interval} -> {out_target}")
 
         if interval == "5min":
@@ -1791,28 +1792,23 @@ def resample_hh_data_duckdb(
             # Recompute derive columns (ratios) from their now-resampled
             # components. The 5min branch carries them as-is (already correct
             # per-interval from the calculated stage); only the grouping
-            # intervals need re-derivation. For hive output the SAME in-place
-            # derivation runs per shard file (row-wise ratios: identical math);
-            # provenance rows are deduplicated across shards.
+            # intervals need re-derivation. The derivation runs in place per
+            # shard file -- row-wise ratios, so identical math whatever the
+            # shard split is -- and provenance rows are deduplicated across
+            # shards.
             if derive_cols:
-                if partition_output:
-                    import glob as glob_mod
-                    _seen_prov = set()
-                    for _shard in sorted(glob_mod.glob(
-                        os.path.join(out_target, "**", "*.parquet"), recursive=True
-                    )):
-                        for r in _derive_columns_in_parquet(_shard, derive_cols, catalog_df):
-                            _key = tuple(sorted((k, str(v)) for k, v in r.items()))
-                            if _key not in _seen_prov:
-                                _seen_prov.add(_key)
-                                _derive_prov.append(
-                                    {"scope": f"household_{interval}", **r}
-                                )
-                else:
-                    _rows = _derive_columns_in_parquet(out_target, derive_cols, catalog_df)
-                    _derive_prov.extend(
-                        {"scope": f"household_{interval}", **r} for r in _rows
-                    )
+                import glob as glob_mod
+                _seen_prov = set()
+                for _shard in sorted(glob_mod.glob(
+                    os.path.join(out_target, "**", "*.parquet"), recursive=True
+                )):
+                    for r in _derive_columns_in_parquet(_shard, derive_cols, catalog_df):
+                        _key = tuple(sorted((k, str(v)) for k, v in r.items()))
+                        if _key not in _seen_prov:
+                            _seen_prov.add(_key)
+                            _derive_prov.append(
+                                {"scope": f"household_{interval}", **r}
+                            )
 
         logging.info(f"resample_hh_data_duckdb: done {interval}")
 

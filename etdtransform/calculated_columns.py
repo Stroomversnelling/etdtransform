@@ -8,19 +8,19 @@ import pandas as pd
 
 def sympy_to_ibis(expr, table):
     """
-    Convert a SymPy expression to an ibis column expression.
+    Convert a catalog expression to an ibis column expression.
 
-    Uses sp.lambdify to generate a Python callable from the SymPy expression
-    tree, then calls it with ibis column expressions as arguments. Since ibis
-    column expressions overload Python's arithmetic operators (+, -, *, /),
-    the result is an ibis column expression suitable for table.mutate().
+    Applies the callables :func:`etdtransform.catalog.compiled.compile_expression`
+    built from the SymPy expression tree. Since ibis column expressions overload
+    Python's arithmetic operators (+, -, *, /), the result is an ibis column
+    expression suitable for table.mutate().
 
     Null handling: none. A null input yields a null result, because ibis
     arithmetic propagates it. A derived value whose input is unknown is
     unknown, and substituting zero states the opposite -- it reports a
     measured quantity of nothing. That substitution produced negative gross
     consumption wherever solar production was missing while the export
-    register advanced: ``ElektriciteitNetgebruikDiff -
+    cumulative variable advanced: ``ElektriciteitNetgebruikDiff -
     ElektriciteitTerugleveringDiff + ZonopwekBruto`` with a zero for the
     missing solar term returns minus the exported amount.
 
@@ -33,8 +33,9 @@ def sympy_to_ibis(expr, table):
 
     Parameters
     ----------
-    expr : sympy.Expr
-        SymPy expression whose free symbols correspond to column names.
+    expr : sympy.Expr or CompiledExpression
+        Expression whose free symbols correspond to column names. Pass the
+        compiled form to compile once for many tables.
     table : ibis.Table
         The ibis table containing the input columns.
 
@@ -48,36 +49,21 @@ def sympy_to_ibis(expr, table):
         If the expression contains SymPy functions not supported by ibis
         (e.g. sin, exp) -- a clear failure at planning time, not silent.
     """
-    import sympy as sp
-    if not expr.free_symbols:
-        return ibis.literal(float(expr))
+    from etdtransform.catalog.compiled import as_compiled
 
-    numerator, denominator = expr.as_numer_denom()
-    if denominator == 1:
-        return _lambdify_over_columns(expr, table)
+    compiled = as_compiled(expr)
+    if not compiled.symbols:
+        return ibis.literal(float(compiled.expr))
 
-    # A ratio whose denominator is zero is undefined, and pd.NA is how this
-    # pipeline says undefined. Without nullif the engine returns inf or NaN --
-    # a VALUE that passes notnull() and poisons every later sum and mean.
-    # ZelfgebruikPercentage divides by solar production, which is genuinely
-    # zero every night: 21,652,383 of its 39,840,815 estate cells were NaN.
-    # as_numer_denom folds a sum of ratios onto one denominator, so nulling
-    # that product covers each of them.
+    def column(name):
+        return table[name]
+
+    if not compiled.is_ratio:
+        return compiled.whole(column)
     return (
-        _lambdify_over_columns(numerator, table)
-        / _lambdify_over_columns(denominator, table).nullif(0)
+        compiled.numerator(column)
+        / compiled.denominator(column).nullif(0)
     )
-
-
-def _lambdify_over_columns(expr, table):
-    """Evaluate a SymPy expression against *table*'s columns."""
-    import sympy as sp
-
-    if not expr.free_symbols:
-        return ibis.literal(float(expr))
-    symbols = sorted(expr.free_symbols, key=str)
-    f = sp.lambdify([str(s) for s in symbols], expr)
-    return f(*[table[str(s)] for s in symbols])
 
 
 def evaluate_over_frame(expr, frame) -> pd.Series:
@@ -88,24 +74,45 @@ def evaluate_over_frame(expr, frame) -> pd.Series:
     handling is the same and for the same reason: pandas arithmetic propagates
     pd.NA, so an unknown input gives an unknown result.
 
-    The lambdified expression is called with nullable Series, so the operators
+    The compiled expression is called with nullable Series, so the operators
     dispatch to pandas rather than numpy and the result stays nullable. A
     constant expression is broadcast over *frame*'s index.
-    """
-    import sympy as sp
 
-    symbols = sorted(expr.free_symbols, key=str)
-    names = [str(s) for s in symbols]
-    absent = [name for name in names if name not in frame.columns]
+    Parameters
+    ----------
+    expr : sympy.Expr or CompiledExpression
+    frame : pd.DataFrame
+    """
+    from etdtransform.catalog.compiled import as_compiled
+
+    compiled = as_compiled(expr)
+    absent = [
+        name for name in compiled.symbols if name not in frame.columns
+    ]
     if absent:
         raise KeyError(
-            f"cannot evaluate {expr}: {absent} not in the frame"
+            f"cannot evaluate {compiled.expr}: {absent} not in the frame"
         )
-    if not names:
-        return pd.Series(float(expr), index=frame.index, dtype="Float64")
-    computed = sp.lambdify(names, expr)(*[frame[name] for name in names])
-    if not isinstance(computed, pd.Series):
-        computed = pd.Series(computed, index=frame.index)
+    if not compiled.symbols:
+        return pd.Series(
+            float(compiled.expr), index=frame.index, dtype="Float64"
+        )
+
+    def column(name):
+        return frame[name]
+
+    def as_series(values):
+        if not isinstance(values, pd.Series):
+            values = pd.Series(values, index=frame.index)
+        return values.astype("Float64")
+
+    if not compiled.is_ratio:
+        computed = as_series(compiled.whole(column))
+    else:
+        divisor = as_series(compiled.denominator(column))
+        computed = as_series(compiled.numerator(column)) / divisor.where(
+            divisor != 0, pd.NA
+        )
     return computed.astype("Float64")
 
 
@@ -119,11 +126,18 @@ def undefined_where(expr, table):
 
     Returns None when the expression cannot be undefined, so a caller can skip
     the work rather than evaluate a constant false over every row.
+
+    Parameters
+    ----------
+    expr : sympy.Expr or CompiledExpression
+    table : ibis.Table
     """
-    _, denominator = expr.as_numer_denom()
-    if denominator == 1 or not denominator.free_symbols:
+    from etdtransform.catalog.compiled import as_compiled
+
+    compiled = as_compiled(expr)
+    if not compiled.is_ratio:
         return None
-    built = _lambdify_over_columns(denominator, table)
+    built = compiled.denominator(lambda name: table[name])
     return built.notnull() & (built == 0)
 
 

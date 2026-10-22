@@ -89,17 +89,24 @@ class TestTheCalculatedStageCallsIt:
 
     @staticmethod
     def _source(tmp_path, columns):
+        """A sharded imputed artifact holding only *columns*.
+
+        The frame is spelled out rather than built by `household_frame`,
+        because that helper completes every pair from the model and a HALF
+        pair is exactly what this fixture has to hold. The LAYOUT is the real
+        one, so the guard is shown firing on the shape the stage actually
+        reads.
+        """
         import pandas as pd_
+        from conftest import write_shard_tree
 
         n = 4
         frame = pd_.DataFrame({
-            "HuisIdBSV": pd_.array([1] * n, dtype="Int64"),
+            "ProjectIdBSV": pd_.array([1] * n, dtype="Int64"),
             "ReadingDate": pd_.date_range("2024-01-01", periods=n, freq="5min", tz="UTC"),
             **{c: pd_.array([1.0] * n, dtype="Float64") for c in columns},
         })
-        path = tmp_path / "src.parquet"
-        frame.to_parquet(path, engine="pyarrow", index=False)
-        return path
+        return write_shard_tree(tmp_path / "household_imputed", {1: frame})
 
     def test_a_half_pair_in_the_source_raises(self, tmp_path):
         from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis

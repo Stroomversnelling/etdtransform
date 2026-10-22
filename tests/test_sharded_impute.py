@@ -128,18 +128,22 @@ class TestBatchSafetyGuards:
     """The averaging/imputation chain refuses multi-batch households and
     overlapping batch periods until batch-aware imputation exists."""
 
-    def _mapped_df(self, start, n=6):
-        dates = pd.date_range(start, periods=n, freq="5min", tz="UTC")
-        return pd.DataFrame({
-            "ReadingDate": dates,
-            "ElektriciteitNetgebruik": pd.array(range(n), dtype="Float64"),
-            "ElektriciteitNetgebruikDiff": pd.array([0.1] * n, dtype="Float64"),
-        })
-
     def _shard(self, root, hid, hbid, start):
-        d = root / "sharded" / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hbid}"
-        d.mkdir(parents=True)
-        self._mapped_df(start).to_parquet(d / "part.parquet")
+        """One mapped shard for (hid, hbid), beginning at *start*.
+
+        Through the shared helpers, so the frame carries whatever a household
+        artifact is required to carry and the path is the one the readers
+        resolve. The mapped sharded area has no artifact-name level, hence the
+        `sharded` root.
+        """
+        from conftest import household_frame, write_shard_tree
+
+        write_shard_tree(
+            root / "sharded",
+            {(hid, hbid): household_frame(
+                n_rows=6, start=start, ElektriciteitNetgebruikDiff=0.1,
+            )},
+        )
 
     def _agg_with_artifacts(self, tmp_path, src_agg):
         agg = tmp_path / "agg"

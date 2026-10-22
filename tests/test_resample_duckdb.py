@@ -7,8 +7,10 @@ interval, the configured columns present, the cumulative counterpart rebuilt
 from its Diff column, and the project average equal to the mean over
 households.
 
-Cross-FORMAT equivalence -- the same function over a monolith and over hive
-shards -- is test_sharded_resample.py and test_sharded_project.py, not here.
+Shapes follow the writers: the resampled household intervals are hive shard
+directories, and the project aggregate is a single file whatever shape it was
+read from. Both are read through `etdmap.storage.read_source_frame`, which
+resolves either.
 
 Config isolation: uses _TEST_CONFIG to cover both active method patterns
 (Diff/sum-resample/avg-aggregate and non-Diff/sum-resample/avg-aggregate)
@@ -49,7 +51,11 @@ _TEST_CONFIG = {
 # ---------------------------------------------------------------------------
 
 def _load(path, sort_cols=None):
-    df = pd.read_parquet(path, dtype_backend="numpy_nullable")
+    """Read an artifact of either shape -- `read_source_frame` dispatches on
+    the layout, so a shard directory and a single file are both just a path."""
+    from etdmap.storage import read_source_frame
+
+    df = read_source_frame(str(path))
     if sort_cols:
         present = [c for c in sort_cols if c in df.columns]
         if present:
@@ -85,12 +91,13 @@ def aggregate_project_duckdb_dir(tmp_path_factory, resample_duckdb_dir):
     duckdb_dir = resample_duckdb_dir
     out_dir = tmp_path_factory.mktemp("agg_project_duckdb")
 
-    # Copy resample outputs to out_dir so aggregate reads them.
+    # Copy resample outputs to out_dir so aggregate reads them. Shard trees,
+    # so the whole directory travels.
     import shutil
     for interval in ("5min", "15min", "60min"):
-        shutil.copy(
-            str(duckdb_dir / f"household_{interval}.parquet"),
-            str(out_dir / f"household_{interval}.parquet"),
+        shutil.copytree(
+            str(duckdb_dir / f"household_{interval}"),
+            str(out_dir / f"household_{interval}"),
         )
 
     old = etdtransform.options.aggregate_folder_path
@@ -113,12 +120,12 @@ class TestResampleDuckdb:
         self, resample_duckdb_dir, sharded_calculated
     ):
         df_src = _load(str(sharded_calculated))
-        df_5min = _load(str(resample_duckdb_dir / "household_5min.parquet"))
+        df_5min = _load(str(resample_duckdb_dir / "household_5min"))
         # Row count must match the source (column selection only, no aggregation)
         assert len(df_5min) == len(df_src)
 
     def test_resample_5min_config_columns_present(self, resample_duckdb_dir):
-        df = _load(str(resample_duckdb_dir / "household_5min.parquet"))
+        df = _load(str(resample_duckdb_dir / "household_5min"))
         for col in _TEST_CONFIG:
             assert col in df.columns, f"Column '{col}' missing from 5min output"
 
@@ -128,7 +135,7 @@ class TestResampleDuckdb:
         diff_col = "ElektriciteitNetgebruikHoogDiff"
         base_col = "ElektriciteitNetgebruikHoog"
         for interval in ("15min", "60min"):
-            df = _load(str(duckdb_dir / f"household_{interval}.parquet"),
+            df = _load(str(duckdb_dir / f"household_{interval}"),
                        sort_cols=["HuisIdBSV", "ProjectIdBSV", "ReadingDate"])
             assert base_col in df.columns, f"{base_col} missing from {interval} output"
             # DuckDB uses SUM() OVER (UNBOUNDED PRECEDING) which skips NULLs.
@@ -161,12 +168,12 @@ class TestAggregateProjectDuckdb:
         """Project-level average must equal the mean over households for each timestamp."""
         out_dir = aggregate_project_duckdb_dir
         duckdb_dir = resample_duckdb_dir
-        hh = _load(str(duckdb_dir / "household_5min.parquet"), SORT_COLS_HH)
+        hh = _load(str(duckdb_dir / "household_5min"), SORT_COLS_HH)
         prj = _load(str(out_dir / "project_5min.parquet"), SORT_COLS_PRJ)
 
         col = "ElektriciteitNetgebruikHoogDiff"
         assert col in hh.columns, (
-            f"{col} missing from household_5min.parquet -- the resample "
+            f"{col} missing from household_5min -- the resample "
             f"fixture no longer produces it; fix the fixture or the test."
         )
         assert col in prj.columns, (

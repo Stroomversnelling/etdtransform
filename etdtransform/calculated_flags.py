@@ -475,6 +475,7 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
     import sympy as sp
 
     from etdtransform.calculated_columns import evaluate_over_frame
+    from etdtransform.catalog.compiled import compile_expression
     from etdtransform.constraints import narrow_bounds_by_row
 
     present_columns = set(df.columns)
@@ -517,7 +518,9 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
             rows = gap.index[gap]
             frame = df.loc[rows]
             if chosen.rhs_text not in expressions:
-                expressions[chosen.rhs_text] = sp.sympify(chosen.rhs_text)
+                expressions[chosen.rhs_text] = compile_expression(
+                    sp.sympify(chosen.rhs_text)
+                )
             values = evaluate_over_frame(expressions[chosen.rhs_text], frame)
 
             lower, upper, _ = narrow_bounds_by_row(

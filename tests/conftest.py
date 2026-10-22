@@ -187,6 +187,88 @@ def _cum_cols():
 
 
 # ---------------------------------------------------------------------------
+# Building synthetic stage inputs.
+#
+# One definition each, because a household artifact has requirements a test
+# should not have to rediscover: both halves of every cumulative/interval pair
+# (a stage asserts it), the id columns, and the split where HuisIdBSV lives in
+# the hive path rather than in the file. Hand-rolling a frame per test file
+# means finding each of those by failing, and the versions drift.
+# ---------------------------------------------------------------------------
+
+def household_frame(n_rows=4, start="2024-01-01", project=1, freq="5min",
+                    **columns):
+    """One household's rows: the id columns, plus *columns*, plus the
+    cumulative counterpart of every interval column given.
+
+    Each value may be a scalar (repeated) or a list of length *n_rows*. The
+    pairing is completed from the data model rather than spelled out per test,
+    because a frame holding one half of a pair is not a household artifact and
+    the stages refuse it.
+
+    `HuisIdBSV` is deliberately absent: :func:`write_shard_tree` puts it in the
+    path, which is where a reader expects it.
+    """
+    from etdmap.data_model import cumulative_column
+
+    df = pd.DataFrame({
+        "ProjectIdBSV": pd.array([project] * n_rows, dtype="Int64"),
+        "ReadingDate": pd.date_range(start, periods=n_rows, freq=freq,
+                                     tz="UTC"),
+    })
+    for name, value in columns.items():
+        values = value if isinstance(value, (list, tuple)) else [value] * n_rows
+        df[name] = pd.array(list(values), dtype="Float64")
+    for name in list(columns):
+        counterpart = cumulative_column(name)
+        if counterpart and counterpart not in df.columns:
+            # A monotonic register under the interval column. The value is not
+            # the subject of any test that needs the pair present; its being
+            # there is.
+            df[counterpart] = pd.array([float(i) for i in range(n_rows)],
+                                       dtype="Float64")
+    return df
+
+
+def shard_dir(root, household_id, batch_id=None):
+    """The hive directory one (household, batch) shard lives in.
+
+    The single definition of the convention in this suite. `etdmap.storage`
+    owns the reading side of it (`_SHARD_PART_RE`, `shard_glob`) but exposes no
+    writer, so a fixture that spells the path itself can write a tree the
+    readers resolve differently -- and several did. *batch_id* defaults to
+    *household_id*, which is the one-batch-per-household case.
+    """
+    if batch_id is None:
+        batch_id = household_id
+    return (
+        Path(root) / f"HuisIdBSV={household_id}" / f"HuisBatchIdBSV={batch_id}"
+    )
+
+
+def write_shard_tree(root, frames):
+    """Write synthetic household frames as the hive layout the stages read.
+
+    *frames* is keyed either by household id, for the one-batch-per-household
+    case, or by ``(household_id, batch_id)`` where a test needs a household
+    delivered in several batches.
+
+    `HuisIdBSV` is dropped from the file because the path carries it;
+    `HuisBatchIdBSV` is a path key too, and the writers refuse a source
+    without it.
+    """
+    root = Path(root)
+    for key, frame in frames.items():
+        household_id, batch_id = key if isinstance(key, tuple) else (key, key)
+        d = shard_dir(root, household_id, batch_id)
+        d.mkdir(parents=True, exist_ok=True)
+        frame.drop(columns=["HuisIdBSV"], errors="ignore").to_parquet(
+            d / "part.parquet", index=False
+        )
+    return root
+
+
+# ---------------------------------------------------------------------------
 # The canonical chain, as the runner's default path runs it: no assembly step,
 # imputation reads the mapped shards directly. Session-scoped, so the files
 # that need a stage output as INPUT share one build.
@@ -202,7 +284,10 @@ def sharded_fixture_mapped(tmp_path_factory, _include_updated):
     n = 0
     for f in sorted(src.glob("household_*_table.parquet")):
         hid = int(f.stem.split("_")[1])
-        d = dst / "sharded" / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hid}"
+        # The mapped sharded area has no artifact-name level: households sit
+        # directly under `sharded/`, which is the second place
+        # `resolve_source_path` looks.
+        d = shard_dir(dst / "sharded", hid)
         d.mkdir(parents=True)
         shutil.copyfile(f, d / "part.parquet")
         n += 1
@@ -231,14 +316,16 @@ def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def sharded_calculated(sharded_stage3, tmp_path_factory):
-    """Stage 4 on the sharded imputed output, written flat.
+    """Stage 4 on the sharded imputed output: a hive tree, as the runner writes
+    it.
 
-    Flat because the consumers hand the artifact to a function as a single
-    source path; `partition_output=False` is a supported shape, not a legacy
-    one -- it is how the project aggregates are written.
+    The shape is load-bearing for the consumers, not a convenience. The
+    resample carries the batch id only when its source is sharded
+    (`aggregate.py:1714`), and that is the column its own output partitions
+    on -- so a flat source here would make the resample unable to write.
     """
     out = tmp_path_factory.mktemp("sharded_calculated")
-    path = out / "household_calculated.parquet"
+    path = out / "household_calculated"
     add_calculated_columns_to_hh_data_ibis(
         source_path=str(sharded_stage3 / "household_imputed"),
         output_path=str(path),
@@ -328,89 +415,49 @@ def pytest_report_header(config):
 
 
 # ---------------------------------------------------------------------------
-# Shared aggregate artifacts and their hive-partitioned form.
+# The stage artifacts as hive trees.
 #
-# The stage tests compare a monolith run against a sharded run of the same
-# stage. Both read artifacts produced by the pipeline tests into the configured
-# aggregate folder. Splitting a ~700 MB monolith takes ~11s, so the read-only
-# shard trees are built once per session; a test that modifies the tree takes
-# `fresh_shards` for a copy of its own.
+# Sourced from the canonical chain, which already writes shards -- nothing here
+# manufactures a monolith. Read-only trees are built once per session; a test
+# that writes into a tree takes `fresh_shards` for a copy of its own.
 # ---------------------------------------------------------------------------
 
 
-def split_monolith_to_shards(monolith_path: Path, shard_root: Path) -> None:
-    """Write *monolith_path* as one parquet per household under *shard_root*."""
-    df = pd.read_parquet(monolith_path, dtype_backend="numpy_nullable")
-    for hid, g in df.groupby("HuisIdBSV", sort=True):
-        d = shard_root / f"HuisIdBSV={int(hid)}" / f"HuisBatchIdBSV={int(hid)}"
-        d.mkdir(parents=True)
-        g.drop(columns=["HuisIdBSV"]).to_parquet(d / "part.parquet", index=False)
+@pytest.fixture(scope="session")
+def imputed_shards(sharded_stage3):
+    """`household_imputed` as the chain wrote it. Read-only: do not modify."""
+    return sharded_stage3 / "household_imputed"
 
 
 @pytest.fixture(scope="session")
-def aggregate_artifacts(tmp_path_factory, sharded_stage3, sharded_calculated):
-    """The stage artifacts as single-file monoliths.
-
-    The content is the canonical chain's: `household_imputed` read back out of
-    its shards and written as one file, and `household_calculated` as the
-    chain already wrote it. Same data, one file -- which is the whole point for
-    the cross-format gates, whose monolith and shard sides are both derived
-    from here via `split_monolith_to_shards`.
-
-    Built by this fixture rather than left behind by whichever pipeline-marked
-    test ran first: a fixture that depends on another test having executed is
-    order-dependent, and its failure mode is a missing file rather than a
-    named prerequisite.
-    """
-    from etdmap.storage import read_source_frame
-
-    def _as_monolith(source, dest):
-        """One file carrying what a monolith carries.
-
-        `HuisBatchIdBSV` is dropped: it is a partition key the hive path
-        supplies, not a column of the artifact -- `split_monolith_to_shards`,
-        the inverse of this, puts it back into the path and never into the
-        frame. `HuisIdBSV` is the opposite case and stays, as the real column
-        a monolith identifies households by.
-        """
-        df = read_source_frame(str(source))
-        df = df.drop(columns=["HuisBatchIdBSV"], errors="ignore")
-        df["HuisIdBSV"] = df["HuisIdBSV"].astype("Int64")
-        df.to_parquet(dest, engine="pyarrow", index=False)
-
-    folder = tmp_path_factory.mktemp("aggregate_artifacts")
-    _as_monolith(sharded_stage3 / "household_imputed",
-                 folder / "household_imputed.parquet")
-    _as_monolith(sharded_calculated, folder / "household_calculated.parquet")
-    return folder
-
-
-@pytest.fixture(scope="session")
-def imputed_shards(tmp_path_factory, aggregate_artifacts):
-    """household_imputed.parquet as a hive tree. Read-only: do not modify."""
-    root = tmp_path_factory.mktemp("imputed_shards") / "shards"
-    split_monolith_to_shards(aggregate_artifacts / "household_imputed.parquet", root)
-    return root
-
-
-@pytest.fixture(scope="session")
-def calculated_shards(tmp_path_factory, aggregate_artifacts):
-    """household_calculated.parquet as a hive tree. Read-only: do not modify."""
-    root = tmp_path_factory.mktemp("calculated_shards") / "shards"
-    split_monolith_to_shards(aggregate_artifacts / "household_calculated.parquet", root)
-    return root
+def calculated_shards(tmp_path_factory, sharded_stage3):
+    """`household_calculated` as a hive tree. Read-only: do not modify."""
+    out = tmp_path_factory.mktemp("calculated_shards") / "household_calculated"
+    add_calculated_columns_to_hh_data_ibis(
+        source_path=str(sharded_stage3 / "household_imputed"),
+        output_path=str(out),
+    )
+    return out
 
 
 @pytest.fixture()
-def fresh_shards(tmp_path, aggregate_artifacts):
-    """A private shard tree, for a test that modifies it.
+def fresh_shards(tmp_path, imputed_shards, calculated_shards):
+    """A private copy of a stage's shard tree, for a test that modifies it.
 
-    Costs a full split per call, so use `imputed_shards` or `calculated_shards`
-    unless the test writes into the tree.
+    Copying is what makes it private; the read-only fixtures above are shared,
+    so a test that writes into one would leak into every later test.
     """
-    def build(monolith_name: str, dirname: str = "shards") -> Path:
+    # Keyed by ARTIFACT NAME, with no `.parquet`: these are shard directories,
+    # and a suffix here would assert a shape the artifact does not have
+    # (ADR-001).
+    sources = {
+        "household_imputed": imputed_shards,
+        "household_calculated": calculated_shards,
+    }
+
+    def build(artifact: str, dirname: str = "shards") -> Path:
         root = tmp_path / dirname
-        split_monolith_to_shards(aggregate_artifacts / monolith_name, root)
+        shutil.copytree(sources[artifact], root)
         return root
 
     return build

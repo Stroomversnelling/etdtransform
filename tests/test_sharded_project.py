@@ -1,23 +1,20 @@
 """
-Stage 6 (project aggregation) works on both storage layouts.
+Stage 6: project aggregation.
 
-Project-level outputs STAY single parquet files (design decision: they are
-small); only the READ side is format-detected -- when
-``household_<interval>`` is a hive shard directory it is read with
-union_by_name, otherwise the legacy ``household_<interval>.parquet`` file is
-read. The SQL math is frozen.
+Two subjects. **What the stage computes** -- the project value at a timestamp
+is the mean over that project's households and no other project's. **What it
+refuses** -- a source with duplicate (HuisIdBSV, ReadingDate) rows.
 
-Equivalence gate: project aggregation over the SAME resampled data stored as
-a monolith and as hive shards must produce identical project files.
+Project outputs are single parquet files by design, whatever shape the
+household artifacts they read had; that is this writer's own behaviour, not a
+mode. Cross-FORMAT reading is `etdmap.storage`'s subject and is tested there.
 """
 
 import shutil
-from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import etdtransform
 from etdtransform.aggregate import (
     aggregate_project_data_duckdb,
     resample_hh_data_duckdb,
@@ -29,64 +26,87 @@ pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 
 
-class TestProjectAggregationCrossFormat:
-    def test_monolith_vs_sharded_equivalence(self, tmp_path, aggregate_artifacts,
-                                             calculated_shards):
-        source = aggregate_artifacts / "household_calculated.parquet"
+_AVG_COL = "ElektriciteitNetgebruikHoogDiff"
+_PROJECT_CONFIG = {
+    _AVG_COL: {"resample_method": "sum", "aggregate_method": "avg"},
+}
 
-        flat_dir = tmp_path / "flat"
-        flat_dir.mkdir()
-        resample_hh_data_duckdb(str(source), str(flat_dir), intervals=("60min",))
-        aggregate_project_data_duckdb(
-            intervals=("60min",), aggregate_folder_path=str(flat_dir)
-        )
+#: (project, household) -> value. Two projects, two households each, with
+#: per-project means (3.0 and 20.0) that are far apart and nowhere near the
+#: mean over all four (11.5), so aggregating across projects is visible
+#: rather than plausible.
+_MEMBERSHIP = {(1, 1): 2.0, (1, 2): 4.0, (2, 3): 10.0, (2, 4): 30.0}
+_EXPECTED_MEAN = {1: 3.0, 2: 20.0}
+_SLOTS = 3
 
-        shard_src = calculated_shards
-        shard_dir = tmp_path / "shard"
-        shard_dir.mkdir()
-        resample_hh_data_duckdb(
-            str(shard_src), str(shard_dir), intervals=("60min",),
-            partition_output=True,
-        )
-        aggregate_project_data_duckdb(
-            intervals=("60min",), aggregate_folder_path=str(shard_dir)
-        )
 
-        a = pd.read_parquet(flat_dir / "project_60min.parquet",
-                            dtype_backend="numpy_nullable")
-        b = pd.read_parquet(shard_dir / "project_60min.parquet",
-                            dtype_backend="numpy_nullable")
-        assert set(a.columns) == set(b.columns), sorted(set(a.columns) ^ set(b.columns))
-        key = ["ProjectIdBSV", "ReadingDate"]
-        a = a[sorted(a.columns)].sort_values(key).reset_index(drop=True)
-        b = b[sorted(b.columns)].sort_values(key).reset_index(drop=True)
-        assert len(a) == len(b)
-        for col in a.columns:
-            av, bv = a[col], b[col]
-            assert av.isna().equals(bv.isna()), f"null mask differs: {col}"
-            try:
-                diff = (av.astype("float64") - bv.astype("float64")).abs().fillna(0)
-                assert diff.max() <= 1e-9, f"values differ: {col} (max {diff.max()})"
-            except (ValueError, TypeError):
-                assert av.astype("string").equals(bv.astype("string")), (
-                    f"values differ: {col}")
+class TestProjectAggregateIsTheMeanOverItsOwnHouseholds:
+    """The project value at a timestamp is the mean over that project's
+    households, and no other project's.
+
+    The monolith-versus-shards comparison protected this indirectly, through a
+    single project. Two projects state it directly, and catch the case the
+    comparison could not: both layouts aggregating across projects together.
+    """
+
+    @pytest.fixture
+    def project_rows(self, tmp_path):
+        from unittest.mock import patch
+
+        from conftest import household_frame, write_shard_tree
+
+        agg = tmp_path / "agg"
+        write_shard_tree(agg / "household_15min", {
+            hid: household_frame(n_rows=_SLOTS, project=pid, freq="15min",
+                                 **{_AVG_COL: value})
+            for (pid, hid), value in _MEMBERSHIP.items()
+        })
+
+        with patch("etdmap.data_model.get_aggregation_config",
+                   return_value=_PROJECT_CONFIG):
+            aggregate_project_data_duckdb(
+                intervals=("15min",), aggregate_folder_path=str(agg),
+            )
+        return pd.read_parquet(agg / "project_15min.parquet",
+                               dtype_backend="numpy_nullable")
+
+    def test_each_project_takes_the_mean_of_its_own_households(self, project_rows):
+        for pid, expected in _EXPECTED_MEAN.items():
+            rows = project_rows[project_rows["ProjectIdBSV"] == pid]
+            assert rows[_AVG_COL].astype(float).tolist() == [expected] * _SLOTS
+
+    def test_both_projects_are_present_and_separate(self, project_rows):
+        assert sorted(project_rows["ProjectIdBSV"].unique().tolist()) == [1, 2]
+        assert len(project_rows) == _SLOTS * len(_EXPECTED_MEAN)
+
+    def test_the_project_output_is_a_single_file(self, tmp_path, project_rows):
+        # Project outputs stay monoliths by design, whatever shape the
+        # household artifacts they were read from had.
+        assert (tmp_path / "agg" / "project_15min.parquet").is_file()
+
+
+class TestShardedSourceGuards:
+    """What the stage refuses."""
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
                                                             fresh_shards):
         # Copies a batch directory in, so it needs a tree of its own.
-        shard_src = fresh_shards("household_calculated.parquet")
-        shard_dir = tmp_path / "shard"
-        shard_dir.mkdir()
+        from conftest import shard_dir
+
+        shard_src = fresh_shards("household_calculated")
+        out_dir = tmp_path / "resampled"
+        out_dir.mkdir()
         resample_hh_data_duckdb(
-            str(shard_src), str(shard_dir), intervals=("60min",),
-            partition_output=True,
+            str(shard_src), str(out_dir), intervals=("60min",),
         )
         # Duplicate one household's resampled shard under a second batch id.
-        hh_dir = next((shard_dir / "household_60min").glob("HuisIdBSV=*"))
+        hh_dir = next((out_dir / "household_60min").glob("HuisIdBSV=*"))
+        household_id = int(hh_dir.name.split("=")[1])
         src_batch = next(hh_dir.glob("HuisBatchIdBSV=*"))
-        shutil.copytree(src_batch, hh_dir / "HuisBatchIdBSV=999")
+        shutil.copytree(src_batch, shard_dir(out_dir / "household_60min",
+                                             household_id, 999))
 
         with pytest.raises(ValueError):
             aggregate_project_data_duckdb(
-                intervals=("60min",), aggregate_folder_path=str(shard_dir)
+                intervals=("60min",), aggregate_folder_path=str(out_dir)
             )

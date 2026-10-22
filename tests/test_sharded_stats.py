@@ -1,12 +1,13 @@
 """
-Wide-stage stats (etdtransform.data_stats.get_data_stats) work on both
-storage layouts: a monolith file and a hive shard directory of the SAME data
-must produce identical stats rows (HuisBatchIdBSV is excluded from stats by
-default, like the other id columns, so the output schema matches across
-formats -- cross-stage drift comparisons stay well-defined).
+Wide-stage stats (etdtransform.data_stats.get_data_stats).
+
+Two subjects. **What it computes** -- a household's stats come from that
+household's rows and no others. **How it degrades** -- a column whose variance
+overflows float64 reports NA with a warning rather than killing the report.
+
+Cross-FORMAT reading is `etdmap.storage`'s subject and is tested there.
 """
 
-from pathlib import Path
 
 import pandas as pd
 
@@ -26,17 +27,19 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
     not kill the whole stats report: that column's stats become NA with a
     factual warning, counts are kept, and every other column reports normally
     (ADR-022: NA = 'we do not know', stated visibly)."""
-    dates = pd.date_range("2024-01-01", periods=10, freq="5min", tz="UTC")
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * 10, dtype="Int64"),
-        "ReadingDate": dates,
-        "Normal": pd.array([float(i) for i in range(10)], dtype="Float64"),
-        "HugeRatio": pd.array([1e200, 2e200] * 5, dtype="Float64"),
-    })
-    p = tmp_path / "stage.parquet"
-    df.to_parquet(p)
+    from conftest import household_frame, write_shard_tree
 
-    stats = get_data_stats(str(p), precision="exact")
+    # A hive tree, because that is the shape a wide stage artifact has when
+    # the stats are collected over it in production.
+    root = write_shard_tree(tmp_path / "household_calculated", {
+        1: household_frame(
+            n_rows=10,
+            Normal=[float(i) for i in range(10)],
+            HugeRatio=[1e200, 2e200] * 5,
+        )
+    })
+
+    stats = get_data_stats(str(root), precision="exact")
 
     assert {"Normal", "HugeRatio"}.issubset(set(stats["column"]))
     normal = stats[stats["column"] == "Normal"].iloc[0]
@@ -48,34 +51,47 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
     assert any("HugeRatio" in w for w in warnings)
 
 
-def test_monolith_vs_sharded_stats_equivalence(tmp_path, aggregate_artifacts,
-                                               imputed_shards):
-    source = aggregate_artifacts / "household_imputed.parquet"
-    shard_src = imputed_shards
+#: Per household, a block of values whose mean, min and max share no value
+#: with the other household's -- so stats pooled across households would be
+#: wrong rather than close. Pooled, both means would read 7.0.
+_PER_HOUSEHOLD = {1: [0.0, 1.0, 2.0, 3.0, 4.0], 2: [10.0, 11.0, 12.0, 13.0, 14.0]}
+_EXPECTED = {1: {"mean": 2.0, "min": 0.0, "max": 4.0, "count": 5},
+             2: {"mean": 12.0, "min": 10.0, "max": 14.0, "count": 5}}
 
-    # precision="exact": approximate quantiles (the default) use DuckDB
-    # sketches whose result depends on scan order, which differs between a
-    # shard glob and a monolith (observed 0.007 on a median). Exact quantiles
-    # over the identical multiset are order-independent.
-    a = get_data_stats(str(source), precision="exact")
-    b = get_data_stats(str(shard_src), precision="exact")
 
-    key = [c for c in ["column", "season"] if c in a.columns]
-    a = a.sort_values(key).reset_index(drop=True)
-    b = b.sort_values(key).reset_index(drop=True)
-    assert set(a["column"]) == set(b["column"]), (
-        sorted(set(a["column"]) ^ set(b["column"])))
-    assert len(a) == len(b)
-    for col in a.columns:
-        av, bv = a[col], b[col]
-        assert av.isna().equals(bv.isna()), f"null mask differs: {col}"
-        try:
-            # 1e-6, not exact: aggregating a shard glob sums in a different
-            # order than one monolith file, so means/stds differ in the last
-            # float bits (observed 2e-9). The underlying DATA is identical --
-            # the per-stage value comparisons prove that exactly.
-            diff = (av.astype("float64") - bv.astype("float64")).abs().fillna(0)
-            assert diff.max() <= 1e-6, f"values differ: {col} (max {diff.max()})"
-        except (ValueError, TypeError):
-            assert av.astype("string").equals(bv.astype("string")), (
-                f"values differ: {col}")
+@pytest.fixture
+def per_household_stats(tmp_path):
+    """Stats over a sharded source holding two households."""
+    from conftest import household_frame, write_shard_tree
+
+    root = write_shard_tree(tmp_path / "stage", {
+        hid: household_frame(n_rows=len(values), Measured=values)
+        for hid, values in _PER_HOUSEHOLD.items()
+    })
+    return get_data_stats(str(root), precision="exact")
+
+
+def test_stats_are_computed_over_each_households_own_rows(per_household_stats):
+    """A household's stats come from its rows and no others.
+
+    The monolith-versus-shards comparison protected this indirectly. Stated
+    directly it also catches the case a comparison cannot: both layouts
+    pooling households together.
+    """
+    measured = per_household_stats[per_household_stats["column"] == "Measured"]
+    assert not measured.empty, "no stats row for the Measured column"
+    for hid, expected in _EXPECTED.items():
+        rows = measured[measured["HuisIdBSV"] == hid]
+        assert len(rows) == 1, f"household {hid}: {len(rows)} stats rows"
+        row = rows.iloc[0]
+        assert int(row["count"]) == expected["count"]
+        assert float(row["mean"]) == pytest.approx(expected["mean"])
+        assert float(row["min"]) == pytest.approx(expected["min"])
+        assert float(row["max"]) == pytest.approx(expected["max"])
+
+
+def test_both_households_get_their_own_row(per_household_stats):
+    measured = per_household_stats[per_household_stats["column"] == "Measured"]
+    assert sorted(measured["HuisIdBSV"].unique().tolist()) == sorted(_PER_HOUSEHOLD)
+
+

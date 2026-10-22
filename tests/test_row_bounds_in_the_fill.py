@@ -125,10 +125,12 @@ class TestADeliveredValueOutsideTheRuleBound:
         assert _types(out, slice(1, 1))[0] & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
         assert not out.loc[1, f"{DIFF}_is_imputed"]
 
-    def test_a_value_outside_its_own_declared_bound_is_not_this_signal(self):
-        # 2.0 breaks the declared 1.5, which is the threshold pass's case, not
-        # this signal's. Row 0 delivers a real value: an opening NA would make
-        # the 2.0 read as a frozen span's catch-up, which the pass keeps.
+    def test_a_value_breaking_both_bounds_carries_both_signals(self):
+        # 2.0 breaks the column's declared 1.5 AND the row's rule bound of
+        # [0.5, 0.5]. Two independent facts about one value, so both are
+        # recorded: signals co-exist, and one is never withheld because
+        # another applies. Row 0 delivers a real value -- an opening NA would
+        # make the 2.0 read as a frozen span's catch-up, which the pass keeps.
         out = _impute(
             _frame(
                 [100.0, 102.0, pd.NA, 103.0],
@@ -139,8 +141,34 @@ class TestADeliveredValueOutsideTheRuleBound:
             constraints=_constraints(*FOLLOWS_K),
         )
         value = _types(out, slice(1, 1))[0]
-        assert not value & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
         assert value & ImputeType.THRESHOLD_VIOLATED.value
+        assert value & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
+        # The value does NOT survive here, and that is the threshold pass
+        # acting rather than this signal: a reading outside the column's
+        # declared range is blanked and refilled, which its own actions record.
+        # "Signalled and left alone" is the rule-bound-only case above.
+        assert out.loc[1, f"{DIFF}_is_imputed"]
+        assert value & ImputeType.UNSCALED_AVERAGE.value
+
+    def test_the_two_bound_signals_stay_distinguishable(self):
+        # The reason both are kept: a reader must be able to tell a value that
+        # only breaks its column's range from one that only contradicts its
+        # row, and from one that does both. Withholding either collapses the
+        # three cases into two.
+        breaks_rule_only = _types(
+            _impute(
+                _frame(
+                    [100.0, 100.5, pd.NA, 102.0],
+                    [pd.NA, 1.0, 1.0, 1.0],
+                    diffs=[pd.NA, 1.2, pd.NA, pd.NA],
+                    k=[pd.NA, 0.5, pd.NA, pd.NA],
+                ),
+                constraints=_constraints(*FOLLOWS_K),
+            ),
+            slice(1, 1),
+        )[0]
+        assert breaks_rule_only & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
+        assert not breaks_rule_only & ImputeType.THRESHOLD_VIOLATED.value
 
     def test_a_delivered_value_inside_the_rule_bound_is_silent(self):
         out = _impute(

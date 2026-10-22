@@ -1,9 +1,9 @@
 """The calculated stage: derive what a household does not deliver.
 
-Stage 3 of the pipeline. Reads the imputed households, works out per household
+Stage 4 of the pipeline. Reads the imputed households, works out per household
 which catalog variables it can derive from what it has, derives them, fills the
-gaps the derivation cannot reach, and writes the result -- as one parquet file
-or as a hive shard tree.
+gaps the derivation cannot reach, and writes the result as a hive shard tree --
+one shard per (household, batch).
 
 Separated from aggregate.py, which holds the imputation and the
 resample/aggregate stages. The three stages share almost nothing but the
@@ -92,7 +92,6 @@ def add_calculated_columns_to_hh_data_ibis(
     output_path: str,
     catalog_df=None,
     target_columns=None,
-    partition_output: bool = False,
 ) -> None:
     """
     Ibis/DuckDB variant: derives calculated columns without a full pandas load.
@@ -106,20 +105,17 @@ def add_calculated_columns_to_hh_data_ibis(
       1. Availability analysis -- one DuckDB GROUP BY pass over the parquet.
       2. Planning -- DatasetAdapter.execution_plan_for_available per schema group.
       3. Mutate per schema group -- ibis filter + sequential mutate per derived col.
-      4. Combine -- DuckDB read_parquet with union_by_name=True.
+      4. Write -- one hive shard per (household, batch).
 
     Parameters
     ----------
     source_path : str
-        Path to household_imputed.parquet (input).
+        The imputed household artifact (input).
     output_path : str
-        Path for household_calculated.parquet (output).
-    partition_output : bool
-        When True, write hive shards (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/) under
-        output_path (a directory, cleared before writing) instead of one
-        parquet file. Requires HuisBatchIdBSV in the source (a sharded
-        directory source provides it as a hive column). Default False: the
-        single-file write is unchanged.
+        Directory for the calculated hive shards
+        (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/). Cleared before writing, so
+        re-runs are idempotent. Requires HuisBatchIdBSV in the source (a
+        sharded directory source provides it as a hive column).
 
     Notes
     -----
@@ -128,9 +124,7 @@ def add_calculated_columns_to_hh_data_ibis(
     With a directory source the input is validated at entry: duplicate
     (HuisIdBSV, ReadingDate) rows raise (overlapping batch periods).
     """
-    import duckdb
     import shutil
-    import tempfile
     from etdmap.catalog import load_catalog
     from etdtransform.calculated_columns import undefined_where
     from etdtransform.calculated_flags import (
@@ -157,6 +151,7 @@ def add_calculated_columns_to_hh_data_ibis(
             _grid_error,
         )
     from etdmap.data_model import all_performance_data_columns, required_performance_data_columns
+    from etdtransform.catalog.compiled import compile_plan
     from etdtransform.catalog.query import DatasetAdapter
     from etdtransform.calculated_columns import sympy_to_ibis
 
@@ -211,10 +206,12 @@ def add_calculated_columns_to_hh_data_ibis(
         # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(tbl)
-    if partition_output and "HuisBatchIdBSV" not in parquet_col_set:
+    if "HuisBatchIdBSV" not in parquet_col_set:
         raise ValueError(
-            "partition_output=True requires a HuisBatchIdBSV column in the "
-            "source; the source has none."
+            "add_calculated_columns_to_hh_data_ibis: the output is written one "
+            "shard per (household, batch) and the source has no "
+            "HuisBatchIdBSV column. A household artifact always carries the "
+            "batch it was mapped in."
         )
 
     # Zon-opwekTotaalDiff -> ZonopwekBruto compatibility shim
@@ -297,8 +294,6 @@ def add_calculated_columns_to_hh_data_ibis(
     )
 
     # Phase 2 + 3: plan and mutate per schema group
-    tmp_dir = tempfile.mkdtemp(prefix="etd_calc_")
-    temp_paths = []
     _written_units: list = []
     _PARTITION_KEYS = ("HuisIdBSV", "HuisBatchIdBSV")
 
@@ -311,31 +306,30 @@ def add_calculated_columns_to_hh_data_ibis(
     # so its batches are different datasets that happen to share an address.
     # Collapsing them to one key per household would file one batch's rows
     # under another batch's path.
-    _shard_units: list = []
-    if partition_output:
-        with checkpoints.phase("shard_units") as mark:
-            _pairs = (
-                tbl.select(*_PARTITION_KEYS).distinct().execute()
-            )
-            _shard_units = sorted(
-                (int(row.HuisIdBSV), int(row.HuisBatchIdBSV))
-                for row in _pairs.itertuples()
-            )
-            _households_with_many = len(
-                {h for h, _ in _shard_units}
-            ) != len(_shard_units)
-            mark["rows"] = len(_shard_units)
-            mark["note"] = (
-                f"{len(_shard_units)} shard(s) over "
-                f"{len({h for h, _ in _shard_units})} household(s)"
-                + ("; some households span batches" if _households_with_many else "")
-            )
+    with checkpoints.phase("shard_units") as mark:
+        _pairs = (
+            tbl.select(*_PARTITION_KEYS).distinct().execute()
+        )
+        _shard_units = sorted(
+            (int(row.HuisIdBSV), int(row.HuisBatchIdBSV))
+            for row in _pairs.itertuples()
+        )
+        _households_with_many = len(
+            {h for h, _ in _shard_units}
+        ) != len(_shard_units)
+        mark["rows"] = len(_shard_units)
+        mark["note"] = (
+            f"{len(_shard_units)} shard(s) over "
+            f"{len({h for h, _ in _shard_units})} household(s)"
+            + ("; some households span batches" if _households_with_many else "")
+        )
 
-        # The writer owns and clears its output directory -- re-runs are
-        # idempotent (same convention as the sharded impute).
-        if os.path.isdir(output_path):
-            shutil.rmtree(output_path)
-        os.makedirs(output_path, exist_ok=True)
+    # The writer owns and clears its output directory -- re-runs are
+    # idempotent (same convention as the sharded impute).
+    if os.path.isdir(output_path):
+        shutil.rmtree(output_path)
+    os.makedirs(output_path, exist_ok=True)
+
     # Derivation provenance accumulators (which equation derived each variable
     # per schema group, and which households belong to each group).
     _prov_plan_rows: list = []
@@ -343,296 +337,213 @@ def add_calculated_columns_to_hh_data_ibis(
     _fill_plan_frames: list = []
     _cat_hash = _catalog_hash(catalog_df)
 
-    try:
-        for group_idx, (available_cols, group_ids) in enumerate(schema_groups.items()):
-            targets = (all_perf_cols - available_cols) & derivable_in_catalog
+    for group_idx, (available_cols, group_ids) in enumerate(schema_groups.items()):
+        targets = (all_perf_cols - available_cols) & derivable_in_catalog
 
-            if not targets:
-                plan: list = []
-                not_derivable: list = []
-            else:
-                with checkpoints.phase("pass1_plan_formulas", note=f"group {group_idx}"):
-                    plan, not_derivable = adapter.execution_plan_for_available(
-                        available_cols, targets
-                    )
-
-            if not_derivable:
-                # Find which RHS input columns failed the completeness threshold
-                # (present in the parquet but below threshold -- not absent entirely).
-                needed_rhs: set = set()
-                for tgt in not_derivable:
-                    for _, rule_row in catalog_df[catalog_df["lhs"] == tgt].iterrows():
-                        needed_rhs.update(rule_row["rhs_vars"])
-                blocked_inputs = sorted((needed_rhs - available_cols) & set(analysis_cols))
-                if blocked_inputs:
-                    group_avail = availability_df[availability_df["HuisIdBSV"].isin(group_ids)]
-                    avail_by_col = {
-                        col: float(group_avail[col].mean())
-                        for col in blocked_inputs
-                        if col in group_avail.columns
-                    }
-                    blocked_str = ", ".join(
-                        f"{c}={v:.1%}"
-                        for c, v in sorted(avail_by_col.items(), key=lambda x: x[1])
-                    )
-                    logging.warning(
-                        f"[calc ibis] Schema group {group_idx}: derivation blocked -- "
-                        f"no usable data in this household: "
-                        f"{blocked_str}. "
-                        f"A column with no values at all cannot feed a formula."
-                    )
-
-                not_req = set(not_derivable) & req_perf_cols
-                hh_sample = sorted(group_ids)[:10]
-                hh_note = (
-                    f"{len(group_ids)} HH: {hh_sample}"
-                    if len(group_ids) <= 10
-                    else f"{len(group_ids)} HH (first 10): {hh_sample}"
-                )
-                logging.error(
-                    f"[calc ibis] Schema group {group_idx} ({hh_note}): "
-                    f"could not derive {sorted(not_derivable)}"
-                    + (f" (required: {sorted(not_req)})" if not_req else "")
-                )
-
-            def _pass1_table(ids, batch_ids=None, record_provenance=False):
-                """PASS 1: the regular formula calculations, as a lazy table.
-
-                Derives each column this schema group cannot get from its
-                supplier, by evaluating the catalog formula the plan chose,
-                and marks every derived cell. Nothing executes here -- the
-                expressions are built and forced later, by whoever writes.
-                """
-                scoped = _read_source_table(household_ids=ids)
-                scoped = scoped.filter(scoped["HuisIdBSV"].isin(ids))
-                if batch_ids is not None:
-                    # A household's batches are separate datasets; a unit is
-                    # one of them, never all of a household's rows.
-                    scoped = scoped.filter(
-                        scoped["HuisBatchIdBSV"].isin(batch_ids)
-                    )
-                if has_zon_rename:
-                    scoped = scoped.rename({"ZonopwekBruto": "Zon-opwekTotaalDiff"})
-
-                derived = []
-                undefined = {}
-                for col_name, rhs_expr in plan:
-                    # The undefined mask reads the denominator, so it is built
-                    # against the table BEFORE the target column is added.
-                    _undefined = undefined_where(rhs_expr, scoped)
-                    scoped = scoped.mutate(
-                        **{col_name: sympy_to_ibis(rhs_expr, scoped)}
-                    )
-                    if _undefined is not None:
-                        undefined[col_name] = _undefined
-                    derived.append(col_name)
-                    if record_provenance:
-                        _prov_plan_rows.append({
-                            "schema_group_id": group_idx,
-                            "variable": col_name,
-                            "rhs_text": str(rhs_expr),
-                            "rhs_vars": ",".join(
-                                sorted(str(s) for s in rhs_expr.free_symbols)
-                            ),
-                        })
-                # Mark the derived cells and flag the ones outside their
-                # declared bound. Nothing else in the pipeline checks a
-                # derived value against its threshold: the validate_ column
-                # for a derived variable is written before this stage runs,
-                # so it exists and is empty.
-                if derived and _calc_grid_minutes is not None:
-                    scoped = scoped.mutate(
-                        **calculated_flag_expressions(
-                            scoped, derived, _calc_grid_minutes,
-                            undefined=undefined,
-                        )
-                    )
-                return scoped
-
-            def _pass2_fill(table, ids):
-                """PASS 2: fill the gaps pass 1 could not reach.
-
-                Two routes, each recorded separately: cell filling evaluates a
-                formula whose inputs happen to be present in a row whose
-                target is not, and zero-width derivation takes the single
-                value the rules narrow a row to. Integrated, not optional: a
-                cell this stage can determine is a cell it should produce.
-                """
-                if _rule_sets is None:
-                    return table
-                filled, report, fill_plan = fill_gaps_in_table(
-                    table, ids, _rule_sets, checkpoints=checkpoints
-                )
-                if not fill_plan.empty:
-                    _fill_plan_frames.append(
-                        fill_plan.assign(schema_group_id=group_idx)
-                    )
-                return filled
-
-            for _hid in group_ids:
-                _prov_hh_rows.append({"HuisIdBSV": int(_hid), "schema_group_id": group_idx})
-
-            if partition_output:
-                # ONE SHARD IS THE UNIT OF WORK: one (household, batch) pair,
-                # derived, filled and written on its own, so the amount of
-                # data in flight never depends on how many units exist.
-                #
-                # The previous shape derived a whole schema group, wrote it to
-                # a temp parquet, and then scattered the estate into shards
-                # with a single partitioned COPY. That COPY was 76.6% of an
-                # estate run and grew x65.7 for x10 rows, because a scatter
-                # with fan-out proportional to the estate is not a bulk write.
-                # Measured per unit instead: flat cost per unit across x10
-                # scale, the estate write from 5,735s to 237s, and peak RSS
-                # from 35.6 GB to 1.7 GB, on identical output.
-                _group_id_set = {int(h) for h in group_ids}
-                _group_units = [
-                    unit for unit in _shard_units if unit[0] in _group_id_set
-                ]
-                if not _group_units:
-                    raise ValueError(
-                        f"schema group {group_idx} has households "
-                        f"{sorted(group_ids)[:5]} with no shard in the "
-                        f"source; a unit path cannot be formed."
-                    )
-                for _unit_index, (_household_id, _batch_id) in enumerate(
-                    _group_units
-                ):
-                    with checkpoints.phase("pass1_build_expressions") as mark:
-                        _unit_tbl = _pass1_table(
-                            [_household_id], batch_ids=[_batch_id],
-                            record_provenance=(_unit_index == 0),
-                        )
-                        mark["note"] = f"{len(plan)} formula(s)"
-                    _unit_tbl = _pass2_fill(_unit_tbl, [_household_id])
-                    with checkpoints.phase(
-                        "pass1_derive_and_write_shard",
-                        note=f"household {_household_id} batch {_batch_id}",
-                    ):
-                        _shard_dir = os.path.join(
-                            output_path,
-                            f"HuisIdBSV={_household_id}",
-                            f"HuisBatchIdBSV={_batch_id}",
-                        )
-                        os.makedirs(_shard_dir, exist_ok=True)
-                        # Hive convention: the partition ids live in the path,
-                        # not in the file, as the imputed shards do.
-                        _unit_tbl.drop(*_PARTITION_KEYS).to_parquet(
-                            os.path.join(_shard_dir, "part.parquet")
-                        )
-                _written_units.extend(_group_units)
-            else:
-                group_tbl = _pass1_table(group_ids, record_provenance=True)
-                group_tbl = _pass2_fill(group_tbl, group_ids)
-                temp_path = os.path.join(tmp_dir, f"calc_group_{group_idx:04d}.parquet")
-                with checkpoints.phase(
-                    "pass1_derive_and_write_group", note=f"group {group_idx}"
-                ) as mark:
-                    group_tbl.to_parquet(temp_path)
-                    mark["note"] = f"group {group_idx}, {len(group_ids)} HH"
-                temp_paths.append(temp_path)
-            logging.info(
-                f"[calc ibis] Group {group_idx + 1}/{len(schema_groups)}: "
-                f"{len(group_ids)} HH, {len(plan)} columns derived"
-            )
-
-        if partition_output:
-            if not _written_units:
-                raise RuntimeError(
-                    "[calc ibis] No shard units written -- no output produced."
-                )
-            # Every unit the source holds must be in the output. A household
-            # whose batches were collapsed to one key would pass a row count
-            # and still have lost a batch, so the units are compared as pairs.
-            _missing_units = sorted(set(_shard_units) - set(_written_units))
-            if _missing_units:
-                raise RuntimeError(
-                    f"[calc ibis] {len(_missing_units)} source shard(s) were "
-                    f"not written: {_missing_units[:5]}. Every "
-                    f"(HuisIdBSV, HuisBatchIdBSV) in the source must appear "
-                    f"in the output."
-                )
-            logging.info(
-                f"[calc ibis] Wrote {len(_written_units)} shard "
-                f"unit(s), one write per (household, batch)"
-            )
-            logging.info(
-                f"[calc ibis] Saved calculated hive shards -> {output_path}"
-            )
-            _write_calc_provenance(
-                output_path, _prov_plan_rows, _prov_hh_rows, _cat_hash,
-                fill_plan_frames=_fill_plan_frames,
-            )
-            checkpoints.log_summary()
-            checkpoints.write(output_path)
-            return None
-
-        if not temp_paths:
-            raise RuntimeError("[calc ibis] No schema groups processed -- no output written.")
-
-        # Phase 4: combine with Polars streaming (diagonal_relaxed fills missing cols with null)
-        import polars as pl
-        import tempfile
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        logging.info(
-            f"[calc ibis] Combining {len(temp_paths)} group parquets -> {output_path}"
-        )
-        frames = [pl.scan_parquet(p) for p in temp_paths]
-        with checkpoints.phase(
-            "polars_combine", note=f"{len(temp_paths)} group parquets"
-        ):
-            pl.concat(frames, how="diagonal_relaxed").sink_parquet(
-                output_path, compression="snappy"
-            )
-
-        # Polars writes string columns as large_string (large_utf8). Pandas
-        # dtype_backend="numpy_nullable" maps utf8 -> string[python] but maps
-        # large_utf8 -> object, violating ADR-005. Cast large_string -> string
-        # via a PyArrow streaming passthrough so the output is dtype-correct.
-        pf = pq.ParquetFile(output_path)
-        arrow_schema = pf.schema_arrow
-        if any(pa.types.is_large_string(arrow_schema.field(i).type) for i in range(len(arrow_schema))):
-            new_schema = pa.schema([
-                f.with_type(pa.string()) if pa.types.is_large_string(f.type) else f
-                for f in arrow_schema
-            ])
-            tmp_fd, tmp_path = tempfile.mkstemp(
-                suffix=".parquet", dir=os.path.dirname(output_path)
-            )
-            os.close(tmp_fd)
-            try:
-                with checkpoints.phase(
-                    "large_string_rewrite", note="full read and write of the output"
-                ) as mark:
-                    with pq.ParquetWriter(tmp_path, new_schema, compression="snappy") as writer:
-                        rewritten = 0
-                        for batch in pf.iter_batches():
-                            writer.write_batch(batch.cast(new_schema))
-                            rewritten += batch.num_rows
-                        mark["rows"] = rewritten
-                    pf = None  # release file handle before replace (Windows requires this)
-                    os.replace(tmp_path, output_path)
-            except Exception:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
+        if not targets:
+            plan: list = []
+            not_derivable: list = []
         else:
-            pf = None
+            with checkpoints.phase("pass1_plan_formulas", note=f"group {group_idx}"):
+                plan, not_derivable = adapter.execution_plan_for_available(
+                    available_cols, targets
+                )
+                # The plan is fixed for the whole group, while _pass1_table
+                # runs once per shard unit. Compiling here keeps lambdify out
+                # of that loop.
+                plan = compile_plan(plan)
 
-        logging.info("[calc ibis] Saved household_calculated.parquet")
+        if not_derivable:
+            # Find which RHS input columns failed the completeness threshold
+            # (present in the parquet but below threshold -- not absent entirely).
+            needed_rhs: set = set()
+            for tgt in not_derivable:
+                for _, rule_row in catalog_df[catalog_df["lhs"] == tgt].iterrows():
+                    needed_rhs.update(rule_row["rhs_vars"])
+            blocked_inputs = sorted((needed_rhs - available_cols) & set(analysis_cols))
+            if blocked_inputs:
+                group_avail = availability_df[availability_df["HuisIdBSV"].isin(group_ids)]
+                avail_by_col = {
+                    col: float(group_avail[col].mean())
+                    for col in blocked_inputs
+                    if col in group_avail.columns
+                }
+                blocked_str = ", ".join(
+                    f"{c}={v:.1%}"
+                    for c, v in sorted(avail_by_col.items(), key=lambda x: x[1])
+                )
+                logging.warning(
+                    f"[calc ibis] Schema group {group_idx}: derivation blocked -- "
+                    f"no usable data in this household: "
+                    f"{blocked_str}. "
+                    f"A column with no values at all cannot feed a formula."
+                )
 
-        _write_calc_provenance(
-            output_path, _prov_plan_rows, _prov_hh_rows, _cat_hash,
-            fill_plan_frames=_fill_plan_frames,
+            not_req = set(not_derivable) & req_perf_cols
+            hh_sample = sorted(group_ids)[:10]
+            hh_note = (
+                f"{len(group_ids)} HH: {hh_sample}"
+                if len(group_ids) <= 10
+                else f"{len(group_ids)} HH (first 10): {hh_sample}"
+            )
+            logging.error(
+                f"[calc ibis] Schema group {group_idx} ({hh_note}): "
+                f"could not derive {sorted(not_derivable)}"
+                + (f" (required: {sorted(not_req)})" if not_req else "")
+            )
+
+        def _pass1_table(ids, batch_ids=None, record_provenance=False):
+            """PASS 1: the regular formula calculations, as a lazy table.
+
+            Derives each column this schema group cannot get from its
+            supplier, by evaluating the catalog formula the plan chose,
+            and marks every derived cell. Nothing executes here -- the
+            expressions are built and forced later, by whoever writes.
+            """
+            scoped = _read_source_table(household_ids=ids)
+            scoped = scoped.filter(scoped["HuisIdBSV"].isin(ids))
+            if batch_ids is not None:
+                # A household's batches are separate datasets; a unit is
+                # one of them, never all of a household's rows.
+                scoped = scoped.filter(
+                    scoped["HuisBatchIdBSV"].isin(batch_ids)
+                )
+            if has_zon_rename:
+                scoped = scoped.rename({"ZonopwekBruto": "Zon-opwekTotaalDiff"})
+
+            derived = []
+            undefined = {}
+            for col_name, compiled in plan:
+                # The undefined mask reads the denominator, so it is built
+                # against the table BEFORE the target column is added.
+                _undefined = undefined_where(compiled, scoped)
+                scoped = scoped.mutate(
+                    **{col_name: sympy_to_ibis(compiled, scoped)}
+                )
+                if _undefined is not None:
+                    undefined[col_name] = _undefined
+                derived.append(col_name)
+                if record_provenance:
+                    _prov_plan_rows.append({
+                        "schema_group_id": group_idx,
+                        "variable": col_name,
+                        "rhs_text": str(compiled.expr),
+                        "rhs_vars": ",".join(compiled.symbols),
+                    })
+            # Mark the derived cells and flag the ones outside their
+            # declared bound. Nothing else in the pipeline checks a
+            # derived value against its threshold: the validate_ column
+            # for a derived variable is written before this stage runs,
+            # so it exists and is empty.
+            if derived and _calc_grid_minutes is not None:
+                scoped = scoped.mutate(
+                    **calculated_flag_expressions(
+                        scoped, derived, _calc_grid_minutes,
+                        undefined=undefined,
+                    )
+                )
+            return scoped
+
+        def _pass2_fill(table, ids):
+            """PASS 2: fill the gaps pass 1 could not reach.
+
+            Two routes, each recorded separately: cell filling evaluates a
+            formula whose inputs happen to be present in a row whose
+            target is not, and zero-width derivation takes the single
+            value the rules narrow a row to. Integrated, not optional: a
+            cell this stage can determine is a cell it should produce.
+            """
+            if _rule_sets is None:
+                return table
+            filled, report, fill_plan = fill_gaps_in_table(
+                table, ids, _rule_sets, checkpoints=checkpoints
+            )
+            if not fill_plan.empty:
+                _fill_plan_frames.append(
+                    fill_plan.assign(schema_group_id=group_idx)
+                )
+            return filled
+
+        for _hid in group_ids:
+            _prov_hh_rows.append({"HuisIdBSV": int(_hid), "schema_group_id": group_idx})
+
+        # ONE SHARD IS THE UNIT OF WORK: one (household, batch) pair,
+        # derived, filled and written on its own, so the amount of data in
+        # flight never depends on how many units exist. A write whose
+        # fan-out is proportional to the estate is not a bulk write --
+        # scattering the whole estate in one partitioned COPY grows x65.7
+        # for x10 rows. Per unit the cost is flat across x10 scale: the
+        # estate write is 237s against 5,735s, at 1.7 GB peak RSS against
+        # 35.6 GB.
+        _group_id_set = {int(h) for h in group_ids}
+        _group_units = [
+            unit for unit in _shard_units if unit[0] in _group_id_set
+        ]
+        if not _group_units:
+            raise ValueError(
+                f"schema group {group_idx} has households "
+                f"{sorted(group_ids)[:5]} with no shard in the "
+                f"source; a unit path cannot be formed."
+            )
+        for _unit_index, (_household_id, _batch_id) in enumerate(
+            _group_units
+        ):
+            with checkpoints.phase("pass1_build_expressions") as mark:
+                _unit_tbl = _pass1_table(
+                    [_household_id], batch_ids=[_batch_id],
+                    record_provenance=(_unit_index == 0),
+                )
+                mark["note"] = f"{len(plan)} formula(s)"
+            _unit_tbl = _pass2_fill(_unit_tbl, [_household_id])
+            with checkpoints.phase(
+                "pass1_derive_and_write_shard",
+                note=f"household {_household_id} batch {_batch_id}",
+            ):
+                _shard_dir = os.path.join(
+                    output_path,
+                    f"HuisIdBSV={_household_id}",
+                    f"HuisBatchIdBSV={_batch_id}",
+                )
+                os.makedirs(_shard_dir, exist_ok=True)
+                # Hive convention: the partition ids live in the path,
+                # not in the file, as the imputed shards do.
+                _unit_tbl.drop(*_PARTITION_KEYS).to_parquet(
+                    os.path.join(_shard_dir, "part.parquet")
+                )
+        _written_units.extend(_group_units)
+        logging.info(
+            f"[calc ibis] Group {group_idx + 1}/{len(schema_groups)}: "
+            f"{len(group_ids)} HH, {len(plan)} columns derived"
         )
-        checkpoints.log_summary()
-        checkpoints.write(output_path)
 
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    if not _written_units:
+        raise RuntimeError(
+            "[calc ibis] No shard units written -- no output produced."
+        )
+    # Every unit the source holds must be in the output. A household
+    # whose batches were collapsed to one key would pass a row count
+    # and still have lost a batch, so the units are compared as pairs.
+    _missing_units = sorted(set(_shard_units) - set(_written_units))
+    if _missing_units:
+        raise RuntimeError(
+            f"[calc ibis] {len(_missing_units)} source shard(s) were "
+            f"not written: {_missing_units[:5]}. Every "
+            f"(HuisIdBSV, HuisBatchIdBSV) in the source must appear "
+            f"in the output."
+        )
+    logging.info(
+        f"[calc ibis] Wrote {len(_written_units)} shard "
+        f"unit(s), one write per (household, batch)"
+    )
+    logging.info(
+        f"[calc ibis] Saved calculated hive shards -> {output_path}"
+    )
+    _write_calc_provenance(
+        output_path, _prov_plan_rows, _prov_hh_rows, _cat_hash,
+        fill_plan_frames=_fill_plan_frames,
+    )
+    checkpoints.log_summary()
+    checkpoints.write(output_path)
 
 
 

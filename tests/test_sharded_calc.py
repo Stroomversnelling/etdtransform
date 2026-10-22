@@ -1,107 +1,59 @@
 """
-Stage 4 (calculated columns) works on both storage layouts.
+Stage 4: the calculated columns.
 
-Design rule: a legacy function's READS go through format detection (a
-directory source is read as shards, with per-supplier schemas unified by
-column name), while its computation and default WRITE behaviour stay
-unchanged. Sharded OUTPUT is an explicit opt-in (partition_output=True) that
-writes a shard folder tree (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/) instead of
-one file -- the math is identical, only the reading and writing differ.
+Two subjects. **What the stage computes** -- a derived column comes from its
+own row's inputs, so how rows are grouped into files cannot change it. **What
+the writer refuses** -- a source with duplicate (HuisIdBSV, ReadingDate) rows
+(overlapping batches), or one with no HuisBatchIdBSV to partition on.
 
-Equivalence gate: the SAME fixture imputed data run as a monolith and as hive
-shards must produce identical calculated values.
-
-Batch safety: with a directory source the function must refuse duplicate
-(HuisIdBSV, ReadingDate) rows (overlapping batches) at entry.
+Cross-FORMAT reading (resolving a monolith or a hive tree) is
+`etdmap.storage`'s subject and is tested there.
 """
 
-import glob as glob_mod
-import os
 import shutil
-from pathlib import Path
 
-import pandas as pd
 import pytest
 
-import etdtransform
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 
-def _read_shards(shard_root: Path) -> pd.DataFrame:
-    frames = []
-    for p in sorted(glob_mod.glob(str(shard_root / "**" / "*.parquet"), recursive=True)):
-        hid = int(Path(p).parent.parent.name.split("=")[1])
-        g = pd.read_parquet(p, dtype_backend="numpy_nullable")
-        g.insert(0, "HuisIdBSV", pd.array([hid] * len(g), dtype="Int64"))
-        frames.append(g)
-    return pd.concat(frames, ignore_index=True)
-
-
-class TestCalcCrossFormat:
-    def test_monolith_vs_sharded_equivalence(self, tmp_path, aggregate_artifacts,
-                                             imputed_shards):
-        source = aggregate_artifacts / "household_imputed.parquet"
-        shard_src = imputed_shards
-
-        out_file = tmp_path / "household_calculated.parquet"
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=str(source), output_path=str(out_file),
-        )
-        out_dir = tmp_path / "household_calculated_shards"
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=str(shard_src), output_path=str(out_dir),
-            partition_output=True,
-        )
-
-        a = pd.read_parquet(out_file, dtype_backend="numpy_nullable")
-        b = _read_shards(out_dir)
-        assert "HuisBatchIdBSV" not in a.columns
-        b = b.drop(columns=[c for c in ["HuisBatchIdBSV"] if c in b.columns])
-
-        common = sorted(set(a.columns) & set(b.columns))
-        assert set(a.columns) == set(b.columns), (
-            sorted(set(a.columns) ^ set(b.columns)))
-        key = ["HuisIdBSV", "ReadingDate"]
-        a = a[common].sort_values(key).reset_index(drop=True)
-        b = b[common].sort_values(key).reset_index(drop=True)
-        for col in common:
-            av, bv = a[col], b[col]
-            assert av.isna().equals(bv.isna()), f"null mask differs: {col}"
-            try:
-                af = av.astype("float64")
-                bf = bv.astype("float64")
-                assert (af - bf).abs().fillna(0).max() <= 1e-9, f"values differ: {col}"
-            except (ValueError, TypeError):
-                assert av.astype("string").equals(bv.astype("string")), (
-                    f"values differ: {col}")
+class TestShardedSourceGuards:
+    """What the writer refuses."""
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
                                                             fresh_shards):
         # Copies a batch directory in, so it needs a tree of its own.
-        shard_src = fresh_shards("household_imputed.parquet")
+        from conftest import shard_dir
+
+        shard_src = fresh_shards("household_imputed")
         # Duplicate household 1 under a second batch: overlapping periods.
-        src1 = next((shard_src / "HuisIdBSV=1").glob("HuisBatchIdBSV=*"))
-        shutil.copytree(src1, shard_src / "HuisIdBSV=1" / "HuisBatchIdBSV=999")
+        src1 = next(shard_dir(shard_src, 1).parent.glob("HuisBatchIdBSV=*"))
+        shutil.copytree(src1, shard_dir(shard_src, 1, 999))
 
         with pytest.raises(ValueError):
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(shard_src),
                 output_path=str(tmp_path / "out"),
-                partition_output=True,
             )
 
-    def test_partition_output_requires_batch_column(self, tmp_path,
-                                                    aggregate_artifacts):
-        # Opting into hive output from a monolith source (no HuisBatchIdBSV)
-        # is a caller error and must fail before writing anything.
-        source = aggregate_artifacts / "household_imputed.parquet"
+    def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
+        # The output is one shard per (household, batch), so a source with no
+        # batch id to file the rows under is a caller error and must fail
+        # before anything is written. Stated with a frame that simply has no
+        # HuisBatchIdBSV, rather than borrowing an artifact that happens to
+        # lack one.
+        from conftest import household_frame
+
+        source = tmp_path / "no_batch_id.parquet"
+        household_frame(ElektriciteitNetgebruikDiff=1.0).to_parquet(
+            source, index=False
+        )
         with pytest.raises(ValueError, match="HuisBatchIdBSV"):
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(source),
                 output_path=str(tmp_path / "out"),
-                partition_output=True,
             )
 
 
@@ -114,28 +66,6 @@ _PER_HOUSEHOLD = {1: (2.0, 3.0), 2: (5.0, 1.0), 3: (0.0, 7.0)}
 _TERUG = "ElektriciteitTerugleveringDiff"
 _NETG = "ElektriciteitNetgebruikDiff"
 _ROWS = 4
-
-
-def _household_frame(teruglevering, netgebruik):
-    """One household's rows, with both halves of each cumulative pair.
-
-    The stage asserts the pairing, and `HuisIdBSV` is left out because the hive
-    path supplies it -- the same split `split_monolith_to_shards` makes.
-    """
-    from etdmap.data_model import cumulative_column
-
-    df = pd.DataFrame({
-        "ProjectIdBSV": pd.array([1] * _ROWS, dtype="Int64"),
-        "ReadingDate": pd.date_range("2024-01-01", periods=_ROWS, freq="5min",
-                                     tz="UTC"),
-        _TERUG: pd.array([teruglevering] * _ROWS, dtype="Float64"),
-        _NETG: pd.array([netgebruik] * _ROWS, dtype="Float64"),
-    })
-    for root in (_TERUG, _NETG):
-        df[cumulative_column(root)] = pd.array(
-            [float(i) for i in range(_ROWS)], dtype="Float64"
-        )
-    return df
 
 
 class TestDerivationIsPerRow:
@@ -153,16 +83,16 @@ class TestDerivationIsPerRow:
 
     @pytest.fixture
     def derived(self, tmp_path):
-        src = tmp_path / "imputed_shards"
-        for hid, (terug, netg) in _PER_HOUSEHOLD.items():
-            d = src / f"HuisIdBSV={hid}" / f"HuisBatchIdBSV={hid}"
-            d.mkdir(parents=True)
-            _household_frame(terug, netg).to_parquet(d / "part.parquet",
-                                                     index=False)
+        from conftest import household_frame, write_shard_tree
+
+        src = write_shard_tree(tmp_path / "imputed_shards", {
+            hid: household_frame(n_rows=_ROWS, **{_TERUG: terug, _NETG: netg})
+            for hid, (terug, netg) in _PER_HOUSEHOLD.items()
+        })
         out = tmp_path / "calculated_shards"
         add_calculated_columns_to_hh_data_ibis(
             source_path=str(src), output_path=str(out),
-            target_columns=self.TARGETS, partition_output=True,
+            target_columns=self.TARGETS,
         )
         from etdmap.storage import read_source_frame
 

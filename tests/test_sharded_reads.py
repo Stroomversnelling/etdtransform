@@ -15,8 +15,12 @@ pass a format. `mapped_household_table` is the sharded-forward whole-table view;
 on a flat-only folder it raises with a pointer to the legacy stage-2 monolith
 (which IS the legacy whole-table view).
 
-Tests build their own tiny layouts in tmp dirs (no dependency on the etdmap
-fixture or on etdmap itself). NONE of the three functions exists yet -> red.
+Tests build their own tiny layouts in tmp dirs, no dependency on the etdmap
+fixture. The hive paths are spelled out here rather than built with
+`conftest.write_shard_tree`, which is the opposite of the rule everywhere else
+in this suite: the subject IS how a tree is spelled, so building it with the
+helper would only assert that the layer detects whatever the helper writes,
+and the spelling itself would never be challenged.
 """
 
 import os

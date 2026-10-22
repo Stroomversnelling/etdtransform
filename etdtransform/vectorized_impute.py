@@ -1193,24 +1193,18 @@ def impute_and_normalize(
             )
 
             # Judged before the fill writes into the column: a delivered value
-            # outside what the rules narrow its row to, while inside the bound
-            # its own column declares, is a signal and is never touched.
+            # outside what the rules narrow its row to is a signal and is
+            # never touched.
             #
             # A spread cell is excluded. It holds a share of a reading the
             # supplier did deliver, but not at this row, and the signal says the
             # supplier delivered this value here.
             delivered = usable_readings(df, diff_col) & ~_spread_rows
-            declared_lo = column_bound(df, diff_col, _cadence, bound_key="Min")
-            declared_hi = column_bound(df, diff_col, _cadence, bound_key="Max")
-            inside_declared = ~(
-                (df[diff_col] < declared_lo).fillna(False)
-                | (df[diff_col] > declared_hi).fillna(False)
-            )
             outside_rule = (
                 (df[diff_col] < row_lo).fillna(False)
                 | (df[diff_col] > row_hi).fillna(False)
             )
-            df["_outside_rule_bound"] = delivered & outside_rule & inside_declared
+            df["_outside_rule_bound"] = delivered & outside_rule
 
             # The fill and the threshold pass read the average through this
             # bounded copy; the project average column itself stays as written.

@@ -1,15 +1,16 @@
 """
 Per-(HuisIdBSV, column, season) stats producer for the wide pipeline
-parquets emitted by etdtransform (``household_default.parquet``,
-``household_imputed.parquet``, ``household_calculated.parquet``).
+artifacts emitted by etdtransform (``household_imputed``,
+``household_calculated``, the resampled intervals).
 
 This module is the symmetric counterpart to
 ``etdmap.mapping_helpers.get_data_stats``. That function handles the
 raw and mapped stages -- many small per-household parquet files, fanned
 out with ProcessPoolExecutor and pandas vectorised reductions. This
-function handles transform's own output: a single wide parquet per
-stage, processed lazily through ibis / DuckDB so the parquet stays on
-disk and only the per-(HH, col) aggregate result lands in pandas.
+function handles transform's own output: one wide artifact per stage,
+holding every household, processed lazily through ibis / DuckDB so the
+data stays on disk and only the per-(HH, col) aggregate result lands in
+pandas.
 
 The output schema is identical to ``get_data_stats`` (enforced via the
 shared ``etdmap._STATS_DTYPES`` contract -- parent ADR-018) so a single
@@ -56,12 +57,14 @@ def get_data_stats(
 ) -> pd.DataFrame:
     """
     Per-(HuisIdBSV, column, season) summary stats from a wide pipeline
-    parquet (``household_default`` / ``household_imputed`` /
-    ``household_calculated``).
+    artifact (``household_imputed`` / ``household_calculated`` / a
+    resampled interval).
 
-    The wide household parquet is keyed by (HuisIdBSV, ReadingDate) and
-    contains every household's rows in a single file. This function
-    emits the same per-entity long-format stats that
+    The artifact is keyed by (HuisIdBSV, ReadingDate) and holds every
+    household. ``parquet_path`` may be a single parquet file or a
+    directory of hive shards; the read layer resolves either, so the
+    stats do not depend on how the stage chose to store its output.
+    This function emits the same per-entity long-format stats that
     ``etdmap.mapping_helpers.get_data_stats`` produces in mapped mode,
     so a single downstream report consumes both producers without
     branching on stage. Schema contract is ``etdmap._STATS_DTYPES``

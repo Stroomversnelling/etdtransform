@@ -5,7 +5,6 @@ import sympy as sp
 
 from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
-from etdtransform.calculated_columns import add_calculated_columns_adaptive
 
 pytestmark = pytest.mark.integration
 
@@ -103,9 +102,13 @@ def test_unsupported_op_raises(tbl):
 
 
 # ---------------------------------------------------------------------------
-# Pandas vs ibis equivalence -- cross-check that both paths produce identical
-# numeric results for the same SymPy expressions.
-# The pandas path is the reference (already validated by test_calculated_columns_adaptive).
+# `sympy_to_ibis` against SymPy itself.
+#
+# Not a comparison of two pipeline implementations: the reference here is
+# `sympy.lambdify` over nullable Series, which is the SPECIFICATION of what an
+# expression means. What is asserted is that translating the same expression
+# into ibis preserves it -- the numbers and, just as much, which cells come
+# back unknown.
 # ---------------------------------------------------------------------------
 
 def _pandas_result(df, expr):
@@ -165,7 +168,7 @@ def test_pandas_ibis_equivalence(tbl, label, expr):
 
 
 # ---------------------------------------------------------------------------
-# Integration: ibis pipeline vs pandas adaptive -- multi-schema fixture
+# Integration: the calculated stage over a multi-schema fixture
 #
 # Three households with intentionally different available columns:
 #   HH 1: A and B present, C absent  -> catalog derives Target = A + B
@@ -194,17 +197,45 @@ def _make_multi_schema_df():
         for _ in range(N):
             rows.append({
                 "HuisIdBSV": pd.NA if household_id is None else household_id,
+                # One batch per household: the stage writes one shard per
+                # (household, batch), and a household artifact always carries
+                # the batch it was mapped in.
+                "HuisBatchIdBSV": household_id,
                 "ProjectIdBSV": 1,
                 "A": a_val,
                 "B": b_val,
                 "C": c_val,
             })
     df = pd.DataFrame(rows)
-    df["HuisIdBSV"] = df["HuisIdBSV"].astype("Int64")
-    df["ProjectIdBSV"] = df["ProjectIdBSV"].astype("Int64")
+    for col in ["HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV"]:
+        df[col] = df[col].astype("Int64")
     for col in ["A", "B", "C"]:
         df[col] = df[col].astype("Float64")
     return df
+
+
+def _run_ibis(tmp_path, catalog, targets, df=None):
+    """Run the production calculated stage over the multi-schema fixture.
+
+    The source is a single parquet, which the stage supports and which this
+    fixture needs: its rows carry no ReadingDate, so a sharded source would
+    trip the batch-safety guard. The OUTPUT is a hive tree, which is the only
+    shape the stage writes.
+    """
+    from etdmap.storage import read_source_frame
+
+    if df is None:
+        df = _make_multi_schema_df()
+    src = str(tmp_path / "household_imputed.parquet")
+    out = str(tmp_path / "household_calculated")
+    df.to_parquet(src, engine="pyarrow")
+    add_calculated_columns_to_hh_data_ibis(
+        source_path=src,
+        output_path=out,
+        catalog_df=catalog,
+        target_columns=targets,
+    )
+    return read_source_frame(out)
 
 
 def _multi_schema_catalog():
@@ -219,57 +250,12 @@ def _multi_schema_catalog():
     )
 
 
-class TestIbisVsPandasMultiSchema:
-    def test_same_derived_values_per_household(self, tmp_path):
-        """Ibis and pandas adaptive must produce identical Target values per household."""
-        df = _make_multi_schema_df()
-        catalog = _multi_schema_catalog()
-
-        # Pandas reference path
-        df_pandas = add_calculated_columns_adaptive(
-            df.copy(), catalog_df=catalog, target_columns={"Target"}
-        )
-
-        # Ibis path via parquet
-        src = str(tmp_path / "imputed.parquet")
-        out = str(tmp_path / "calculated.parquet")
-        df.to_parquet(src, engine="pyarrow")
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=src,
-            output_path=out,
-            catalog_df=catalog,
-            target_columns=["Target"],
-        )
-        df_ibis = pd.read_parquet(out, dtype_backend="numpy_nullable")
-
-        for household_id in [1, 2, 3]:
-            pandas_vals = (
-                df_pandas[df_pandas["HuisIdBSV"] == household_id]["Target"]
-                .astype(float).tolist()
-            )
-            ibis_vals = (
-                df_ibis[df_ibis["HuisIdBSV"] == household_id]["Target"]
-                .astype(float).tolist()
-            )
-            assert ibis_vals == pytest.approx(pandas_vals, rel=1e-9), (
-                f"HH {household_id}: pandas={pandas_vals} ibis={ibis_vals}"
-            )
-
+class TestSchemaGroupingPicksTheRulePerHousehold:
     def test_three_schema_groups_produced(self, tmp_path, caplog):
         """The ibis path must log exactly 3 schema groups for this fixture."""
         import logging
-        df = _make_multi_schema_df()
-        catalog = _multi_schema_catalog()
-        src = str(tmp_path / "imputed.parquet")
-        out = str(tmp_path / "calculated.parquet")
-        df.to_parquet(src, engine="pyarrow")
         with caplog.at_level(logging.INFO):
-            add_calculated_columns_to_hh_data_ibis(
-                source_path=src,
-                output_path=out,
-                catalog_df=catalog,
-                target_columns=["Target"],
-            )
+            _run_ibis(tmp_path, _multi_schema_catalog(), ["Target"])
         assert "3 unique schema groups" in caplog.text
 
     def test_different_rules_applied_per_schema(self, tmp_path):
@@ -277,18 +263,7 @@ class TestIbisVsPandasMultiSchema:
         HH 1 derives Target via A+B; HH 2 via A+C.
         Verify the numeric values match the expected rule, not a cross-household mix.
         """
-        df = _make_multi_schema_df()
-        catalog = _multi_schema_catalog()
-        src = str(tmp_path / "imputed.parquet")
-        out = str(tmp_path / "calculated.parquet")
-        df.to_parquet(src, engine="pyarrow")
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=src,
-            output_path=out,
-            catalog_df=catalog,
-            target_columns=["Target"],
-        )
-        df_out = pd.read_parquet(out, dtype_backend="numpy_nullable")
+        df_out = _run_ibis(tmp_path, _multi_schema_catalog(), ["Target"])
 
         # HH 1: Target = A + B = 1 + 2 = 3
         hh1 = df_out[df_out["HuisIdBSV"] == 1]["Target"].astype(float).tolist()
@@ -338,6 +313,54 @@ def test_a_defined_ratio_still_computes():
     assert float(built["r"].iloc[0]) == pytest.approx(50.0)
 
 
+def _ratio_frame():
+    return pd.DataFrame({
+        "t": pd.array([1.0, 1.0, 1.0, None], dtype="Float64"),
+        "z": pd.array([2.0, 0.0, None, 5.0], dtype="Float64"),
+    })
+
+
+class TestTheTwoEvaluatorsAgreeOnAZeroDenominator:
+    """``evaluate_over_frame`` is the pandas counterpart of ``sympy_to_ibis``
+    and must answer a zero denominator the same way.
+
+    The two run in different passes over the same catalog expressions, so a
+    disagreement means one pass calls a cell undefined and the other hands on
+    an infinity. An infinity passes ``notnull()``, fails the row's rule bound,
+    and is discarded -- so the cell ends up empty either way, but only the ibis
+    pass records ``CALCULATED_UNDEFINED`` for it.
+    """
+
+    def test_a_zero_denominator_is_not_a_value(self):
+        from etdtransform.calculated_columns import evaluate_over_frame
+
+        computed = evaluate_over_frame(RATIO, _ratio_frame())
+        import numpy as np
+
+        assert not np.isinf(
+            computed.astype("float64").to_numpy(na_value=0.0)
+        ).any(), "an infinity passes notnull() and poisons every later sum"
+        # z==0, z null, t null -- the same three the ibis path nulls.
+        assert int(computed.isna().sum()) == 3
+
+    def test_a_defined_ratio_still_computes(self):
+        from etdtransform.calculated_columns import evaluate_over_frame
+
+        computed = evaluate_over_frame(RATIO, _ratio_frame())
+        assert float(computed.iloc[0]) == pytest.approx(50.0)
+
+    def test_it_matches_the_ibis_path_cell_for_cell(self):
+        from etdtransform.calculated_columns import evaluate_over_frame
+
+        frame = _ratio_frame()
+        table = ibis.memtable(frame)
+        from_ibis = table.mutate(r=sympy_to_ibis(RATIO, table)).execute()["r"]
+        from_pandas = evaluate_over_frame(RATIO, frame)
+        assert list(from_pandas.isna()) == list(from_ibis.isna())
+        for a, b in zip(from_pandas.dropna(), from_ibis.dropna()):
+            assert float(a) == pytest.approx(float(b))
+
+
 def test_undefined_where_marks_only_the_zero_denominator():
     table = _ratio_table()
     built = table.mutate(u=undefined_where(RATIO, table)).execute()
@@ -372,17 +395,7 @@ class TestNothingSubstitutesZeroForAnAbsentColumn:
     own declaration. An input that is simply unknown stays unknown.
     """
 
-    @staticmethod
-    def _run(tmp_path, catalog, targets):
-        df = _make_multi_schema_df()
-        src = str(tmp_path / "imputed.parquet")
-        out = str(tmp_path / "calculated.parquet")
-        df.to_parquet(src, engine="pyarrow")
-        add_calculated_columns_to_hh_data_ibis(
-            source_path=src, output_path=out,
-            catalog_df=catalog, target_columns=targets,
-        )
-        return pd.read_parquet(out, dtype_backend="numpy_nullable")
+    _run = staticmethod(_run_ibis)
 
     def test_an_all_null_input_leaves_the_target_empty(self, tmp_path):
         # One rule only, so no fallback can mask the behaviour: household 2's

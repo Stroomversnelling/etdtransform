@@ -43,37 +43,32 @@ def _frame(teruglevering, netgebruik):
     The stage asserts the pairing (``assert_cumulative_interval_pairs_complete``),
     because a set holding one half means the mapping conversion did not happen
     and every later stage would read the missing half as the variable being
-    absent. The cumulative names come from the model rather than being spelled
-    here, so the fixture cannot drift from the pairing the guard enforces.
+    absent. ``household_frame`` derives the cumulative counterparts from the
+    model, so the fixture cannot drift from the pairing the guard enforces.
     """
-    from etdmap.data_model import cumulative_column
+    from conftest import household_frame
 
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
-        "ReadingDate": pd.date_range("2024-01-01", periods=N, freq="5min", tz="UTC"),
-        TERUGLEVERING_ROOT: pd.array(teruglevering, dtype="Float64"),
-        NETGEBRUIK_ROOT: pd.array(netgebruik, dtype="Float64"),
-    })
-    # The registers the intervals belong to. The composites read the interval
-    # columns, so these carry a plain monotonic series: present, paired, and
-    # not pretending to relate to the gaps under test.
-    for root in (TERUGLEVERING_ROOT, NETGEBRUIK_ROOT):
-        df[cumulative_column(root)] = pd.array(
-            [float(i) for i in range(N)], dtype="Float64"
-        )
-    return df
+    return household_frame(
+        n_rows=N,
+        **{TERUGLEVERING_ROOT: teruglevering, NETGEBRUIK_ROOT: netgebruik},
+    )
 
 
 def _derive(df, tmp_path):
-    """Run the production calculated stage over *df* and return the output."""
-    src = str(tmp_path / "imputed.parquet")
-    out = str(tmp_path / "calculated.parquet")
-    df.to_parquet(src, engine="pyarrow")
+    """Run the production calculated stage over *df* and return the output.
+
+    Source and output are hive trees, which is the only shape the stage
+    writes.
+    """
+    from conftest import write_shard_tree
+    from etdmap.storage import read_source_frame
+
+    src = write_shard_tree(tmp_path / "household_imputed", {1: df})
+    out = str(tmp_path / "household_calculated")
     add_calculated_columns_to_hh_data_ibis(
-        source_path=src, output_path=out, target_columns=COMPOSITES,
+        source_path=str(src), output_path=out, target_columns=COMPOSITES,
     )
-    return pd.read_parquet(out, dtype_backend="numpy_nullable")
+    return read_source_frame(out)
 
 
 def _values(out, column):

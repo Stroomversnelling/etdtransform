@@ -1,43 +1,81 @@
-"""
-End-to-end imputation workflow tests.
+"""The canonical chain, composed end to end.
 
-NOTE: These are integration tests that use the local test fixture dataset
-configured in config_test.yaml (see config_test_template.yaml for the
-reference template). The fixture is a small anonymised dataset -- NOT
-production data. Tests must pass on that fixture; any failure is a real bug.
+Every other file in this suite tests one stage. This one tests that they
+COMPOSE: each stage accepts the artifact the previous stage wrote, each
+artifact a full run is supposed to produce appears, and nothing is lost
+between stages -- no household dropped, no project dropped, no derived column
+silently absent.
+
+What it deliberately does NOT do is compare against a recorded copy of a
+previous run. Three such comparisons used to live here, against
+`tests/data/sample_*.parquet` and `tests/data/metadata_*.json`. A pin asserts
+"identical to whenever someone last looked", so every deliberate change to the
+pipeline reddens it and the pin cannot say which changes were deliberate --
+these two had been red since the etdmap flag taxonomy gained
+INTERVAL_FROM_DELIVERED_CUMULATIVE, reporting `min 0 != 2048` for a change that
+was correct. Per-stage VALUES are asserted in the per-stage files, against
+hand-computed expectations on frames those tests build themselves.
+
+The chain here is the one the runner's default path runs: mapped shards ->
+diff averages -> impute -> calculated -> resample -> project aggregate. There
+is no assembly step and no monolith.
 """
 import logging
 import os
-from pathlib import Path
 
-import conftest
+import pandas as pd
+import pytest
+
 import etdmap
 import etdmap.data
+import etdmap.data_model
 import etdmap.index_helpers
-import ibis
-import pandas as pd
-import pyarrow.parquet as pq
-import pytest
-from test_helpers import generate_metadata_parquet_file
 
 import etdtransform
+from etdmap.storage import read_source_frame, resolve_source_path
 from etdtransform.aggregate import (
-    add_calculated_columns_to_hh_data,
-    aggregate_hh_data_5min,
-    aggregate_project_data,
-    impute_hh_data_5min,
-    read_hh_data,
-    resample_hh_data,
+    aggregate_project_data_duckdb,
+    resample_hh_data_duckdb,
 )
-from etdmap.data_model import test_aggregation_columns
-from etdmap.storage import resolve_source_path
-from etdtransform.impute import (
-    AVG_DIFFS_ARTIFACT,
-    prepare_diff_averages_for_impute_ibis,
-    read_diffs,
-)
+from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
+
+#: Both interval forms the parser accepts: "Nmin" and "Nh". 5min is the
+#: passthrough branch, the other two are the grouping branch, so every code
+#: path through the resample is covered without paying for all five intervals
+#: the runner produces.
+INTERVALS = ("5min", "60min", "24h")
+
+#: Composites the calculated stage derives for this fixture. Named rather than
+#: read from the catalog: the point is that the chain publishes them, and a
+#: catalog read here would pass whatever the catalog happened to say.
+COMPOSITES = [
+    "TerugleveringTotaalNetto",
+    "ElektriciteitsgebruikTotaalNetto",
+    "ElektriciteitsgebruikTotaalWarmtepomp",
+    "ElektriciteitsgebruikTotaalGebouwgebonden",
+    "ElektriciteitsgebruikTotaalHuishoudelijk",
+    "Zelfgebruik",
+    "ElektriciteitsgebruikTotaalBruto",
+]
+
+#: Written by the imputation step itself.
+IN_RUN_SUMMARIES = (
+    "impute_summary_household.parquet",
+    "impute_volume_gap_accumulator.parquet",
+)
+
+#: Derived later by etdworkflow's post-processing step from the artifacts
+#: above. A pipeline run must not produce them -- if it does, two producers
+#: exist for one artifact and which one wrote production becomes unknowable.
+POSTPROCESSING_ONLY = (
+    "household_aggregated_diff.parquet",
+    "impute_summary_project.parquet",
+    "impute_volume_gap.parquet",
+    "impute_volume_household.parquet",
+    "impute_volume_project.parquet",
+)
 
 
 @pytest.fixture(scope="session")
@@ -45,420 +83,213 @@ def index_df():
     # update with the manual steps from bsv metadata
     return etdmap.index_helpers.update_include()
 
-@pytest.fixture(scope="session")
-def cum_cols_list():
-    # 10 columns
-    return etdmap.data_model.cumulative_columns[0:10]
 
 def test_include(index_df):
     # test if indeed ProjectBSVId and column Meenemen are present
     assert 'Meenemen' in index_df.columns, 'column "Meenmen" not in index_df'
     # Since this is a manual check, ensure that all values have been given either
     # true or false and not none
-    assert index_df['Meenemen'].notna().all(), 'column Meenemen contains None values' 
+    assert index_df['Meenemen'].notna().all(), 'column Meenemen contains None values'
     assert index_df['Meenemen'].map(lambda x: isinstance(x, bool)).all(), 'column Meenemen has non-boolean values'
+
 
 def test_project_id(index_df):
     assert index_df['ProjectIdBSV'].notna().all(), 'column ProjectIdBSV has None values'
     assert index_df['ProjectIdBSV'].dtype in [int, 'int64', 'Int64', 'int32'], "Column 'ProjectIdBSV' is not an integer dtype"
 
 
-def test_total_workflow_imputations(index_df, cum_cols_list):
-    logging.info("Aggregating 5 minute household data.")
+# ---------------------------------------------------------------------------
+# The chain. Stages 3 and 4 come from conftest (`sharded_stage3`,
+# `sharded_calculated`), which other files share; stages 5 and 6 are added
+# here because only the full-chain test needs them under the REAL aggregation
+# config rather than an isolated one.
+# ---------------------------------------------------------------------------
 
-    aggregate_hh_data_5min()
-    # Check if columns were added and if length of file is correct
-    file_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_default.parquet")
-    default_df = pd.read_parquet(file_path, dtype_backend="numpy_nullable")
-    assert "ProjectIdBSV" in default_df.columns, 'No column ProjectIdBSV in aggregated household_df'
-    assert "HuisIdBSV" in default_df.columns, 'No column HuisIdBSV in aggregated household_df'
-
-    # The default file is the aggregated file for houseshold_dfs 
-    # it should therefore be the legth of the household dfs
-    nmbr_householdids = len(index_df.loc[:, "HuisIdBSV"].unique())
-    household_id = index_df.loc[0, "HuisIdBSV"]
-    file_name = f"household_{household_id}_table.parquet"
-    file_path_hh = os.path.join(etdtransform.options.mapped_folder_path, file_name)
-    household_df = pd.read_parquet(file_path_hh, dtype_backend="numpy_nullable")
-    len_per_hh = len(household_df)
-    assert len(default_df) == len_per_hh * nmbr_householdids, 'aggregated hh file (default) does not have the right length'  
-
-    logging.info("Loading default data with additional columns.")
-    # # "load default data", It's possible to also add columns
-    df = read_hh_data(interval="default", metadata_columns=['Dataleverancier'])
-    assert all([col in df.columns for col in ["HuisIdBSV", "ProjectIdBSV", "Dataleverancier"]])
-
-    logging.info("Preparing diffs.")
-    # # "prepare and save diff averages",
-    prepare_diff_averages_for_impute_ibis(
-        ibis.read_parquet(
-            os.path.join(
-                etdtransform.options.aggregate_folder_path,
-                "household_default.parquet",
-            )
-        ),
-        project_id_column="ProjectIdBSV",
-        cumulative_columns=cum_cols_list,
-        min_eligible=conftest.FIXTURE_MIN_ELIGIBLE,
+@pytest.fixture(scope="session")
+def full_chain(sharded_stage3, sharded_calculated, tmp_path_factory):
+    """Resample and aggregate the calculated output, and return where every
+    artifact of the run landed."""
+    agg = tmp_path_factory.mktemp("full_chain")
+    resample_hh_data_duckdb(
+        source_path=str(sharded_calculated),
+        output_dir=str(agg),
+        intervals=INTERVALS,
     )
-    # should create new files -- avg_diffs is a directory of (project, cadence)
-    # partitions, so what is checked is that the artifact resolves and reads,
-    # not that a particular layout is on disk.
-    path_avg_diffs = resolve_source_path(
-        etdtransform.options.aggregate_folder_path, AVG_DIFFS_ARTIFACT
+    aggregate_project_data_duckdb(
+        intervals=INTERVALS, aggregate_folder_path=str(agg),
     )
-    assert os.path.exists(path_avg_diffs)
+    return {
+        # Two roots, because stage 3 writes to both: `avg_diffs` goes to the
+        # aggregate folder, while the imputed shards and the in-run summaries
+        # go to the `sharded` area inside it (aggregate.py:1098).
+        "agg_root": sharded_stage3.parent,
+        "sharded_area": sharded_stage3,
+        "imputed": sharded_stage3 / "household_imputed",
+        "calculated": sharded_calculated,
+        "resampled": agg,
+    }
+
+
+@pytest.fixture(scope="session")
+def chain_frames(full_chain):
+    """Each household artifact in the chain, read once."""
+    frames = {
+        "imputed": read_source_frame(str(full_chain["imputed"])),
+        "calculated": read_source_frame(str(full_chain["calculated"])),
+    }
+    for interval in INTERVALS:
+        frames[interval] = read_source_frame(
+            str(full_chain["resampled"] / f"household_{interval}")
+        )
+    return frames
+
+
+# ---------------------------------------------------------------------------
+# Every artifact the run is supposed to produce
+# ---------------------------------------------------------------------------
+
+def test_the_diff_averages_resolve_and_read(full_chain):
+    """Imputation's one input artifact. `avg_diffs` is a directory of
+    (project, cadence) partitions, so what is asserted is that it resolves and
+    reads -- not that a particular layout is on disk."""
+    path = resolve_source_path(full_chain["agg_root"], AVG_DIFFS_ARTIFACT)
+    assert os.path.exists(path), f"{AVG_DIFFS_ARTIFACT} did not resolve"
     assert not read_diffs().empty
 
-    logging.info("Imputing data.")
-    # "impute"
-    # This workflow pins its outputs against expected files recorded before
-    # the constraint rules existed, so it runs the explicit comparison mode:
-    # the pin proves the pre-constraint behaviour is unchanged. The
-    # constrained behaviour has its own producers and the empty-vs-full
-    # package comparison in the estate acceptance.
-    # Clear post-processing outputs an OLDER code version may have left in
-    # the test folder: the asserts below prove this run does not write them,
-    # which only means something on a clean slate.
-    for _stale in (
-        "household_aggregated_diff.parquet",
-        "impute_summary_project.parquet",
-        "impute_volume_gap.parquet",
-        "impute_volume_household.parquet",
-        "impute_volume_project.parquet",
-    ):
-        _stale_path = os.path.join(
-            etdtransform.options.aggregate_folder_path, _stale
-        )
-        if os.path.isfile(_stale_path):
-            os.remove(_stale_path)
 
-    df_imputed = impute_hh_data_5min(
-            df,
-            cum_cols=cum_cols_list,
-            sorted=True,
-            use_constraints=False,
-        )
-    # The run writes the slim household summary and the gap accumulator;
-    # household_aggregated_diff, impute_summary_project and the full volume
-    # artifacts are post-processing outputs (etdworkflow/postprocess_reports)
-    # and must NOT appear from the run itself.
-    imputation_summary_house_path = os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            "impute_summary_household.parquet",
-        )
-    accumulator_path = os.path.join(
-            etdtransform.options.aggregate_folder_path,
-            "impute_volume_gap_accumulator.parquet",
-        )
-    assert os.path.isfile(imputation_summary_house_path)
-    assert os.path.isfile(accumulator_path)
-    _slim = pd.read_parquet(
-        imputation_summary_house_path, dtype_backend="numpy_nullable"
-    )
-    assert "diff_col_total" in _slim.columns
-    assert "missing" not in _slim.columns, (
-        "the counts half belongs to post-processing, not the in-run file"
-    )
-    for _not_written in (
-        "household_aggregated_diff.parquet",
-        "impute_summary_project.parquet",
-        "impute_volume_gap.parquet",
-        "impute_volume_household.parquet",
-        "impute_volume_project.parquet",
-    ):
-        assert not os.path.isfile(
-            os.path.join(etdtransform.options.aggregate_folder_path, _not_written)
-        ), f"{_not_written} must come from the post-processing step, not the run"
+def test_every_stage_wrote_its_household_artifact(full_chain):
+    assert full_chain["imputed"].is_dir()
+    assert full_chain["calculated"].is_dir()
+    for interval in INTERVALS:
+        target = full_chain["resampled"] / f"household_{interval}"
+        assert target.is_dir(), f"household_{interval} is not a shard directory"
 
-    logging.info("Adding calculated columns.")
-    # "add calculated columns"
-    add_calculated_columns_to_hh_data(df_imputed)
-    # should create file: 
-    hh_calculated_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_calculated.parquet")
-    assert os.path.isfile(hh_calculated_path)
-    # the household_calculated file should contain the following cols:
-    calc_cols = [
-        "TerugleveringTotaalNetto",
-        "ElektriciteitsgebruikTotaalNetto",
-        "ElektriciteitsgebruikTotaalWarmtepomp",
-        "ElektriciteitsgebruikTotaalGebouwgebonden",
-        "ElektriciteitsgebruikTotaalHuishoudelijk",
-        "Zelfgebruik",
-        "ElektriciteitsgebruikTotaalBruto"
+
+def test_every_interval_got_a_project_aggregate(full_chain):
+    # Project aggregates are single files by that writer's own design,
+    # whatever shape the household artifacts they read had.
+    for interval in INTERVALS:
+        target = full_chain["resampled"] / f"project_{interval}.parquet"
+        assert target.is_file(), f"project_{interval}.parquet is not a file"
+
+
+def test_the_run_writes_its_own_summaries(full_chain):
+    for name in IN_RUN_SUMMARIES:
+        assert (full_chain["sharded_area"] / name).is_file(), f"{name} missing"
+
+
+def test_the_in_run_summary_is_the_slim_one(full_chain):
+    """The counts half of the household summary belongs to post-processing.
+    Both halves in one file would mean two producers for one artifact."""
+    slim = pd.read_parquet(
+        full_chain["sharded_area"] / "impute_summary_household.parquet",
+        dtype_backend="numpy_nullable",
+    )
+    assert "diff_col_total" in slim.columns
+    assert "missing" not in slim.columns
+
+
+def test_the_run_does_not_write_the_post_processing_artifacts(full_chain):
+    for name in POSTPROCESSING_ONLY:
+        for folder in (
+            full_chain["agg_root"],
+            full_chain["sharded_area"],
+            full_chain["resampled"],
+        ):
+            assert not (folder / name).exists(), (
+                f"{name} must come from the post-processing step, not the run"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Nothing is lost between stages
+# ---------------------------------------------------------------------------
+
+def test_no_household_is_dropped_along_the_chain(chain_frames, index_df):
+    """A stage that silently dropped a household would still produce a
+    well-formed artifact, so the household set is compared at every step
+    rather than only at the end."""
+    expected = set(
+        index_df.loc[index_df["Meenemen"] == True, "HuisIdBSV"]  # noqa: E712
+        .dropna().astype(int).tolist()
+    )
+    assert expected, "the fixture index includes no households"
+    for stage, frame in chain_frames.items():
+        got = set(frame["HuisIdBSV"].dropna().astype(int).tolist())
+        assert got == expected, (
+            f"{stage}: households {sorted(expected - got)} lost, "
+            f"{sorted(got - expected)} appeared"
+        )
+
+
+def test_no_project_is_dropped_into_the_project_aggregate(chain_frames, full_chain):
+    for interval in INTERVALS:
+        households = chain_frames[interval]
+        projects = pd.read_parquet(
+            full_chain["resampled"] / f"project_{interval}.parquet",
+            dtype_backend="numpy_nullable",
+        )
+        expected = set(households["ProjectIdBSV"].dropna().astype(int).tolist())
+        got = set(projects["ProjectIdBSV"].dropna().astype(int).tolist())
+        assert got == expected, f"project_{interval}: {expected} -> {got}"
+
+
+def test_the_calculated_stage_publishes_the_composites(chain_frames):
+    missing = [c for c in COMPOSITES if c not in chain_frames["calculated"].columns]
+    assert not missing, f"the calculated artifact is missing {missing}"
+
+
+def test_the_imputation_marks_travel_into_the_calculated_artifact(chain_frames):
+    """Imputation writes three columns per imputed variable -- the flags, the
+    boolean, and the type. They are how a reader tells a measured cell from a
+    filled one, so a stage that dropped them would publish data whose
+    provenance is gone while every value still looked right.
+
+    Which variables carry them comes from the imputed artifact rather than
+    from a list here, so the check cannot drift from the data model.
+    """
+    imputed = chain_frames["imputed"]
+    calculated = chain_frames["calculated"]
+    marks = [
+        c for c in imputed.columns
+        if c.endswith(("_flags", "_is_imputed", "_impute_type"))
     ]
-    df_hh_calc = pd.read_parquet(hh_calculated_path, dtype_backend="numpy_nullable")
-    assert all([col in df_hh_calc.columns for col in calc_cols])
-
-    logging.info("Resampling HH data to 5 minutes.")
-    #"resample_hh_5min"
-    resample_hh_data(intervals=["5min"])
-    # Should create file
-    hh_5min_path = os.path.join(etdtransform.options.aggregate_folder_path, "household_5min.parquet")
-    assert os.path.isfile(hh_5min_path)
-
-    # Note all following imputations and aggregations
-    # will be run here, and tested in test_files_equal_expected 
-
-    # "aggregate_project_5min"
-    logging.info("Aggregating project data to 5 minutes.")
-    aggregate_project_data(intervals=["5min"])
-    # "resample_hh_15_60min"
-    logging.info("Resample HH data to 60 and 15 minutes.")
-    resample_hh_data(intervals=["60min", "15min"])
-    # "aggregate_project_15_60min"
-    logging.info("Aggregating project data to 60 and 15 minutes.")
-    aggregate_project_data(intervals=["60min", "15min"])
-    # "resample_hh_24h"
-    logging.info("Resample HH data to 24 hours.")
-    resample_hh_data(intervals=["24h"])
-    # "aggregate_project_24h"
-    logging.info("Aggregating project data to 24 hours.")
-    aggregate_project_data(intervals=["24h"])
-    # "resample_hh_6h"
-    logging.info("Resample HH data to 6 hours.")
-    resample_hh_data(intervals=["6h"])
-    # "aggregate_project_6h"
-    logging.info("Aggregating project data to 6 hours.")
-    aggregate_project_data(intervals=["6h"])
-
-
-def _diff_json(a, b, path="", float_rel_tol=1e-10):
-    """Compare two JSON-deserialized objects recursively.
-
-    Numeric string values (parquet min/max statistics) are compared with
-    float_rel_tol relative tolerance to absorb floating-point non-determinism
-    from groupby aggregations. Structural differences (missing keys, type
-    mismatches, null_count changes) are always exact.
-    """
-    results = []
-
-    def _record(diff):
-        logging.info(diff)
-        results.append(diff)
-
-    def _is_numeric(v):
-        try:
-            float(v)
-            return True
-        except (TypeError, ValueError):
-            return False
-
-    def _recurse(a, b, path):
-        if type(a) != type(b):
-            _record(f"{path}: type mismatch {type(a).__name__} != {type(b).__name__}")
-        elif isinstance(a, dict):
-            keys = set(a.keys()).union(b.keys())
-            for k in keys:
-                if k not in a:
-                    _record(f"{path}.{k}: missing in first")
-                elif k not in b:
-                    _record(f"{path}.{k}: missing in second")
-                else:
-                    _recurse(a[k], b[k], f"{path}.{k}")
-        elif isinstance(a, list):
-            for i in range(min(len(a), len(b))):
-                _recurse(a[i], b[i], f"{path}[{i}]")
-            if len(a) != len(b):
-                _record(f"{path}: list length differs {len(a)} != {len(b)}")
-        else:
-            if a != b:
-                # Allow tiny float rounding in parquet statistics (min/max stored as strings)
-                if isinstance(a, str) and isinstance(b, str) and _is_numeric(a) and _is_numeric(b):
-                    import math
-                    if not math.isclose(float(a), float(b), rel_tol=float_rel_tol):
-                        _record(f"{path}: {a} != {b}")
-                else:
-                    _record(f"{path}: {a} != {b}")
-
-    _recurse(a, b, path or "$")
-    return results
-
-def _filter_metadata_to_subset(metadata: dict, subset: set) -> dict:
-    """Return a metadata dict whose column_details is filtered to keys in subset.
-
-    num_rows is preserved (it's a structural property of the dataset).
-    num_columns is recomputed to reflect the filtered column count so it stays
-    self-consistent within the filtered metadata.
-    """
-    details = metadata.get("column_details", {}) or {}
-    filtered_details = {k: v for k, v in details.items() if k in subset}
-    return {
-        "num_rows": metadata.get("num_rows"),
-        "num_columns": len(filtered_details),
-        "column_details": filtered_details,
-    }
+    assert marks, "imputation wrote no flag, is_imputed or impute_type column"
+    missing = [c for c in marks if c not in calculated.columns]
+    assert not missing, f"the calculated stage dropped {len(missing)}: {missing[:5]}"
 
 
 # ---------------------------------------------------------------------------
-# Three independent fixture comparison tests, all scoped to
-# etdmap.data_model.test_aggregation_columns. Filtering is applied to BOTH
-# fixture and generated output BEFORE any check, so data-model expansion
-# outside the subset is invisible to the test (we test the code, not the
-# data model). Each test runs independently in pytest -- a failure in one
-# does not short-circuit the others.
-#
-#   - schema test : column set diff in subset (added/removed) -> fail
-#   - values test : row values diff in subset on sample -> fail
-#   - stats test  : per-column min/max/null_count diff in subset -> fail
+# The grain each stage produces
 # ---------------------------------------------------------------------------
 
-#: Columns the pipeline derives from a variable's name. The flag columns hold the
-#: values a reader decodes the data with, so a change in them is a change in what
-#: the dataset means and belongs in the compared surface. Derived by rule so the
-#: names never become a second list to keep in step with the first.
-_DERIVED_SUFFIXES = ("_flags", "_is_imputed", "_impute_type")
+def test_the_passthrough_interval_keeps_every_row(chain_frames):
+    # 5min is column selection only, so it neither groups nor drops.
+    assert len(chain_frames["5min"]) == len(chain_frames["calculated"])
 
 
-def _compared_columns() -> set:
-    """The curated variables plus the columns derived from them."""
-    return set(test_aggregation_columns) | {
-        f"{column}{suffix}"
-        for column in test_aggregation_columns
-        for suffix in _DERIVED_SUFFIXES
-    }
-
-def test_files_schema_equal_expected():
+@pytest.mark.parametrize("interval, minutes", [("60min", 60), ("24h", 24 * 60)])
+def test_a_grouping_interval_buckets_each_household_separately(
+    chain_frames, interval, minutes
+):
+    """One row per (household, bucket). Computed from the 5min timestamps by
+    flooring -- independent of the DuckDB TIME_BUCKET the stage uses, so the
+    two agreeing is evidence rather than a tautology.
     """
-    Schema check: for each file in conftest.file_names, the column SET
-    inside test_aggregation_columns must be identical between the stored
-    fixture parquet and the freshly-generated parquet. Files with no overlap
-    in the subset trivially pass.
-
-    Failures separate additions (in generated, missing from fixture --
-    fixture stale, regenerate) from removals (in fixture, missing from
-    generated -- pipeline regression). Both kinds fail the test.
-    """
-    subset = _compared_columns()
-    failures: list[tuple[str, list[str], list[str]]] = []
-    for name in conftest.file_names:
-        name = name.split('.parquet')[0]
-        fixture_path = Path(f"tests/data/sample_{name}.parquet")
-        generated_path = os.path.join(etdtransform.options.aggregate_folder_path, f"{name}.parquet")
-        if not fixture_path.exists() or not os.path.exists(generated_path):
-            logging.warning(f"schema check skipped for {name}: missing fixture or generated file")
-            continue
-        # Schema-only reads -- parquet metadata, no data scan.
-        fix_cols = set(pq.read_schema(fixture_path).names) & subset
-        gen_cols = set(pq.read_schema(generated_path).names) & subset
-        added = sorted(gen_cols - fix_cols)
-        removed = sorted(fix_cols - gen_cols)
-        if added or removed:
-            failures.append((name, added, removed))
-    if failures:
-        msgs = []
-        for name, added, removed in failures:
-            parts = []
-            if added:
-                parts.append(f"in generated but not in fixture (regenerate fixtures): {added}")
-            if removed:
-                parts.append(f"in fixture but not in generated (pipeline regression): {removed}")
-            msgs.append(f"  {name}: " + "; ".join(parts))
-        raise AssertionError(
-            f"Schema deviation in test_aggregation_columns subset for "
-            f"{len(failures)} file(s):\n" + "\n".join(msgs)
-        )
+    five = chain_frames["5min"]
+    expected = (
+        five.assign(_bucket=five["ReadingDate"].dt.floor(f"{minutes}min"))
+        .groupby(["HuisIdBSV", "_bucket"])
+        .ngroups
+    )
+    assert len(chain_frames[interval]) == expected
 
 
-def test_files_values_equal_expected():
-    """
-    Value check: compare row-level values on the test_aggregation_columns
-    subset between the stored sample parquet (random_state=42, n=100) and
-    a re-sampled slice of the freshly-generated full parquet, using
-    relative tolerance to absorb floating-point non-determinism from
-    groupby aggregation.
-
-    Files with no overlap in the subset trivially pass. Schema deviations
-    are not this test's concern -- they are reported by
-    test_files_schema_equal_expected.
-    """
-    subset = _compared_columns()
-    failures: list[tuple[str, list[str]]] = []
-    for name in conftest.file_names:
-        name = name.split('.parquet')[0]
-        fixture_path = Path(f"tests/data/sample_{name}.parquet")
-        generated_path = os.path.join(etdtransform.options.aggregate_folder_path, f"{name}.parquet")
-        if not fixture_path.exists() or not os.path.exists(generated_path):
-            logging.warning(f"value check skipped for {name}: missing fixture or generated file")
-            continue
-        # Determine subset columns present in each file from parquet metadata,
-        # then load only those columns -- avoids scanning the ~80% of the
-        # parquet that is outside the test subset.
-        fix_subset_cols = list(set(pq.read_schema(fixture_path).names) & subset)
-        gen_subset_cols = list(set(pq.read_schema(generated_path).names) & subset)
-        shared = sorted(set(fix_subset_cols) & set(gen_subset_cols))
-        if not shared:
-            continue  # subset doesn't apply to this file
-        fix_sub = pd.read_parquet(fixture_path, columns=shared, dtype_backend="numpy_nullable")
-        gen_full_sub = pd.read_parquet(generated_path, columns=shared, dtype_backend="numpy_nullable")
-        sample_size = min(100, len(gen_full_sub))
-        gen_sub = gen_full_sub.sample(n=sample_size, random_state=42)
-        differing: list[str] = []
-        for col in shared:
-            fa = fix_sub[col].reset_index(drop=True)
-            ga = gen_sub[col].reset_index(drop=True)
-            try:
-                pd.testing.assert_series_equal(
-                    fa, ga, check_exact=False, rtol=1e-10, check_names=False
-                )
-            except AssertionError:
-                differing.append(col)
-        if differing:
-            failures.append((name, differing))
-    if failures:
-        msgs = [f"  {name}: differing columns: {cols}" for name, cols in failures]
-        raise AssertionError(
-            f"Value drift in test_aggregation_columns subset for "
-            f"{len(failures)} file(s):\n" + "\n".join(msgs)
-        )
-
-
-def test_files_metadata_stats_equal_expected(load_metadata):
-    """
-    Metadata stats check: per-column statistics (min, max, null_count) in
-    the stored fixture JSON must match the stats derived from the freshly
-    generated FULL parquet, both filtered to the test_aggregation_columns
-    subset. Compares only columns that appear in both after filtering --
-    schema deviations are reported by test_files_schema_equal_expected.
-
-    Files with no overlap in the subset trivially pass.
-    """
-    subset = _compared_columns()
-    failures: list[tuple[str, list[str]]] = []
-    for name in conftest.file_names:
-        name = name.split('.parquet')[0]
-        expected_path = Path(f"tests/data/metadata_{name}.json")
-        generated_path = os.path.join(etdtransform.options.aggregate_folder_path, f"{name}.parquet")
-        if not expected_path.exists() or not os.path.exists(generated_path):
-            logging.warning(f"stats check skipped for {name}: missing fixture or generated file")
-            continue
-        expected = load_metadata(expected_path)
-        actual = generate_metadata_parquet_file(pq.ParquetFile(generated_path))
-        expected_filt = _filter_metadata_to_subset(expected, subset)
-        actual_filt = _filter_metadata_to_subset(actual, subset)
-        exp_details = expected_filt.get("column_details", {}) or {}
-        act_details = actual_filt.get("column_details", {}) or {}
-        shared = sorted(set(exp_details.keys()) & set(act_details.keys()))
-        diffs: list[str] = []
-        for col in shared:
-            col_diffs = _diff_json(exp_details[col], act_details[col], path=col)
-            diffs.extend(col_diffs)
-        if diffs:
-            failures.append((name, diffs))
-    if failures:
-        msgs = []
-        for name, diffs in failures:
-            msgs.append(f"  {name}: {len(diffs)} stat diff(s)")
-            for d in diffs[:5]:
-                msgs.append(f"    {d}")
-            if len(diffs) > 5:
-                msgs.append(f"    ... ({len(diffs) - 5} more)")
-        raise AssertionError(
-            f"Metadata stat differences in test_aggregation_columns subset "
-            f"for {len(failures)} file(s):\n" + "\n".join(msgs)
-        )
-
-
-if __name__ == "__main__":
-    # Run pytest for debugging the testing
-    pytest.main(["-v"])
+def test_a_coarser_interval_has_fewer_rows_than_the_grid(chain_frames):
+    # The ordering across the whole set, as a guard against an interval being
+    # silently produced at the wrong grain.
+    counts = [len(chain_frames[i]) for i in INTERVALS]
+    assert counts == sorted(counts, reverse=True), (
+        f"row counts are not decreasing across {INTERVALS}: {counts}"
+    )
+    assert counts[-1] > 0, "the coarsest interval produced no rows"

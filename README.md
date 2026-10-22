@@ -243,12 +243,15 @@ Pipeline data comes in one of two layouts (see the etdmap README section
 
 Every reading function in this package detects the layout itself -- a path
 that is a directory is read as shards (with per-supplier column differences
-unified by name), a path that is a file is read as before. Callers never pass
-a format. Producing sharded output from a pipeline stage is an explicit
-choice (`partition_output=True` where supported); the default single-file
-writes are unchanged. Stages that read a sharded source validate it on
-entry: duplicate household/timestamp rows or a household with data in more
-than one batch raise an error instead of being silently combined.
+unified by name), a path that is a file is read as a file. Callers never pass
+a format, which is what keeps an older single-file baseline readable.
+
+Writing is not a choice: each stage writes the one shape its artifact has.
+The household stages and the resampled household intervals are shard trees;
+the project aggregates are single files, because project-level data is small.
+Stages that read a household source validate it on entry: duplicate
+household/timestamp rows, or a household with data in more than one batch,
+raise an error instead of being silently combined.
 
 # Loading mapped data as Ibis tables
 

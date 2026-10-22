@@ -116,31 +116,39 @@ class TestDeriveHelper:
 # Integration: household resample
 # ---------------------------------------------------------------------------
 
-def _write_calculated(path):
-    """6 rows on a 5min grid for one household = two 15min buckets of 3."""
+def _calculated_tree(tmp_path):
+    """6 rows on a 5min grid for one household = two 15min buckets of 3.
+
+    Written as the hive tree the stage reads in production. The shape matters
+    to the resample: the batch id rides along only when the source is sharded
+    (`aggregate.py:1714`), and that is the column the output partitions on.
+    """
+    from conftest import write_shard_tree
+
     ts = pd.date_range("2024-01-01 00:00", periods=6, freq="5min")
     zelf = pd.array([1.0, 2.0, 0.0, 5.0, 0.0, 1.0], dtype="Float64")
     zon = pd.array([4.0, 6.0, 0.0, 5.0, 0.0, 5.0], dtype="Float64")
     # Correct per-5min ratio at the calculated stage (night row -> NA).
     zp = pd.array([25.0, pd.NA, pd.NA, 100.0, pd.NA, 20.0], dtype="Float64")
-    pd.DataFrame(
+    frame = pd.DataFrame(
         {
-            "HuisIdBSV": [1] * 6,
-            "ProjectIdBSV": [1] * 6,
+            "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
             "ReadingDate": ts,
             "Zelfgebruik": zelf,
             "ZonopwekBruto": zon,
             _ZP: zp,
         }
-    ).to_parquet(path)
+    )
+    return str(write_shard_tree(tmp_path / "household_calculated", {1: frame}))
 
 
 class TestResampleDerive:
     def test_5min_carries_15min_rederives(self, tmp_path):
-        src = str(tmp_path / "household_calculated.parquet")
+        from etdmap.storage import read_source_frame
+
+        src = _calculated_tree(tmp_path)
         out = str(tmp_path / "out")
         os.makedirs(out, exist_ok=True)
-        _write_calculated(src)
 
         with patch("etdmap.data_model.get_aggregation_config", return_value=_derive_config()), \
              patch("etdmap.catalog.load_catalog", return_value=_synth_catalog()):
@@ -148,12 +156,16 @@ class TestResampleDerive:
                                     intervals=("5min", "15min"))
 
         # 5min: passthrough carries the calculated-stage ratio unchanged.
-        df5 = _read(os.path.join(out, "household_5min.parquet")).sort_values("ReadingDate")
+        df5 = read_source_frame(
+            os.path.join(out, "household_5min")
+        ).sort_values("ReadingDate")
         assert float(df5[_ZP].iloc[0]) == pytest.approx(25.0, rel=REL_TOL)
         assert float(df5[_ZP].iloc[3]) == pytest.approx(100.0, rel=REL_TOL)
 
         # 15min: recomputed from summed components, NOT the mean of 5min ratios.
-        df15 = _read(os.path.join(out, "household_15min.parquet")).sort_values("ReadingDate")
+        df15 = read_source_frame(
+            os.path.join(out, "household_15min")
+        ).sort_values("ReadingDate")
         # bucket 1: sum Zelf=3, Zon=10 -> 30 ; bucket 2: sum Zelf=6, Zon=10 -> 60
         assert float(df15[_ZP].iloc[0]) == pytest.approx(30.0, rel=REL_TOL)
         assert float(df15[_ZP].iloc[1]) == pytest.approx(60.0, rel=REL_TOL)
@@ -177,17 +189,25 @@ class TestProjectDerive:
     def test_fleet_ratio_is_weighted_not_mean_of_ratios(self, tmp_path):
         # Two households, SAME timestamp, different denominators so the
         # weighted ratio differs from the mean of per-household ratios.
+        from conftest import write_shard_tree
+
         ts = pd.Timestamp("2024-01-01 00:00")
-        pd.DataFrame(
-            {
-                "HuisIdBSV": [1, 2],
-                "ProjectIdBSV": [1, 1],
-                "ReadingDate": [ts, ts],
-                "Zelfgebruik": pd.array([1.0, 1.0], dtype="Float64"),
-                "ZonopwekBruto": pd.array([2.0, 10.0], dtype="Float64"),
-                _ZP: pd.array([50.0, 10.0], dtype="Float64"),  # per-HH ratios
-            }
-        ).to_parquet(str(tmp_path / "household_5min.parquet"))
+
+        def _one(zelfgebruik, zon, ratio):
+            return pd.DataFrame({
+                "ProjectIdBSV": pd.array([1], dtype="Int64"),
+                "ReadingDate": [ts],
+                "Zelfgebruik": pd.array([zelfgebruik], dtype="Float64"),
+                "ZonopwekBruto": pd.array([zon], dtype="Float64"),
+                _ZP: pd.array([ratio], dtype="Float64"),  # per-HH ratio
+            })
+
+        # A hive tree, because that is the shape `household_5min` has when the
+        # project step reads it in production.
+        write_shard_tree(tmp_path / "household_5min", {
+            1: _one(1.0, 2.0, 50.0),
+            2: _one(1.0, 10.0, 10.0),
+        })
 
         old = etdtransform.options.aggregate_folder_path
         etdtransform.options.aggregate_folder_path = tmp_path
