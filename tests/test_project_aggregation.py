@@ -85,7 +85,7 @@ class TestProjectAggregateIsTheMeanOverItsOwnHouseholds:
         assert (tmp_path / "agg" / "project_15min.parquet").is_file()
 
 
-class TestShardedSourceGuards:
+class TestSourceGuards:
     """What the stage refuses."""
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,

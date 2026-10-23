@@ -19,7 +19,7 @@ from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 
-class TestShardedSourceGuards:
+class TestSourceGuards:
     """What the writer refuses."""
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,

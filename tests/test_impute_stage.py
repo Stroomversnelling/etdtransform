@@ -1,14 +1,15 @@
 """
-The FULL sharded imputation chain + the batch-safety guards.
+Stage 3: the imputation chain, and the batch-safety guards.
 
-Chain parity: the sharded path must produce ALL the imputation artifacts the
-legacy chain produces -- avg_diffs + max bounds (estimation inputs), the imputed
-data itself, gap stats, household/project summaries, and the post-imputation
-household_aggregated_diff -- so the planned imputation rewrite can be validated
-on either path against promoted production. Math is never duplicated: the
-sharded diffs function feeds the SAME prepare_diff_averages_for_impute_ibis; the
-sharded impute function calls the SAME _impute_chunk_core; summaries come from
-a shared finalizer extracted from the legacy shell.
+What the chain must produce: the estimation inputs (`avg_diffs` and the
+averaging reports), the imputed shards themselves, the gap statistics, and the
+in-run household summary. A stage that ran but wrote one of those nowhere is a
+run whose output cannot be read back or promoted.
+
+The I/O shell is thin on purpose and the math lives in one place:
+`prepare_diff_averages_sharded` feeds `prepare_diff_averages_for_impute_ibis`,
+`impute_mapped_households_sharded` calls `_impute_chunk_core`, and the
+summaries come from a shared finalizer.
 
 Batch-safety guards (computational, at the compute entry points): the
 averaging/imputation chain must refuse

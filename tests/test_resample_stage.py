@@ -87,7 +87,7 @@ class TestResamplingIsPerHouseholdAndInterval:
         )
 
 
-class TestShardedSourceGuards:
+class TestSourceGuards:
     """What the writer refuses, and what it does on a re-run."""
 
     def test_rerun_overwrites_existing_shard_output(self, tmp_path,
@@ -121,7 +121,7 @@ class TestShardedSourceGuards:
             )
 
     def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
-        # As in test_sharded_calc: a source with no batch id to file the rows
+        # As in test_calculated_stage: a source with no batch id to file the rows
         # under is a caller error, stated with a frame that has none.
         from conftest import household_frame
 

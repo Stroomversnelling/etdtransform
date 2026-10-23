@@ -1050,8 +1050,10 @@ def impute_and_normalize(
         - imputation_gap_stats_df : pandas.DataFrame
             Statistics about the imputation process for each gap.
 
-        - imputation_reading_date_stats_df : None or pandas.DataFrame
-            Statistics about imputation by reading date (if calculated).
+        - imputation_reading_date_stats_df : always None
+            A vestigial slot. The reading-date statistic went with its
+            producer and its writer; the tuple keeps its arity until the
+            callers can be narrowed in one pass.
 
     Notes
     -----
@@ -1442,6 +1444,12 @@ def impute_and_normalize(
         imputation_gap_stats_df["methods"],
     )
 
+    # Always None. The reading-date statistic this slot carried was removed
+    # along with its producer and its writer, so nothing can arrive here. The
+    # slot is kept only because narrowing the tuple to two touches every
+    # caller -- `_impute_chunk_core` and about 25 unpack sites across the test
+    # suite -- and that sweep is worth doing on its own rather than inside
+    # another change.
     imputation_reading_date_stats_df = None
 
     return df, imputation_gap_stats_df, imputation_reading_date_stats_df
