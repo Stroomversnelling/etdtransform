@@ -20,13 +20,20 @@ import pandas as pd
 import pytest
 
 from etdmap.mapping_helpers import detect_column_cadence
+from etdmap.testing import declare_synthetic_model, synthetic_model
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
 pytestmark = pytest.mark.unit
 
+#: The model these tests run against, declared here rather than read from the
+#: metadata. What is under test is how a coarse delivery travels through the
+#: fill, which needs a register, an interval complement and one bound -- not
+#: any particular variable. The declared Max is the per-slot bound the cases
+#: below are written around.
+MODEL = synthetic_model(maximum=1.4375)
 #: The register of the variable, and the interval column the supplier delivers.
-CUM = "WarmteproductieRuimteverwarming"
-DIFF = f"{CUM}Diff"
+CUM = MODEL.device
+DIFF = MODEL.device_complement
 
 GRID = 5
 #: Grid slots one hourly reading accounts for.
@@ -39,6 +46,11 @@ N = 288
 #: once spread (1.5), and above it unspread, so the cadence amendment is load
 #: bearing rather than incidental.
 READING = 0.6
+
+
+@pytest.fixture(autouse=True)
+def _declared_model(monkeypatch):
+    declare_synthetic_model(monkeypatch, MODEL)
 
 
 def _delivered(drop_tick=5):

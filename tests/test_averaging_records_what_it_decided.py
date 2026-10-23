@@ -22,18 +22,31 @@ import pytest
 from conftest import cadence_table, project_averages
 
 from etdmap.flags import MappingFlag, flag_column
+from etdmap.testing import declare_synthetic_model, synthetic_model
 from etdtransform.impute import read_diffs, write_diffs
 
 pytestmark = pytest.mark.unit
 
-CUM = "WarmteproductieRuimteverwarming"
-DIFF = f"{CUM}Diff"
+#: The model these tests run against, declared here rather than read from the
+#: metadata. What is under test is what the averaging records, which needs a
+#: cumulative variable, its interval complement and one bound -- not any
+#: particular variable. Naming a real one pinned this file to whatever Max the
+#: Grist-derived thresholds carried, and a metadata edit then discarded every
+#: reading and emptied the averages.
+MODEL = synthetic_model(maximum=0.0576)
+CUM = MODEL.device
+DIFF = MODEL.device_complement
 GRID = 5
-#: Under the column's own bound at five minutes (0.0576), so a value placed
-#: above it in a test is the only thing the discard can be about.
+#: Under the bound this file declares, so a value placed above it in a test is
+#: the only thing the discard can be about.
 READING = 0.01
 OVER_THE_BOUND = 10.0
 N = 4
+
+
+@pytest.fixture(autouse=True)
+def _declared_model(monkeypatch):
+    declare_synthetic_model(monkeypatch, MODEL)
 
 
 def _frame(per_household, project_of=None, register=None):

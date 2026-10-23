@@ -401,20 +401,22 @@ class TestAgainstTheCommittedCatalog:
     # Both produce exactly this table. A change here means the rules or the
     # thresholds moved; re-run that script and update this if so.
     #
-    # Updated 2026-10-01 for the not_physical exclusion: the two tariff SPLIT
-    # columns (ElektriciteitTerugleveringHoogDiff / ...LaagDiff), previously
-    # narrowed to (0.0, 0.96), are gone from this table. The tariff-sum rules
-    # that linked a split to the narrowed root are bookkeeping identities, not
-    # physical relations, so they no longer reach the catalog -- nothing
-    # narrows a split and each keeps its own declared bound. The eight
-    # surviving entries are unchanged, which is the point: excluding those
-    # rules moved nothing else.
+    # A column is here only where a rule narrows it past what it declares, so
+    # two kinds of column are deliberately absent:
+    #
+    # - the tariff SPLIT columns (ElektriciteitTerugleveringHoogDiff /
+    #   ...LaagDiff). The tariff-sum rules that linked a split to the narrowed
+    #   root are bookkeeping identities, not physical relations, so they are
+    #   excluded as not_physical and never reach the catalog. Nothing narrows a
+    #   split and each keeps its own declared bound.
+    # - ElektriciteitsgebruikTotaalWarmtepomp, whose declared 5-minute Max is
+    #   tighter than the rules imply. The declaration already binds it, so
+    #   there is nothing for a rule to narrow.
     NARROWED_AT_FIVE_MINUTES = {
         "ElektriciteitTerugleveringDiff": (0.0, 0.96),
         "ElektriciteitsgebruikTotaalBruto": (0.0, 2.46),
         "ElektriciteitsgebruikTotaalGebouwgebonden": (0.0, 2.01),
         "ElektriciteitsgebruikTotaalNetto": (0.0, 1.5),
-        "ElektriciteitsgebruikTotaalWarmtepomp": (0.0, 1.6),
         "Netuitwisseling": (-0.96, 1.5),
         "TerugleveringTotaalNetto": (0.0, 0.96),
         "Zelfgebruik": (0.0, 0.96),
@@ -425,7 +427,9 @@ class TestAgainstTheCommittedCatalog:
             self.NARROWED_AT_FIVE_MINUTES
         )
 
-    def test_five_columns_gain_a_max_where_none_was_declared(self, package):
+    def test_four_columns_gain_a_max_where_none_was_declared(self, package):
+        """These are the columns the rules bound and the metadata does not, so
+        they are the ones that would be unbounded without the catalog."""
         from etdmap.data_model import thresholds_dict
 
         gained = [
@@ -433,7 +437,7 @@ class TestAgainstTheCommittedCatalog:
             for column in self._narrowed(package)
             if pd.isna(thresholds_dict[column]["Max"])
         ]
-        assert len(gained) == 5
+        assert len(gained) == 4
 
     def test_teruglevering_is_capped_by_what_the_panels_can_make(self, package):
         """Not a magic number: 0.96 is ZonopwekBruto's declared cap, and you

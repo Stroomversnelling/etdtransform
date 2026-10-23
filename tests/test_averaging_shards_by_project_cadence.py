@@ -22,6 +22,7 @@ import pytest
 from conftest import spread_average
 
 from etdmap.mapping_helpers import detect_column_cadence
+from etdmap.testing import declare_synthetic_model, synthetic_model
 from etdtransform.bounds import grid_minutes_by_project
 from etdtransform.flags import ImputeType
 from etdtransform.impute import calculate_average_diff_ibis
@@ -29,8 +30,13 @@ from etdtransform.vectorized_impute import impute_and_normalize
 
 pytestmark = pytest.mark.unit
 
-CUM = "WarmteproductieRuimteverwarming"
-DIFF = f"{CUM}Diff"
+#: The model these tests run against, declared here rather than read from the
+#: metadata. What is under test is the spreading denominator, which needs a
+#: cumulative variable, its interval complement and one bound -- not any
+#: particular variable.
+MODEL = synthetic_model(maximum=0.0576)
+CUM = MODEL.device
+DIFF = MODEL.device_complement
 
 #: Project -> the grid its rows sit on. Fifteen is not what the other project
 #: reports at, which is the whole point: neither may be spread over the other's
@@ -38,15 +44,20 @@ DIFF = f"{CUM}Diff"
 GRIDS = {1: 5, 2: 15}
 #: The column reports once an hour whatever grid its project is on.
 DELIVERED_EVERY = 60
-#: Below the column's own bound scaled to an hour (0.0576 per five minutes
-#: becomes 0.1995 at sixty), so what this file measures is the spreading rather
-#: than the pre-averaging discard. Both projects deliver hourly, so both are
-#: judged against the same bound.
+#: Below the declared bound scaled to an hour (0.0576 per five minutes becomes
+#: 0.1995 at sixty), so what this file measures is the spreading rather than the
+#: pre-averaging discard. Both projects deliver hourly, so both are judged
+#: against the same bound.
 READING = 0.12
 #: Per project. Ten is the eligible-household count a project average needs, so
 #: a thin fixture would be testing the presence gate instead of the spreading.
 HOUSEHOLDS = 10
 HOURS = 24
+
+
+@pytest.fixture(autouse=True)
+def _declared_model(monkeypatch):
+    declare_synthetic_model(monkeypatch, MODEL)
 
 
 def _household(household, project, grid):
