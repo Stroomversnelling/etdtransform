@@ -44,7 +44,7 @@ import os
 
 import pandas as pd
 from etdmap.data_model import (
-    cadence_lookup_names,
+    complement_lookup_names,
     cumulative_column,
     scale_bounds,
     tariff_root_to_splits,
@@ -211,7 +211,7 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
             if pd.notna(r.cadence_minutes)
         }
 
-    paired = [n for n in cadence_lookup_names(diff_col) if n != diff_col]
+    paired = [n for n in complement_lookup_names(diff_col) if n != diff_col]
     return {**_minutes(paired), **_minutes([diff_col])}
 
 
