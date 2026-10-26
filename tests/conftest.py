@@ -20,7 +20,12 @@ import pytest
 import yaml
 
 import etdtransform
-from etdmap.testing import generate_mapped_dataset, installed_fingerprint
+from etdmap.testing import (
+    DEFAULT_HOUSEHOLDS_PER_PROJECT,
+    DEFAULT_PROJECTS,
+    generate_mapped_dataset,
+    installed_fingerprint,
+)
 from etdtransform.aggregate import (
     add_calculated_columns_to_hh_data_ibis,
     aggregate_project_data_duckdb,
@@ -84,11 +89,10 @@ def mapped_dataset(tmp_path_factory):
     """
     etdmap_config = config["etdmap_configuration"]
     bsv_metadata = Path(etdmap_config["bsv_metadata_file"])
-    supplier_metadata = Path(etdmap_config["supplier_metadata_xlsx_file"])
 
     cache_root = config["etdtransform_configuration"].get("fixture_cache_path")
     if cache_root:
-        key = installed_fingerprint(bsv_metadata, supplier_metadata)
+        key = installed_fingerprint(bsv_metadata)
         target = Path(cache_root) / key / "mapped"
     else:
         key = None
@@ -101,7 +105,6 @@ def mapped_dataset(tmp_path_factory):
         generate_mapped_dataset(
             target,
             bsv_metadata_file=bsv_metadata,
-            supplier_metadata_xlsx_file=supplier_metadata,
             raw_folder=tmp_path_factory.mktemp("raw_fixture"),
         )
 
@@ -114,18 +117,6 @@ def mapped_dataset(tmp_path_factory):
     finally:
         etdmap.options.mapped_folder_path = old_etdmap
         etdtransform.options.mapped_folder_path = old_etdtransform
-
-
-#: The fixture dataset is ten households across two projects, so a project
-#: window holds four or five eligible households -- below the production floor
-#: of ten by construction. Left at the production value, the averaging would
-#: publish no average at all and every column in every pipeline test would take
-#: the no-average path: the tests would still pass, comparing one degenerate
-#: output against another, and the averaging would be covered by nothing.
-#:
-#: The floor itself is exercised at its production value in
-#: test_minimum_household_presence.py::TestTheHouseholdFloor.
-FIXTURE_MIN_ELIGIBLE = 1
 
 
 @pytest.fixture(scope="session")
@@ -258,20 +249,29 @@ def sharded_fixture_mapped(tmp_path_factory, _include_updated):
         d.mkdir(parents=True)
         shutil.copyfile(f, d / "part.parquet")
         n += 1
-    assert n == 10, f"expected the 10-HH fixture, found {n}"
+    # The count the dataset was generated with. A literal here would fail
+    # whenever a fixture is shaped for the behaviour it covers, which is the
+    # point of the shape being a parameter.
+    expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
+    assert n == expected, f"expected {expected} households, found {n}"
     shutil.copyfile(src / "index.parquet", dst / "index.parquet")
     return dst
 
 
 @pytest.fixture(scope="session")
 def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
-    """The full sharded stage-3 chain once: diffs -> impute (+ summaries)."""
+    """The full sharded stage-3 chain once: diffs -> impute (+ summaries).
+
+    At the production floor. The dataset carries enough households per project
+    to meet it, so the averaging runs the constant it ships with rather than a
+    lowered one -- an average published under a floor of one proves only that
+    averaging runs.
+    """
     agg = tmp_path_factory.mktemp("sharded_agg")
     prepare_diff_averages_sharded(
         mapped_folder_path=sharded_fixture_mapped,
         aggregate_folder_path=agg,
         cumulative_columns=_cum_cols,
-        min_eligible=FIXTURE_MIN_ELIGIBLE,
     )
     impute_mapped_households_sharded(
         mapped_folder_path=sharded_fixture_mapped,
