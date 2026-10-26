@@ -58,6 +58,13 @@ IN_RUN_SUMMARIES = (
     "impute_volume_gap_accumulator.parquet",
 )
 
+#: What the averaging recorded about its own decisions, written beside the
+#: averages into the sharded area.
+AVERAGING_REPORTS = (
+    "avg_coverage_duty",
+    "avg_window_presence",
+)
+
 #: Derived later by etdworkflow's post-processing step from the artifacts
 #: above. A pipeline run must not produce them -- if it does, two producers
 #: exist for one artifact and which one wrote production becomes unknowable.
@@ -71,9 +78,14 @@ POSTPROCESSING_ONLY = (
 
 
 @pytest.fixture(scope="session")
-def index_df():
-    # update with the manual steps from bsv metadata
-    return etdmap.index_helpers.update_include()
+def index_df(_include_updated):
+    """The fixture dataset's index, with Meenemen populated.
+
+    Through `_include_updated` rather than calling `update_include` against
+    whatever the options name, so the index read is the one this session
+    generated.
+    """
+    return etdmap.index_helpers.read_index()[0]
 
 
 def test_include(index_df):
@@ -136,6 +148,18 @@ def test_every_interval_got_a_project_aggregate(full_chain):
 def test_the_run_writes_its_own_summaries(full_chain):
     for name in IN_RUN_SUMMARIES:
         assert (full_chain["sharded_area"] / name).is_file(), f"{name} missing"
+
+
+def test_the_run_writes_the_averaging_reports(full_chain):
+    """What the averaging decided, beside the averages themselves.
+
+    Their writers are covered per stage; what is asserted here is that a full
+    run emits them, which a stage test cannot see. A run without them produces
+    averages whose eligibility and fill order are no longer recoverable.
+    """
+    for name in AVERAGING_REPORTS:
+        target = resolve_source_path(full_chain["sharded_area"], name)
+        assert os.path.exists(target), f"{name} did not resolve from the run"
 
 
 def test_the_in_run_summary_is_the_slim_one(full_chain):
@@ -217,6 +241,43 @@ def test_the_imputation_marks_travel_into_the_calculated_artifact(chain_frames):
     assert marks, "imputation wrote no flag, is_imputed or impute_type column"
     missing = [c for c in marks if c not in calculated.columns]
     assert not missing, f"the calculated stage dropped {len(missing)}: {missing[:5]}"
+
+
+def test_the_curated_variables_survive_into_the_calculated_artifact(chain_frames):
+    """The variables the suite judges behaviour on, still there at the end.
+
+    Imputation and the calculated stage share a grain, so a curated variable
+    present in the first and absent from the second was dropped. Taken from
+    `test_aggregation_columns` rather than from a recorded copy of a previous
+    run, so it says a column went missing without also reddening whenever a
+    value legitimately moves.
+    """
+    from etdmap.data_model import test_aggregation_columns
+
+    curated = set(test_aggregation_columns)
+    present = curated & set(chain_frames["imputed"].columns)
+    assert present, "the imputed artifact carries none of the curated variables"
+
+    missing = sorted(present - set(chain_frames["calculated"].columns))
+    assert not missing, f"the calculated stage dropped curated {missing}"
+
+
+def test_the_curated_variables_reach_every_resampled_artifact(chain_frames):
+    """A resample or aggregation that emitted none of them would still produce
+    a well-formed artifact, so each one is checked for carrying some.
+
+    Not the whole set: a coarser interval and a project aggregate legitimately
+    carry a different column set from the grid, and asserting equality there
+    would pin the shape of the resampling rather than test it.
+    """
+    from etdmap.data_model import test_aggregation_columns
+
+    curated = set(test_aggregation_columns)
+    for interval in INTERVALS:
+        frame = chain_frames[interval]
+        assert curated & set(frame.columns), (
+            f"household_{interval} carries none of the curated variables"
+        )
 
 
 # ---------------------------------------------------------------------------

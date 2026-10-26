@@ -49,8 +49,9 @@ READING = 0.6
 
 
 @pytest.fixture(autouse=True)
-def _declared_model(monkeypatch):
-    declare_synthetic_model(monkeypatch, MODEL)
+def _declared_model():
+    with declare_synthetic_model(MODEL):
+        yield
 
 
 def _delivered(drop_tick=5):

@@ -57,7 +57,7 @@ On Linux/macOS use `.venv/bin/python` in place of `.venv/Scripts/python`.
 .venv/Scripts/python -m pytest tests/test_total_imputation_workflow.py
 
 # A single test (a class, when a file has one, uses file.py::Class::test)
-.venv/Scripts/python -m pytest tests/test_total_imputation_workflow.py::test_files_schema_equal_expected
+.venv/Scripts/python -m pytest tests/test_total_imputation_workflow.py::test_include
 
 # Everything whose name matches an expression, across all files
 .venv/Scripts/python -m pytest -k "sharded and not resample"
@@ -161,62 +161,47 @@ README. The conventions are project-wide and are not repeated here.
 
 ## Test fixtures
 
-The test suite runs the aggregation/imputation pipeline on the anonymised
-synthetic test dataset (configured via `config_test.yaml`, see
-`config_test_template.yaml` for the committed reference) and compares the
-freshly-generated output against committed fixture files in `tests/data/`:
+The suite generates what it runs against. The mapped dataset comes from
+`etdmap.testing.generate_mapped_dataset` into the session's own temporary
+folder, so it is whatever the installed etdmap currently emits rather than
+whatever a previous run left on disk, and no two runs share it. The synthetic
+input is deterministic (PCG64 seed 42). Setting `fixture_cache_path` in
+`config_test.yaml` reuses a dataset between sessions instead, keyed on the
+contents of the installed etdmap.
 
-- `metadata_*.json` -- per-column statistics summary of each pipeline output.
-- `sample_*.parquet` -- a deterministic 100-row sample of each pipeline output
-  (`df.sample(n=100, random_state=42)`).
+Nothing is compared against a committed copy of a previous run. Pins under
+`tests/data/` were removed: a pin asserts "identical to whenever someone last
+looked", so it reddens on every deliberate change and cannot say which changes
+were deliberate. In practice every difference it reported was a flag bitmask
+moving because the flag vocabulary had grown. Values are asserted per stage
+instead, against expectations the tests state themselves, and the chain's
+composition is asserted in `tests/test_total_imputation_workflow.py`.
 
-Both are derived from anonymised synthetic data per ADR-007 (see
-`../DECISIONS.md`); they are not production data. The synthetic input is
-sourced from `etdmap`'s test fixtures, which themselves are fully
-deterministic (PCG64 seed=42).
+A test that needs a column with a particular bound declares it rather than
+reading one from the shipped data model, so it does not move when the model
+does:
 
-`*.parquet` and `*.csv` are gitignored by default; the fixture files are
-re-included via explicit `!tests/data/sample_*.parquet` and
-`!tests/data/metadata_*.json` exceptions in `.gitignore`.
+```python
+from etdmap.testing import declare_synthetic_model, synthetic_model
 
-To regenerate the fixtures after an intentional pipeline change, ensure
-`testdata/aggregate/` is freshly populated by running the etdtransform
-workflow, then from the repo root:
-
-```bash
-python tests/test_helpers.py
+with declare_synthetic_model(synthetic_model(maximum=0.5)) as model:
+    ...  # model.device, model.device_complement, model.high, ...
 ```
 
-This overwrites `tests/data/metadata_*.json` and `tests/data/sample_*.parquet`.
-Per ADR-007, fixture regeneration must be deliberate -- review the diff with
-`git diff tests/data/` before committing, and confirm the change is the
-expected consequence of a known pipeline update rather than a silent drift.
+That merges the declaration into the model tables and rebuilds every derived
+structure in place, so a module that imported one by name reads the
+declaration without being patched. The model is rebuilt from the shipped
+tables on the way out.
 
-### Comparison strategy: subset-scoped, three independent checks
+### What the chain-level tests assert
 
-Fixture comparisons in `tests/test_total_imputation_workflow.py` run as
-three independent pytest tests, each scoped to the test subset
-`etdmap.data_model.test_aggregation_columns`:
-
-- `test_files_schema_equal_expected` -- fails if the column SET inside the
-  subset differs between fixture and generated (reports added vs removed
-  separately).
-- `test_files_values_equal_expected` -- fails if any value in the subset
-  drifts between the stored 100-row sample and a re-sampled slice of the
-  generated full parquet (relative tolerance `1e-10`).
-- `test_files_metadata_stats_equal_expected` -- fails if per-column
-  statistics (min, max, null_count) drift in the subset.
-
-Filtering is applied to BOTH fixture and generated BEFORE any check, so
-data-model expansion outside the subset never breaks tests. Adding a
-variable to the comparison surface is a deliberate code change: extend
-`etdmap.data_model.test_aggregation_columns` and add plausible synthetic
-ranges for the new variable in `etdmap/tests/conftest.py::raw_data_fixture`.
-
-The three tests run independently. A failure in one does not short-circuit
-the others, so a regeneration-only situation (schema drift, no value drift)
-produces a clear "regenerate fixtures" signal distinct from a real
-regression.
+`tests/test_total_imputation_workflow.py` covers composition rather than
+values: that each stage accepts the artifact the previous one wrote, that
+every artifact a run should produce appears, and that nothing is lost between
+stages -- no household dropped, no project dropped, no curated variable
+silently absent. The curated set is
+`etdmap.data_model.test_aggregation_columns`, read from the data model rather
+than listed, so the check cannot drift from it.
 
 # Configuration
 

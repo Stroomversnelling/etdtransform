@@ -45,8 +45,9 @@ N = 4
 
 
 @pytest.fixture(autouse=True)
-def _declared_model(monkeypatch):
-    declare_synthetic_model(monkeypatch, MODEL)
+def _declared_model():
+    with declare_synthetic_model(MODEL):
+        yield
 
 
 def _frame(per_household, project_of=None, register=None):

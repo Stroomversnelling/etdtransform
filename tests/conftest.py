@@ -71,7 +71,13 @@ def mapped_dataset(tmp_path_factory):
     currently emits rather than whatever a previous run left on disk. Only the
     tests that read mapped data request it, so the fast tiers never pay for it.
 
-    Cached between sessions under the folder named by `fixture_cache_path` and
+    Built into this session's temporary folder, so no two runs share it and a
+    run cannot be left broken by one that was interrupted. The stages write
+    into the dataset -- `_include_updated` rewrites index.parquet through
+    `update_include` -- so a folder shared between runs is mutable state, not a
+    cache.
+
+    Setting `fixture_cache_path` reuses a dataset between sessions instead,
     keyed on the contents of the installed etdmap plus the metadata it is
     generated from. A reinstall of changed code changes the key; the version
     number does not move during development and is deliberately not used.
@@ -80,16 +86,15 @@ def mapped_dataset(tmp_path_factory):
     bsv_metadata = Path(etdmap_config["bsv_metadata_file"])
     supplier_metadata = Path(etdmap_config["supplier_metadata_xlsx_file"])
 
-    key = installed_fingerprint(bsv_metadata, supplier_metadata)
-    cache_root = Path(
-        config["etdtransform_configuration"].get("fixture_cache_path")
-        or Path(config["etdtransform_configuration"]["aggregate_folder_path"]).parent
-        / "_fixture_cache"
-    )
-    target = cache_root / key / "mapped"
-    done = target / "index.parquet"
+    cache_root = config["etdtransform_configuration"].get("fixture_cache_path")
+    if cache_root:
+        key = installed_fingerprint(bsv_metadata, supplier_metadata)
+        target = Path(cache_root) / key / "mapped"
+    else:
+        key = None
+        target = tmp_path_factory.mktemp("mapped_fixture") / "mapped"
 
-    if done.is_file():
+    if (target / "index.parquet").is_file():
         logging.info(f"Reusing cached mapped dataset: {target}")
     else:
         logging.info(f"Building mapped dataset for etdmap {key}: {target}")
@@ -131,18 +136,15 @@ def _include_updated(mapped_dataset):
     Meenemen == True rows and every pipeline exits early with no output.
 
     update_include saves through save_index_to_parquet, which writes the
-    index.parquet (including the household-batch
-    columns). That requires the fixture HuisBatch sync CSV that etdmap's
-    conftest writes next to the fixture BSV metadata -- checked here so a
-    missing prerequisite fails with a pointer instead of a skipped index.
+    index.parquet (including the household-batch columns) from the HuisBatch
+    sync CSV. That CSV is written inside the dataset by whichever run generated
+    it, so it is resolved from the dataset rather than from an option the
+    generating call set: a session reusing a cached dataset never makes that
+    call.
     """
-    _sync_csv = Path(str(etdmap.options.bsv_metadata_file)).parent / "household_batch_sync.csv"
-    etdmap.options.household_batch_csv_path = _sync_csv
-    if not _sync_csv.exists():
-        raise FileNotFoundError(
-            f"Fixture HuisBatch sync CSV not found at {_sync_csv}. Run "
-            f"etdmap's test suite first (its conftest writes it)."
-        )
+    etdmap.options.household_batch_csv_path = (
+        Path(mapped_dataset) / "_generated_metadata" / "household_batch_sync.csv"
+    )
     etdmap.index_helpers.update_include()
 
 
@@ -484,39 +486,15 @@ def pytest_addoption(parser):
             "and after changing anything a downstream repo depends on."
         ),
     )
-    parser.addoption(
-        "--regenerate-pins",
-        action="store_true",
-        default=False,
-        help=(
-            "Rewrite the committed reference pins under tests/data/ from a run "
-            "of the canonical chain, and run nothing else. Review why the "
-            "output moved before using this: it declares the current output "
-            "correct."
-        ),
-    )
-
 
 #: The expression pyproject sets in addopts. --full-suite clears this one and
 #: nothing else, so an explicit -m on the command line still wins.
 DEFAULT_MARKEXPR = "not pipeline"
 
-#: A test that WRITES a committed reference file rather than reading one. It is
-#: deselected unless --regenerate-pins asks for it: a run that quietly rewrote
-#: the thing it compares against would always be green. Deselection rather than
-#: a skip, because a skip reads as "not run" and this suite forbids them.
-_REGENERATE_ONLY = "regenerate"
-
 
 def pytest_configure(config):
     if config.getoption("--full-suite") and config.option.markexpr == DEFAULT_MARKEXPR:
         config.option.markexpr = ""
-    if config.getoption("--regenerate-pins"):
-        config.option.markexpr = _REGENERATE_ONLY
-    elif config.option.markexpr == DEFAULT_MARKEXPR:
-        config.option.markexpr = f"{DEFAULT_MARKEXPR} and not {_REGENERATE_ONLY}"
-    elif not config.option.markexpr:
-        config.option.markexpr = f"not {_REGENERATE_ONLY}"
 
 
 def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
