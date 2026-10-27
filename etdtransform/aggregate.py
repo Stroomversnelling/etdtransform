@@ -619,12 +619,16 @@ def impute_mapped_households_sharded(
             apparaat_sets=apparaat_sets,
         )
         all_gap_stats.append(gap_stats_chunk)
-        for hid, cnt in chunk_df.groupby("HuisIdBSV").size().items():
-            total_records[int(hid)] = int(cnt)
+        for household_id, count in chunk_df.groupby("HuisIdBSV").size().items():
+            total_records[int(household_id)] = int(count)
 
-        for (hid, hbid), g in chunk_df.groupby(["HuisIdBSV", "HuisBatchIdBSV"], sort=True):
+        for (household_id, household_batch_id), g in chunk_df.groupby(
+            ["HuisIdBSV", "HuisBatchIdBSV"], sort=True
+        ):
             part_dir = os.path.join(
-                out_root, f"HuisIdBSV={int(hid)}", f"HuisBatchIdBSV={int(hbid)}"
+                out_root,
+                f"HuisIdBSV={int(household_id)}",
+                f"HuisBatchIdBSV={int(household_batch_id)}",
             )
             os.makedirs(part_dir, exist_ok=True)
             # Hive convention: partition ids live in the path, not the file.
@@ -1018,9 +1022,9 @@ def resample_hh_data_duckdb(
     diff_cols = [col for col in active_config if cumulative_column(col)]
     cumul_cols = [cumulative_column(col) for col in diff_cols]
 
-    # The batch id rides along in the grouping: it is a partition key of the
-    # output, so it has to survive the GROUP BY. Grouping by it does not change
-    # the grain while households are 1:1 with batches.
+    # The household batch id rides along in the grouping: it is a partition key
+    # of the output, so it has to survive the GROUP BY. It does not change the
+    # grain, which is already per household batch.
     _batch_id = ["HuisBatchIdBSV"]
     id_cols = ["HuisIdBSV"] + _batch_id + ["ProjectIdBSV", "ReadingDate"]
     _group_ids_sql = ", ".join(["HuisIdBSV"] + _batch_id + ["ProjectIdBSV"])

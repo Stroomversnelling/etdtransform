@@ -20,6 +20,8 @@ import pytest
 import yaml
 
 import etdtransform
+from etdmap.mapping_helpers import save_household_shard
+from etdmap.storage import mapped_household_paths
 from etdmap.testing import (
     DEFAULT_HOUSEHOLDS_PER_PROJECT,
     DEFAULT_PROJECTS,
@@ -188,28 +190,35 @@ def household_frame(n_rows=4, start="2024-01-01", project=1, freq="5min",
     return df
 
 
-def shard_dir(root, household_id, batch_id=None):
-    """The hive directory one (household, batch) shard lives in.
+def shard_dir(root, household_id, household_batch_id=None):
+    """The hive directory one household batch's shard lives in.
 
-    The single definition of the convention in this suite. `etdmap.storage`
-    owns the reading side of it (`_SHARD_PART_RE`, `shard_glob`) but exposes no
-    writer, so a fixture that spells the path itself can write a tree the
-    readers resolve differently -- and several did. *batch_id* defaults to
-    *household_id*, which is the one-batch-per-household case.
+    For locating a shard a test wants to read or check;
+    :func:`etdmap.mapping_helpers.save_household_shard` is what writes it.
+
+    *household_batch_id* defaults to *household_id*, which is how the mapping
+    currently numbers a household batch (`save_mapped_household`) and so how
+    the fixtures are laid out. The two are separate identifiers: a household
+    can have several household batches.
     """
-    if batch_id is None:
-        batch_id = household_id
+    if household_batch_id is None:
+        household_batch_id = household_id
     return (
-        Path(root) / f"HuisIdBSV={household_id}" / f"HuisBatchIdBSV={batch_id}"
+        Path(root)
+        / f"HuisIdBSV={household_id}"
+        / f"HuisBatchIdBSV={household_batch_id}"
     )
 
 
 def write_shard_tree(root, frames):
     """Write synthetic household frames as the hive layout the stages read.
 
-    *frames* is keyed either by household id, for the one-batch-per-household
-    case, or by ``(household_id, batch_id)`` where a test needs a household
-    delivered in several batches.
+    *frames* is keyed either by household id, taking the default household
+    batch id, or by ``(household_id, household_batch_id)`` where a test needs a
+    household delivered in several household batches.
+
+    Written through the mapping's own shard writer, so the tree is laid out the
+    way a mapped dataset is.
 
     `HuisIdBSV` is dropped from the file because the path carries it;
     `HuisBatchIdBSV` is a path key too, and the writers refuse a source
@@ -217,11 +226,14 @@ def write_shard_tree(root, frames):
     """
     root = Path(root)
     for key, frame in frames.items():
-        household_id, batch_id = key if isinstance(key, tuple) else (key, key)
-        d = shard_dir(root, household_id, batch_id)
-        d.mkdir(parents=True, exist_ok=True)
-        frame.drop(columns=["HuisIdBSV"], errors="ignore").to_parquet(
-            d / "part.parquet", index=False
+        household_id, household_batch_id = (
+            key if isinstance(key, tuple) else (key, key)
+        )
+        save_household_shard(
+            frame.drop(columns=["HuisIdBSV"], errors="ignore"),
+            household_id,
+            household_batch_id,
+            root,
         )
     return root
 
@@ -233,29 +245,22 @@ def write_shard_tree(root, frames):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def sharded_fixture_mapped(tmp_path_factory, _include_updated):
-    """Sharded mapped copy of the flat test fixture (10 HH), with the fixture's
-    index (`Meenemen`-populated -- depends on _include_updated, which refreshes
-    it). Built fresh so it cannot drift."""
-    src = Path(etdtransform.options.mapped_folder_path)
-    dst = tmp_path_factory.mktemp("sharded_mapped")
-    n = 0
-    for f in sorted(src.glob("household_*_table.parquet")):
-        hid = int(f.stem.split("_")[1])
-        # The mapped sharded area has no artifact-name level: households sit
-        # directly under `sharded/`, which is the second place
-        # `resolve_source_path` looks.
-        d = shard_dir(dst / "sharded", hid)
-        d.mkdir(parents=True)
-        shutil.copyfile(f, d / "part.parquet")
-        n += 1
-    # The count the dataset was generated with. A literal here would fail
-    # whenever a fixture is shaped for the behaviour it covers, which is the
-    # point of the shape being a parameter.
+def sharded_fixture_mapped(mapped_dataset, _include_updated):
+    """The mapped dataset, with its index `Meenemen`-populated.
+
+    The mapping writes whichever layout `mapped_output_format` names, which is
+    the sharded one by default, so this is the dataset as generated rather than
+    a copy of it in another layout. Depends on `_include_updated`, which
+    rewrites the index the stages filter on.
+    """
+    # The count the dataset was generated with. The shape is a parameter of
+    # the generator, so a literal here would contradict any other shape.
     expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
-    assert n == expected, f"expected {expected} households, found {n}"
-    shutil.copyfile(src / "index.parquet", dst / "index.parquet")
-    return dst
+    found = mapped_household_paths(mapped_dataset)
+    assert len(found) == expected, (
+        f"expected {expected} households, found {len(found)}"
+    )
+    return Path(mapped_dataset)
 
 
 @pytest.fixture(scope="session")

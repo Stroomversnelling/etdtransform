@@ -123,6 +123,42 @@ def _copy_artifact(src_folder, dst_folder, name):
     return dst
 
 
+@pytest.fixture(scope="module")
+def averaged_input(tmp_path_factory):
+    """An aggregate folder holding `avg_diffs`, from this file's own households.
+
+    The guards below need imputation's one input artifact to exist before they
+    can reach the check they are about. Built here from clean single-batch
+    households at the production floor, rather than taken from the integration
+    chain: these tests want an artifact, not that dataset, and borrowing it
+    makes them pay for a chain they do not read.
+    """
+    from etdmap.testing import DEFAULT_HOUSEHOLDS_PER_PROJECT
+    from conftest import household_frame, write_shard_tree
+
+    root = tmp_path_factory.mktemp("averaged_input")
+    mapped = root / "mapped"
+    households = range(1, DEFAULT_HOUSEHOLDS_PER_PROJECT + 1)
+    _write_index(mapped, [(h, h, 1, True) for h in households])
+    write_shard_tree(
+        mapped / "sharded",
+        {
+            h: household_frame(
+                n_rows=6, start="2024-01-01", ElektriciteitNetgebruikDiff=0.1,
+            )
+            for h in households
+        },
+    )
+
+    agg = root / "agg"
+    prepare_diff_averages_sharded(
+        mapped_folder_path=mapped,
+        aggregate_folder_path=agg,
+        cumulative_columns=["ElektriciteitNetgebruik"],
+    )
+    return agg / "sharded"
+
+
 @pytest.mark.integration
 @pytest.mark.pipeline
 class TestBatchSafetyGuards:
@@ -153,25 +189,25 @@ class TestBatchSafetyGuards:
             _copy_artifact(src_agg, agg / "sharded", name)
         return agg
 
-    def test_multi_batch_household_raises_in_impute(self, tmp_path, sharded_stage3, _cum_cols):
+    def test_multi_batch_household_raises_in_impute(self, tmp_path, averaged_input, _cum_cols):
         # household 1 delivered in two batches (disjoint periods): imputing the
         # concatenated series would fill the BETWEEN-batch gap -> refuse.
         _write_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2025-01-01")
-        agg = self._agg_with_artifacts(tmp_path, sharded_stage3)
+        agg = self._agg_with_artifacts(tmp_path, averaged_input)
         with pytest.raises(HouseBatchOverlapError):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,
                 cum_cols=_cum_cols, household_ids=[1],
             )
 
-    def test_duplicate_timestamps_raise_in_impute(self, tmp_path, sharded_stage3, _cum_cols):
+    def test_duplicate_timestamps_raise_in_impute(self, tmp_path, averaged_input, _cum_cols):
         # overlapping batch periods: duplicate (HuisIdBSV, ReadingDate).
         _write_index(tmp_path, [(1, 1, 1, True), (1, 9, 1, True)])
         self._shard(tmp_path, 1, 1, "2024-01-01")
         self._shard(tmp_path, 1, 9, "2024-01-01")  # same period redelivered
-        agg = self._agg_with_artifacts(tmp_path, sharded_stage3)
+        agg = self._agg_with_artifacts(tmp_path, averaged_input)
         with pytest.raises((HouseBatchOverlapError, ValueError)):
             impute_mapped_households_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=agg,

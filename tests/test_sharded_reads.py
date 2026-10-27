@@ -108,8 +108,8 @@ class TestMappedHouseholdFiles:
         _write_sharded(tmp_path, [1, 2])
         files = mapped_household_files(1, mapped_folder_path=tmp_path)
         assert len(files) == 1
-        path, hbid = files[0]
-        assert hbid == 1
+        path, household_batch_id = files[0]
+        assert household_batch_id == 1
         assert str(path).endswith("part.parquet")
         assert "HuisIdBSV=1" in str(path)
 
@@ -117,17 +117,19 @@ class TestMappedHouseholdFiles:
         _write_flat(tmp_path, [1])
         files = mapped_household_files(1, mapped_folder_path=tmp_path)
         assert len(files) == 1
-        path, hbid = files[0]
-        assert hbid == 1  # flat predates batches: 1:1 by definition
+        path, household_batch_id = files[0]
+        # The flat layout has no household-batch level, so the reader
+        # reports the household id in its place.
+        assert household_batch_id == 1
         assert str(path).endswith("household_1_table.parquet")
 
     def test_sharded_multi_batch_returns_both(self, tmp_path):
-        for hbid in (1, 9):
-            d = tmp_path / "sharded" / "HuisIdBSV=1" / f"HuisBatchIdBSV={hbid}"
+        for household_batch_id in (1, 9):
+            d = tmp_path / "sharded" / "HuisIdBSV=1" / f"HuisBatchIdBSV={household_batch_id}"
             d.mkdir(parents=True)
             _hh_df(1).to_parquet(d / "part.parquet")
         files = mapped_household_files(1, mapped_folder_path=tmp_path)
-        assert [hbid for _, hbid in files] == [1, 9]  # sorted by batch id
+        assert [household_batch_id for _, household_batch_id in files] == [1, 9]  # sorted by household batch id
 
     def test_missing_household_raises(self, tmp_path):
         _write_sharded(tmp_path, [1])
@@ -180,8 +182,8 @@ class TestReadMappedHouseholds:
         A silent fall-back to HuisBatchIdBSV=HuisIdBSV masks multi-batch data
         and blinds the imputation batch guard (a path pattern that matched
         only '/' once made every Windows path fall back that way)."""
-        for hbid in (1, 9):
-            d = tmp_path / "sharded" / "HuisIdBSV=1" / f"HuisBatchIdBSV={hbid}"
+        for household_batch_id in (1, 9):
+            d = tmp_path / "sharded" / "HuisIdBSV=1" / f"HuisBatchIdBSV={household_batch_id}"
             d.mkdir(parents=True)
             _hh_df(1).to_parquet(d / "part.parquet")
         df = read_mapped_households([1], mapped_folder_path=tmp_path)

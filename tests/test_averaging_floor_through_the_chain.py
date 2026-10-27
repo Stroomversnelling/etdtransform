@@ -1,9 +1,9 @@
 """The averaging floor, at its production value, through the real stage.
 
 ``test_minimum_household_presence.py`` covers the gate as a function, on frames
-it builds. This covers the step the fixture used to prevent: that the stage
-reading a mapped dataset applies the same floor, so a project with enough
-eligible households gets an average and one below it does not.
+it builds. This covers the stage that reads a mapped dataset applying the same
+floor: a project with enough eligible households gets an average and one below
+it does not.
 
 The shape is the behaviour here, so this file builds its own dataset rather than
 sharing the integration one: two projects at the floor, with one household of
@@ -11,16 +11,15 @@ the first excluded through ``Meenemen``, which is how production drops a
 household.
 """
 
-import shutil
-
-import pandas as pd
-import pytest
-from conftest import shard_dir
 
 import etdmap
 import etdmap.index_helpers
+import pandas as pd
+import pytest
 from etdmap.testing import generate_mapped_dataset
-from etdtransform.impute import AVG_DIFFS_ARTIFACT, prepare_diff_averages_sharded
+
+import etdtransform
+from etdtransform.impute import prepare_diff_averages_sharded, read_diffs
 from etdtransform.presence import MIN_ELIGIBLE_HOUSEHOLDS
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
@@ -40,6 +39,25 @@ def averaged(tmp_path_factory):
     rather than generating a dataset per assertion.
     """
     config_dir = tmp_path_factory.mktemp("floor")
+    # Captured before generating: generate_mapped_dataset points etdmap.options
+    # at what it wrote and leaves it there, so reading them afterwards would
+    # record this fixture's own paths as the ones to restore.
+    before = {
+        (module, name): getattr(module.options, name)
+        for module, names in (
+            (
+                etdmap,
+                (
+                    "mapped_folder_path",
+                    "bsv_metadata_file",
+                    "household_batch_csv_path",
+                    "project_mapping_csv_path",
+                ),
+            ),
+            (etdtransform, ("mapped_folder_path",)),
+        )
+        for name in names
+    }
     mapped = generate_mapped_dataset(
         config_dir / "mapped",
         bsv_metadata_file=_metadata_path(),
@@ -58,29 +76,23 @@ def averaged(tmp_path_factory):
     index_df.loc[index_df["HuisIdBSV"] == dropped, "Meenemen"] = False
     index_df.to_parquet(index_path, engine="pyarrow")
 
-    sharded = config_dir / "sharded_mapped"
-    for source in sorted(mapped.glob("household_*_table.parquet")):
-        household_id = int(source.stem.split("_")[1])
-        target = shard_dir(sharded / "sharded", household_id)
-        target.mkdir(parents=True)
-        shutil.copyfile(source, target / "part.parquet")
-    shutil.copyfile(index_path, sharded / "index.parquet")
-
     aggregate = config_dir / "aggregate"
-    previous = etdmap.options.mapped_folder_path
-    etdmap.options.mapped_folder_path = sharded
+    # Both: the shard reader resolves through etdmap's, and the cadence sidecar
+    # the grid is read from through etdtransform's.
+    etdmap.options.mapped_folder_path = mapped
+    etdtransform.options.mapped_folder_path = mapped
     try:
         prepare_diff_averages_sharded(
-            mapped_folder_path=sharded,
+            mapped_folder_path=mapped,
             aggregate_folder_path=aggregate,
             cumulative_columns=["Gasgebruik"],
         )
+        averages = read_diffs(aggregate_folder_path=aggregate)
     finally:
-        etdmap.options.mapped_folder_path = previous
+        for (module, name), value in before.items():
+            setattr(module.options, name, value)
 
-    from etdtransform.impute import read_diffs
-
-    return read_diffs(aggregate_folder_path=aggregate), dropped
+    return averages, dropped
 
 
 def _metadata_path():
