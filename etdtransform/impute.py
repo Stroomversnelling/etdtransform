@@ -416,28 +416,31 @@ def calculate_average_diff_ibis(
     # rebuild every presence aggregate once per project per column, and the
     # number of distinct grids is bounded by the declarations while the number
     # of projects is not (PROFILING_GUIDANCE.md).
-    membership = tbl.select("HuisIdBSV", project_id_column).distinct().execute()
-    project_by_household = {}
+    membership = (
+        tbl.select("HuisBatchIdBSV", project_id_column).distinct().execute()
+    )
+    project_by_household_batch = {}
     unassigned = []
-    for household, project in zip(
-        membership["HuisIdBSV"], membership[project_id_column]
+    for household_batch, project in zip(
+        membership["HuisBatchIdBSV"], membership[project_id_column]
     ):
         if pd.isna(project):
-            unassigned.append(int(household))
+            unassigned.append(int(household_batch))
         else:
-            project_by_household[int(household)] = int(project)
+            project_by_household_batch[int(household_batch)] = int(project)
     if unassigned:
         raise ValueError(
-            f"{len(unassigned)} household(s) carry no {project_id_column}, so "
-            f"their readings belong to no project average: "
-            f"{sorted(unassigned)[:10]}. The project is joined from the index "
-            f"before averaging; a household missing from it cannot contribute."
+            f"{len(unassigned)} household batch(es) carry no "
+            f"{project_id_column}, so their readings belong to no project "
+            f"average: {sorted(unassigned)[:10]}. The project is joined from "
+            f"the index before averaging; a dataset missing from it cannot "
+            f"contribute."
         )
 
     if grid_minutes is None:
-        grid_by_project = grid_minutes_by_project(cadence, project_by_household)
+        grid_by_project = grid_minutes_by_project(cadence, project_by_household_batch)
         unresolved = sorted(
-            set(project_by_household.values()) - set(grid_by_project)
+            set(project_by_household_batch.values()) - set(grid_by_project)
         )
         if unresolved:
             raise ValueError(
@@ -450,13 +453,13 @@ def calculate_average_diff_ibis(
     else:
         grid_by_project = {
             project: float(grid_minutes)
-            for project in set(project_by_household.values())
+            for project in set(project_by_household_batch.values())
         }
 
-    households_by_grid = {}
-    for household, project in project_by_household.items():
-        households_by_grid.setdefault(grid_by_project[project], []).append(
-            household
+    batches_by_grid = {}
+    for household_batch, project in project_by_household_batch.items():
+        batches_by_grid.setdefault(grid_by_project[project], []).append(
+            household_batch
         )
 
     per_grid = [
@@ -464,11 +467,11 @@ def calculate_average_diff_ibis(
             grid,
             _average_at_one_cadence(
                 tbl, project_id_column, diff_columns, bounds, cadence,
-                grid_minutes=grid, included_ids=sorted(households),
+                grid_minutes=grid, included_ids=sorted(household_batches),
                 min_eligible=min_eligible,
             ),
         )
-        for grid, households in sorted(households_by_grid.items())
+        for grid, household_batches in sorted(batches_by_grid.items())
     ]
     return _combine_cadence_groups(per_grid, project_id_column, diff_columns)
 
@@ -490,11 +493,14 @@ def _average_at_one_cadence(
     denominator and the step-back can take a literal: within a pass there is one
     grid, and ``_resample_average_ibis`` needs the slot spacing as a number.
 
-    *included_ids* is the pass's households, resolved by the caller from the
+    *included_ids* is the pass's household batches, resolved by the caller from the
     (household, project) membership it already read, so this costs no round trip
     of its own.
     """
-    tbl = tbl.filter(tbl["HuisIdBSV"].isin(included_ids)) if included_ids else tbl
+    tbl = (
+        tbl.filter(tbl["HuisBatchIdBSV"].isin(included_ids))
+        if included_ids else tbl
+    )
 
     # Properties of the frame rather than of any column, so they are computed
     # once here instead of once per column inside the loop below.
@@ -567,10 +573,10 @@ def _average_at_one_cadence(
             included = tbl
             value = included[col].cast("float64")
 
-            # The interval each household's reading covers. Households absent
-            # from the cadence table report at the grid cadence.
+            # The interval each dataset's readings cover. A dataset absent
+            # from the cadence table reports at the grid cadence.
             minutes = _per_household(
-                included["HuisIdBSV"],
+                included["HuisBatchIdBSV"],
                 cadence_minutes_by_household_batch(col, cadence),
                 grid_minutes,
             )
@@ -601,12 +607,12 @@ def _average_at_one_cadence(
                     )
 
             # Values above the column threshold are discarded, not clipped.
-            # The threshold is scaled to each household's cadence.
+            # The threshold is scaled to each dataset's cadence.
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
                 assert_bounds_not_inverted(col, cadence)
                 scaled_bound = _per_household(
-                    included["HuisIdBSV"],
+                    included["HuisBatchIdBSV"],
                     column_bound_by_household_batch(col, cadence),
                     bound,
                 )
@@ -1109,12 +1115,16 @@ def sort_for_impute(df: pd.DataFrame, project_id_column: str):
 
     Notes
     -----
-    The sorting order is: project ID, household ID (HuisIdBSV), and reading date (ReadingDate).
-    This order is crucial for the imputation process to work correctly.
+    The sorting order is: project, household, household batch
+    (HuisBatchIdBSV, which identifies the dataset) and ReadingDate. Each
+    dataset's rows then form one contiguous run in date order, which the
+    imputation reads positionally.
 
     """
     logging.info("Sorting to prepare for imputation.")
-    return df.sort_values(by=[project_id_column, "HuisIdBSV", "ReadingDate"])
+    return df.sort_values(
+        by=[project_id_column, "HuisIdBSV", "HuisBatchIdBSV", "ReadingDate"]
+    )
 
 
 def get_diff_columns(cumulative_columns: list):

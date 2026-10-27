@@ -22,10 +22,14 @@ import yaml
 import etdtransform
 from etdmap.mapping_helpers import save_household_shard
 from etdmap.storage import mapped_household_paths
-from etdmap.testing import (
+from etdmap.testing import (  # noqa: F401  (re-exported for the tests)
     DEFAULT_HOUSEHOLDS_PER_PROJECT,
     DEFAULT_PROJECTS,
+    HOUSEHOLD_BATCH_OFFSET,
     generate_mapped_dataset,
+    household_batch_of,
+    household_frame,
+    households_frame,
     installed_fingerprint,
 )
 from etdtransform.aggregate import (
@@ -154,40 +158,19 @@ def _cum_cols():
 # (a stage asserts it), the id columns, and the split where HuisIdBSV lives in
 # the hive path rather than in the file. Hand-rolling a frame per test file
 # means finding each of those by failing, and the versions drift.
+#
+# THE TWO IDS ARE NEVER EQUAL IN A TEST FRAME. `HuisBatchIdBSV` identifies the
+# dataset -- a time series, its cadence, its sidecar rows, its shard -- and
+# `HuisIdBSV` the household it belongs to, which matters for accounting and in
+# the index. Frames here declare the household batch as the household id plus
+# 1000, so code that reaches for the wrong one fails instead of passing on an
+# equality that only holds while the mapping writes one dataset per household.
 # ---------------------------------------------------------------------------
 
-def household_frame(n_rows=4, start="2024-01-01", project=1, freq="5min",
-                    **columns):
-    """One household's rows: the id columns, plus *columns*, plus the
-    cumulative counterpart of every interval column given.
-
-    Each value may be a scalar (repeated) or a list of length *n_rows*. The
-    pairing is completed from the data model rather than spelled out per test,
-    because a frame holding one half of a pair is not a household artifact and
-    the stages refuse it.
-
-    `HuisIdBSV` is deliberately absent: :func:`write_shard_tree` puts it in the
-    path, which is where a reader expects it.
-    """
-    from etdmap.data_model import cumulative_column
-
-    df = pd.DataFrame({
-        "ProjectIdBSV": pd.array([project] * n_rows, dtype="Int64"),
-        "ReadingDate": pd.date_range(start, periods=n_rows, freq=freq,
-                                     tz="UTC"),
-    })
-    for name, value in columns.items():
-        values = value if isinstance(value, (list, tuple)) else [value] * n_rows
-        df[name] = pd.array(list(values), dtype="Float64")
-    for name in list(columns):
-        counterpart = cumulative_column(name)
-        if counterpart and counterpart not in df.columns:
-            # A monotonic register under the interval column. The value is not
-            # the subject of any test that needs the pair present; its being
-            # there is.
-            df[counterpart] = pd.array([float(i) for i in range(n_rows)],
-                                       dtype="Float64")
-    return df
+# `household_frame` (one household batch, no id columns -- for a shard tree) and
+# `households_frame` (several households in one frame, carrying both ids -- for
+# a stage that takes a frame) live in `etdmap.testing`, which both suites
+# import, and are re-exported here for the tests that already name them.
 
 
 def shard_dir(root, household_id, household_batch_id=None):
@@ -558,7 +541,7 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
 
     assigned = frame.assign(
         _value=source.astype("Float64"),
-        _minutes=frame["HuisIdBSV"].map(minutes).astype("Float64"),
+        _minutes=frame["HuisBatchIdBSV"].map(minutes).astype("Float64"),
         _on_cumulative=on_register.astype("boolean"),
     )
 
@@ -642,7 +625,8 @@ def cadence_table(df, columns, minutes=5):
     """
     batches = sorted(int(b) for b in df["HuisBatchIdBSV"].dropna().unique())
     rows = [
-        {"HuisBatchIdBSV": batch, "column": column, "cadence_minutes": minutes}
+        {"HuisBatchIdBSV": batch, "column": column,
+         "cadence_minutes": minutes}
         for batch in batches
         for column in columns
     ]

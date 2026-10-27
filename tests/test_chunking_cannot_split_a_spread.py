@@ -28,6 +28,11 @@ N = 288
 READING = 0.6
 
 
+def _batch(household):
+    """The dataset id a frame for household *household* carries."""
+    return household + 1000
+
+
 class TestTheChunkerNeverSplitsAHousehold:
     """The structural half. If a chunk could hold part of a household, every
     behavioural claim below would be about the wrong thing."""
@@ -69,7 +74,7 @@ def _household(household):
             values.iloc[position] = READING
     frame = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * N, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([household] * N, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(household)] * N, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * N, dtype="Float64"),
@@ -80,13 +85,17 @@ def _household(household):
 
 
 def _cadence(frame):
+    """The sidecar rows *frame* would be mapped with: one block per dataset,
+    keyed on ``HuisBatchIdBSV``, measured on that dataset's own readings."""
     tables = []
-    for household in sorted(int(h) for h in frame["HuisIdBSV"].unique()):
-        own = frame[frame["HuisIdBSV"] == household]
+    for household_batch in sorted(
+        int(b) for b in frame["HuisBatchIdBSV"].unique()
+    ):
+        own = frame[frame["HuisBatchIdBSV"] == household_batch]
         table = detect_column_cadence(own, grid_minutes=GRID)
         table.insert(
             0, "HuisBatchIdBSV",
-            pd.array([household] * len(table), dtype="Int64"),
+            pd.array([household_batch] * len(table), dtype="Int64"),
         )
         tables.append(table)
     return pd.concat(tables, ignore_index=True)

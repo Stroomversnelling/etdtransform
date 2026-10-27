@@ -33,7 +33,7 @@ def _frame(columns):
     n = max(len(v) for v in columns.values())
     data = {
         "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
     }

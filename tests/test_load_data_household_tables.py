@@ -36,7 +36,7 @@ def _household_frame() -> pd.DataFrame:
         for i in range(_ROWS_PER_HH):
             rows.append({
                 "HuisIdBSV": household_id,
-                "HuisBatchIdBSV": household_id,
+                "HuisBatchIdBSV": household_id + 1000,
                 "ProjectIdBSV": 1,
                 "ReadingDate": pd.Timestamp("2024-01-01", tz="UTC")
                 + pd.Timedelta(hours=i),
@@ -55,7 +55,7 @@ def _index_frame() -> pd.DataFrame:
     return pd.DataFrame({
         "HuisIdLeverancier": pd.array([f"L{h}" for h in _HOUSEHOLDS], dtype="string"),
         "HuisIdBSV": pd.array(_HOUSEHOLDS, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array(_HOUSEHOLDS, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([value + 1000 for value in _HOUSEHOLDS], dtype="Int64"),
         "Meenemen": pd.array([True] * n, dtype="boolean"),
         "ProjectIdLeverancier": pd.array(["P1"] * n, dtype="string"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),

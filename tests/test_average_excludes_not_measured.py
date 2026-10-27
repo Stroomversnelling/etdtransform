@@ -76,7 +76,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
 
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([hh] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([value + 1000 for value in [hh] * n], dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(values, dtype="Float64"),
@@ -105,7 +105,7 @@ def _clean_household(hh, n=40):
     """
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([hh] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([value + 1000 for value in [hh] * n], dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         DIFF: pd.array([0.0] + [NORMAL] * (n - 1), dtype="Float64"),

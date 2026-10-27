@@ -45,7 +45,7 @@ def _two_project_frame():
         n = 4
         frames.append(pd.DataFrame({
             "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * n], dtype="Int64"),
             "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
             CUM: pd.array([100.0, 100.5, pd.NA, 102.0], dtype="Float64"),

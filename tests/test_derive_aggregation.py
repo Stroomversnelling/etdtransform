@@ -249,8 +249,8 @@ class TestProvenanceHelpers:
              "rhs_vars": "Zelfgebruik,ZonopwekBruto"},
         ]
         hh_rows = [
-            {"HuisIdBSV": 1, "HuisBatchIdBSV": 1, "schema_group_id": 0},
-            {"HuisIdBSV": 2, "HuisBatchIdBSV": 2, "schema_group_id": 0},
+            {"HuisIdBSV": 1, "HuisBatchIdBSV": 1 + 1000, "schema_group_id": 0},
+            {"HuisIdBSV": 2, "HuisBatchIdBSV": 2 + 1000, "schema_group_id": 0},
         ]
         _write_calc_provenance(out, plan_rows, hh_rows, "cafef00d")
 

@@ -98,8 +98,8 @@ def reconstruct_cumulative_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame
 
     For each col in cols:
       - col + "Original"  = original cumulative value (saved for audit)
-      - col               = cumsum of its interval column per household (rebuilt)
-      - col + "Check"     = per-household diff of (rebuilt - original)
+      - col               = cumsum of its interval column per dataset (rebuilt)
+      - col + "Check"     = per-dataset diff of (rebuilt - original)
 
     The interval column is the one the data model links to the cumulative
     variable, which is not always its name plus "Diff".
@@ -111,16 +111,18 @@ def reconstruct_cumulative_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame
     and only differences across it mean anything. "Check" is a difference either
     way, so it remains the drift imputation introduced.
 
-    Data must be sorted by HuisIdBSV then ReadingDate before calling this.
+    Data must be sorted by HuisBatchIdBSV then ReadingDate before calling this.
     Mutates df in-place and returns it.
     """
     for col in cols:
         df[col + "Original"] = df[col]
         df[col] = (
-            df.groupby("HuisIdBSV", sort=False)[interval_column(col)].cumsum()
+            df.groupby("HuisBatchIdBSV", sort=False)[interval_column(col)]
+            .cumsum()
         )
         df[col + "Check"] = (
-            (df[col] - df[col + "Original"]).groupby(df["HuisIdBSV"]).diff()
+            (df[col] - df[col + "Original"])
+            .groupby(df["HuisBatchIdBSV"]).diff()
         )
     return df
 
@@ -140,9 +142,10 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
         tbl.to_parquet(imputed_path)   # overwrites with reconstructed data
     """
     win_cum = ibis.window(
-        group_by="HuisIdBSV", order_by="ReadingDate", preceding=None, following=0
+        group_by="HuisBatchIdBSV", order_by="ReadingDate",
+        preceding=None, following=0,
     )
-    win_lag = ibis.window(group_by="HuisIdBSV", order_by="ReadingDate")
+    win_lag = ibis.window(group_by="HuisBatchIdBSV", order_by="ReadingDate")
 
     # Pass 1: all orig_col saves + cumsum rewrites in one mutate().
     # Batching avoids building a 2*len(cols)-deep nested subquery chain --

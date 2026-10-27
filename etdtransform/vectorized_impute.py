@@ -1575,12 +1575,13 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
     # Step 1: Identify NA values in diff_col
     is_na_mask = df[diff_col].isna()
 
-    # Step 2: Identify gap start only for NA values and transitions between households
+    # Step 2: Identify gap start only for NA values and transitions between
+    # datasets -- a gap does not run across the boundary between two series.
     df["gap_start"] = (is_na_mask & (~is_na_mask.shift(1, fill_value=False))) | (
-        (df["HuisIdBSV"] != df["HuisIdBSV"].shift(1)) & is_na_mask
+        (df["HuisBatchIdBSV"] != df["HuisBatchIdBSV"].shift(1)) & is_na_mask
     )
 
-    # Step 3: Create gap groups by cumulative sum, but now ensure it doesn't increment unnecessarily at house boundaries
+    # Step 3: Create gap groups by cumulative sum, but now ensure it doesn't increment unnecessarily at dataset boundaries
     df["gap_group"] = df["gap_start"].cumsum()
 
     # Step 4: Ensure non-NA values are not included in any gap group
@@ -1808,20 +1809,20 @@ def process_imputation_vectorized(
         df["house_diff_median"] = (
             df[diff_col]
             .where(df["comparable_to_impute_mask"])
-            .groupby(df["HuisIdBSV"])
+            .groupby(df["HuisBatchIdBSV"])
             .transform("median")
         )
         df["project_avg_median"] = (
             df[avg_col]
             .where(df["comparable_to_impute_mask"])
-            .groupby(df["HuisIdBSV"])
+            .groupby(df["HuisBatchIdBSV"])
             .transform("median")
         )
 
-        df["comparable_counts"] = df.groupby("HuisIdBSV")[
+        df["comparable_counts"] = df.groupby("HuisBatchIdBSV")[
             "comparable_to_impute_mask"
         ].transform("sum")
-        df["total_counts"] = df.groupby("HuisIdBSV")[diff_col].transform("size")
+        df["total_counts"] = df.groupby("HuisBatchIdBSV")[diff_col].transform("size")
         not_enough_comparable = df["comparable_counts"] <= (df["total_counts"] / 2)
 
         # Either median at zero leaves nothing to compare, and dividing by it

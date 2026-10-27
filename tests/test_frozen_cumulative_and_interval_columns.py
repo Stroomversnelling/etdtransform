@@ -58,7 +58,7 @@ def _series(catchup: float) -> pd.DataFrame:
     df = pd.DataFrame(
         {
             "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1] * N, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * N], dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=N, freq="5min"),
             CUM: pd.array(values, dtype="Float64"),
@@ -192,7 +192,7 @@ def test_interval_only_column_is_imputed():
     df = pd.DataFrame(
         {
             "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
             CUM: pd.array([None] * n, dtype="Float64"),
@@ -215,11 +215,11 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     n = 6
     dates = pd.date_range("2026-01-01", periods=n, freq="5min")
     rows = [
-        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
+        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
         for hh in range(1, 21)
         for d in dates
     ]
-    rows += [{"HuisIdBSV": 99, "HuisBatchIdBSV": 99, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0} for d in dates]
+    rows += [{"HuisIdBSV": 99, "HuisBatchIdBSV": 99 + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0} for d in dates]
     df = pd.DataFrame(rows)
     df.loc[(df.HuisIdBSV == 99) & (df.ReadingDate == dates[0]), DIFF] = 5000.0
     df[DIFF] = df[DIFF].astype("Float64")
@@ -252,7 +252,7 @@ def test_project_average_rejects_physically_impossible_value():
     n = 6
     dates = pd.date_range("2026-01-01", periods=n, freq="5min")
     rows = [
-        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
+        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
         for hh in range(1, 21)
         for d in dates
     ]
@@ -292,8 +292,7 @@ class TestWhichThresholdAppliesWhere:
             "HuisIdBSV": pd.array(
                 [self.HOURLY, self.HOURLY, self.GRID, self.GRID], dtype="Int64"
             ),
-            "HuisBatchIdBSV": pd.array(
-                [self.HOURLY, self.HOURLY, self.GRID, self.GRID], dtype="Int64"
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [self.HOURLY, self.HOURLY, self.GRID, self.GRID]], dtype="Int64"
             ),
             DIFF: pd.array([50.0] * 4, dtype="Float64"),
             f"{DIFF}_is_imputed": pd.array([False, True, False, True], dtype="boolean"),
@@ -302,7 +301,7 @@ class TestWhichThresholdAppliesWhere:
     def _cadence(self):
         return pd.DataFrame({
             "HuisIdBSV": pd.array([self.HOURLY, self.GRID], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([self.HOURLY, self.GRID], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [self.HOURLY, self.GRID]], dtype="Int64"),
             "column": pd.array([CUM, CUM], dtype="string"),
             "cadence_minutes": pd.array([60, 5], dtype="Int64"),
         })

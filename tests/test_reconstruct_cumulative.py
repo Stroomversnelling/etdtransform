@@ -26,9 +26,13 @@ ROWS = 20
 # ---------------------------------------------------------------------------
 
 def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
-    """Original loop-based implementation used as ground truth."""
+    """Original loop-based implementation used as ground truth.
+
+    Per dataset, not per household: a cumulative total runs over one time
+    series, and a household can have several.
+    """
     modified = []
-    for _, hh in df.groupby("HuisIdBSV"):
+    for _, hh in df.groupby("HuisBatchIdBSV"):
         for col in cols:
             hh = hh.copy()
             hh[col + "Original"] = hh[col]
@@ -42,17 +46,29 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 # Fixture
 # ---------------------------------------------------------------------------
 
-def _make_df(household_ids: list, seed: int = 42) -> pd.DataFrame:
+def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
+    """Frames for *datasets*, each ``(HuisIdBSV, HuisBatchIdBSV)``.
+
+    Not `conftest.household_frame`: that builds one household's rows and fills
+    the cumulative counterpart with arbitrary values, while the relation
+    ``cumulative == cumsum(interval) + 100`` is what reconstruction is checked
+    against here, and these frames carry several datasets at once.
+
+    The draw is numpy's because pandas has no generator; every column it feeds
+    is stored as nullable Float64 (ADR-005).
+    """
     rng = np.random.default_rng(seed)
-    dates = pd.date_range("2023-01-01", periods=ROWS, freq="5min").astype("datetime64[us]")
+    dates = pd.date_range(
+        "2023-01-01", periods=ROWS, freq="5min"
+    ).astype("datetime64[us]")
     rows = []
-    for household_id in household_ids:
+    for household_id, household_batch_id in datasets:
         diffs = rng.uniform(0.1, 5.0, (len(COLS), ROWS))
-        cumulatives = [np.cumsum(d) + 100.0 for d in diffs]
+        cumulatives = [pd.Series(d, dtype="Float64").cumsum() + 100.0 for d in diffs]
         for i, dt in enumerate(dates):
             row = {
                 "HuisIdBSV": household_id,
-                "HuisBatchIdBSV": household_id,
+                "HuisBatchIdBSV": household_batch_id,
                 "ProjectIdBSV": 1,
                 "ReadingDate": dt,
             }
@@ -61,14 +77,25 @@ def _make_df(household_ids: list, seed: int = 42) -> pd.DataFrame:
                 row[col + "Diff"] = diffs[j][i]
             rows.append(row)
     df = pd.DataFrame(rows)
-    df["HuisIdBSV"] = df["HuisIdBSV"].astype("Int64")
-    df["ProjectIdBSV"] = df["ProjectIdBSV"].astype("Int64")
-    return df.sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True)
+    for id_column in ("HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV"):
+        df[id_column] = df[id_column].astype("Int64")
+    for col in COLS:
+        df[col] = df[col].astype("Float64")
+        df[col + "Diff"] = df[col + "Diff"].astype("Float64")
+    return df.sort_values(
+        ["HuisBatchIdBSV", "ReadingDate"]
+    ).reset_index(drop=True)
+
+
+#: Three households, one dataset each, plus a SECOND dataset of household 1
+#: over the same timestamps. Grouping the rebuild by household would run one
+#: cumulative total across both of household 1's deliveries.
+DATASETS = [(1, 1001), (2, 1002), (3, 1003), (1, 2001)]
 
 
 @pytest.fixture(scope="module")
 def base_df():
-    return _make_df([1, 2, 3])
+    return _make_df(DATASETS)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +104,7 @@ def base_df():
 
 def _sort(df: pd.DataFrame) -> pd.DataFrame:
     return (
-        df.sort_values(["HuisIdBSV", "ReadingDate"])
+        df.sort_values(["HuisBatchIdBSV", "ReadingDate"])
         .reset_index(drop=True)
     )
 
@@ -87,7 +114,7 @@ def _sort(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def test_pandas_matches_reference_single_household():
-    df = _make_df([1])
+    df = _make_df([(1, 1001)])
     ref = _reference_reconstruct(df.copy(), COLS)
     out = reconstruct_cumulative_columns(df.copy(), COLS)
     pd.testing.assert_frame_equal(_sort(out), _sort(ref), check_like=True, rtol=1e-9)
@@ -109,10 +136,10 @@ def test_pandas_original_column_preserved(base_df):
         )
 
 
-def test_pandas_cumsum_is_per_household(base_df):
+def test_pandas_cumsum_is_per_dataset(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for household_id, grp in out.groupby("HuisIdBSV"):
+        for _dataset, grp in out.groupby("HuisBatchIdBSV"):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 
@@ -120,7 +147,7 @@ def test_pandas_cumsum_is_per_household(base_df):
 def test_pandas_check_column_is_diff_of_residual(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for _, grp in out.groupby("HuisIdBSV"):
+        for _, grp in out.groupby("HuisBatchIdBSV"):
             residual = grp[col] - grp[col + "Original"]
             expected = residual.diff().values
             np.testing.assert_allclose(
@@ -128,9 +155,12 @@ def test_pandas_check_column_is_diff_of_residual(base_df):
             )
 
 
-def test_pandas_single_row_per_household():
-    """Edge case: one row per household -- check should be NaN."""
-    df = _make_df([10, 11]).groupby("HuisIdBSV").head(1).reset_index(drop=True)
+def test_pandas_single_row_per_dataset():
+    """Edge case: one row per dataset -- check should be NaN."""
+    df = (
+        _make_df([(10, 1010), (11, 1011)])
+        .groupby("HuisBatchIdBSV").head(1).reset_index(drop=True)
+    )
     out = reconstruct_cumulative_columns(df.copy(), COLS)
     for col in COLS:
         assert out[col + "Check"].isna().all(), "Check should be all-NaN for 1-row groups"
@@ -157,12 +187,12 @@ def test_ibis_matches_pandas_multiple_households(base_df):
     )
 
 
-def test_ibis_cumsum_per_household(base_df):
+def test_ibis_cumsum_per_dataset(base_df):
     tbl = ibis.memtable(base_df)
     out = reconstruct_cumulative_columns_ibis(tbl, COLS).execute()
     out = _sort(out)
     for col in COLS:
-        for _, grp in out.groupby("HuisIdBSV"):
+        for _, grp in out.groupby("HuisBatchIdBSV"):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 

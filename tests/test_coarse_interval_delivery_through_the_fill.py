@@ -46,6 +46,18 @@ N = 288
 #: once spread (1.5), and above it unspread, so the cadence amendment is load
 #: bearing rather than incidental.
 READING = 0.6
+#: The household every frame below belongs to.
+HOUSEHOLD = 1
+
+
+def _batch(household):
+    """The dataset id a frame for *household* carries.
+
+    A dataset -- one body of data for a household -- is keyed on
+    `HuisBatchIdBSV`, which the sidecars, the cadence table and every lookup
+    built from it are keyed on too. It is not the household id.
+    """
+    return household + 1000
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +67,7 @@ def _declared_model():
 
 
 def _delivered(drop_tick=5):
-    """One household: register absent, interval delivered hourly, one tick gone.
+    """One dataset: register absent, interval delivered hourly, one tick gone.
 
     *drop_tick* indexes the hourly ticks, not the rows.
     """
@@ -69,8 +81,8 @@ def _delivered(drop_tick=5):
     values.iloc[dropped] = pd.NA
 
     frame = pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1] * N, dtype="Int64"),
+        "HuisIdBSV": pd.array([HOUSEHOLD] * N, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(HOUSEHOLD)] * N, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * N, dtype="Float64"),
@@ -85,9 +97,18 @@ def _delivered(drop_tick=5):
 def _cadence(frame):
     """Measured, not hand-written, so the delivery form resolves as it does in
     production: 60 minutes and a reading count on the interval column, and zero
-    readings on the register that never arrived."""
+    readings on the register that never arrived.
+
+    Keyed on the dataset *frame* carries, as the sidecar is: the fill joins the
+    table on `HuisBatchIdBSV`, so a table keyed on anything else reaches no row
+    and the delivered form goes unrecorded.
+    """
     table = detect_column_cadence(frame, grid_minutes=GRID)
-    table.insert(0, "HuisBatchIdBSV", pd.array([1] * len(table), dtype="Int64"))
+    batches = sorted(int(b) for b in frame["HuisBatchIdBSV"].dropna().unique())
+    assert len(batches) == 1, "one dataset per frame here"
+    table.insert(
+        0, "HuisBatchIdBSV", pd.array(batches * len(table), dtype="Int64")
+    )
     return table
 
 
@@ -230,8 +251,8 @@ class TestTheColumnIsJudgedPerSlot:
         for position in ticks:
             values.iloc[position] = over_a_slot
         frame = pd.DataFrame({
-            "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1] * N, dtype="Int64"),
+            "HuisIdBSV": pd.array([HOUSEHOLD] * N, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([_batch(HOUSEHOLD)] * N, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
             "ReadingDate": stamps,
             CUM: pd.array([pd.NA] * N, dtype="Float64"),

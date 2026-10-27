@@ -132,7 +132,7 @@ class TestWhatTheFillReceives:
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
         chunk = pd.DataFrame({
             "HuisIdBSV": pd.array([7, 7], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([7, 7], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1007, 1007], dtype="Int64"),
             "ProjectIdBSV": pd.array([2, 2], dtype="Int64"),
             "ReadingDate": pd.to_datetime(
                 ["2026-01-01 00:00", "2026-01-01 00:15"]

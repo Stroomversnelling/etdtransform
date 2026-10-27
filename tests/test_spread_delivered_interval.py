@@ -30,11 +30,28 @@ DIFF = "ElektriciteitNetgebruikDiff"
 READING = 0.6
 
 
+def _batch(household):
+    """The dataset id a frame or cadence row for *household* carries.
+
+    `HuisBatchIdBSV` identifies one body of data and is what every lookup here
+    is keyed on; `HuisIdBSV` identifies the household it belongs to, which can
+    have several. The two are never equal in these frames.
+    """
+    return household + 1000
+
+
 def _cadence(rows):
-    """The sidecar as load_column_cadence returns it: (household, column) rows."""
+    """The sidecar as load_column_cadence returns it: (dataset, column) rows.
+
+    Each row names its household as well, as the sidecar does, but cadence is a
+    fact about the dataset and is recorded under ``HuisBatchIdBSV``.
+    """
+    households = [r[0] for r in rows]
     return pd.DataFrame({
-        "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisIdBSV": pd.array(households, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array(
+            [_batch(household) for household in households], dtype="Int64"
+        ),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -54,7 +71,7 @@ def _frame(values, household=1, n=None):
     n = len(values) if n is None else n
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(household)] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array([pd.NA] * n, dtype="Float64"),
         DIFF: pd.array(values, dtype="Float64"),
@@ -77,7 +94,7 @@ def _as_list(series):
 
 
 class TestTheSmokeTest:
-    """One household, k = 3, 24 rows, and the tick at row 11 never delivered."""
+    """One dataset, k = 3, 24 rows, and the tick at row 11 never delivered."""
 
     K = 3
     N = 24
@@ -86,7 +103,7 @@ class TestTheSmokeTest:
     @pytest.fixture
     def spread(self):
         df = _frame(_ticks(self.N, self.K, missing=(11,)))
-        return spread_delivered_interval_to_grid(df, DIFF, {1: self.K})
+        return spread_delivered_interval_to_grid(df, DIFF, {_batch(1): self.K})
 
     def test_the_first_windows_are_filled(self, spread):
         assert _as_list(spread[0:9]) == [
@@ -112,6 +129,7 @@ class TestTheSmokeTest:
         assert float(spread.sum()) == pytest.approx(float(delivered.sum()))
 
     def test_a_household_not_given_a_step_is_untouched(self):
+        """A step is given per dataset, so only the named dataset's rows move."""
         df = pd.concat(
             [
                 _frame(_ticks(self.N, self.K), household=1),
@@ -119,9 +137,9 @@ class TestTheSmokeTest:
             ],
             ignore_index=True,
         )
-        spread = spread_delivered_interval_to_grid(df, DIFF, {1: self.K})
-        assert spread[df["HuisIdBSV"] == 2].isna().all()
-        assert spread[df["HuisIdBSV"] == 1].notna().any()
+        spread = spread_delivered_interval_to_grid(df, DIFF, {_batch(1): self.K})
+        assert spread[df["HuisBatchIdBSV"] == _batch(2)].isna().all()
+        assert spread[df["HuisBatchIdBSV"] == _batch(1)].notna().any()
 
 
 class TestTheLeadingPartialWindow:
@@ -130,7 +148,7 @@ class TestTheLeadingPartialWindow:
         starts. That share is consumption from before the dataset and is simply
         not placed."""
         df = _frame(_ticks(24, 3, first=1))
-        spread = spread_delivered_interval_to_grid(df, DIFF, {1: 3})
+        spread = spread_delivered_interval_to_grid(df, DIFF, {_batch(1): 3})
         assert _as_list(spread[0:2]) == [pytest.approx(0.2)] * 2
         assert float(spread[0:2].sum()) == pytest.approx(0.4)
 
@@ -144,21 +162,23 @@ class TestTwoCadencesInOneCall:
             ],
             ignore_index=True,
         )
-        spread = spread_delivered_interval_to_grid(df, DIFF, {1: 3, 2: 12})
-        first = spread[df["HuisIdBSV"] == 1].dropna()
-        second = spread[df["HuisIdBSV"] == 2].dropna()
+        spread = spread_delivered_interval_to_grid(
+            df, DIFF, {_batch(1): 3, _batch(2): 12}
+        )
+        first = spread[df["HuisBatchIdBSV"] == _batch(1)].dropna()
+        second = spread[df["HuisBatchIdBSV"] == _batch(2)].dropna()
         assert float(first.iloc[0]) == pytest.approx(READING / 3)
         assert float(second.iloc[0]) == pytest.approx(READING / 12)
 
 
 class TestAgreementWithTheAveraging:
     """The fill spreads with a limited backward fill; the averaging expands each
-    window against a table of offsets in SQL. A household's own values and the
-    project average it is scaled against have to sit on the same footing,
+    window against a table of offsets in SQL. A dataset's own values and the
+    project average they are scaled against have to sit on the same footing,
     because the interval branch multiplies one by the other.
 
-    One household contributes, so the project average at a slot is that
-    household's own spread value there."""
+    One dataset contributes, so the project average at a slot is that dataset's
+    own spread value there."""
 
     @pytest.mark.parametrize("k", [3, 4, 12])
     @pytest.mark.parametrize("first", [None, 1])
@@ -166,7 +186,7 @@ class TestAgreementWithTheAveraging:
     def test_the_two_agree_slot_for_slot(self, k, first, missing):
         df = _frame(_ticks(24, k, first=first, missing=missing))
         df["ProjectIdBSV"] = pd.array([1] * len(df), dtype="Int64")
-        mine = spread_delivered_interval_to_grid(df, DIFF, {1: k})
+        mine = spread_delivered_interval_to_grid(df, DIFF, {_batch(1): k})
         avg, _, _ = spread_average(
             df, _interval_only_cadence(reading_minutes=GRID * k), DIFF, GRID,
             drop_na=False,
@@ -180,7 +200,7 @@ class TestWhichHouseholdsAreSpread:
         steps = spread_steps_by_household(
             CUM, DIFF, _interval_only_cadence(reading_minutes=60)
         )
-        assert steps == {1: 12}
+        assert steps == {_batch(1): 12}
 
     def test_a_delivered_register_is_never_spread(self):
         """The register is authoritative and the cumulative logic reads it at
@@ -216,8 +236,8 @@ class TestWhichHouseholdsAreSpread:
         assert spread_steps_by_household(CUM, DIFF, cadence) == {}
 
     def test_households_are_decided_one_by_one(self):
-        """Form is per (household, column): one household's register absence
-        does not make its neighbour's column interval-only."""
+        """Form is per (dataset, column): one dataset's register absence does
+        not make its neighbour's column interval-only."""
         cadence = _cadence([
             (1, "ReadingDate", GRID, 1000),
             (1, CUM, GRID, 0),
@@ -226,11 +246,11 @@ class TestWhichHouseholdsAreSpread:
             (2, CUM, 60, 100),
             (2, DIFF, 60, 100),
         ])
-        assert spread_steps_by_household(CUM, DIFF, cadence) == {1: 12}
+        assert spread_steps_by_household(CUM, DIFF, cadence) == {_batch(1): 12}
 
     def test_each_household_takes_its_own_grid(self):
-        """A dataset spans batches, so a household on a coarser grid must not be
-        stepped against the finest of them."""
+        """An aggregated dataset spans batches, so a dataset on a coarser grid
+        must not be stepped against the finest of them."""
         cadence = _cadence([
             (1, "ReadingDate", 5, 1000),
             (1, CUM, 5, 0),
@@ -239,7 +259,9 @@ class TestWhichHouseholdsAreSpread:
             (2, CUM, 15, 0),
             (2, DIFF, 60, 100),
         ])
-        assert spread_steps_by_household(CUM, DIFF, cadence) == {1: 12, 2: 4}
+        assert spread_steps_by_household(CUM, DIFF, cadence) == {
+            _batch(1): 12, _batch(2): 4,
+        }
 
 
 class TestWhichCadenceEachStageReads:
@@ -253,7 +275,9 @@ class TestWhichCadenceEachStageReads:
         interval as reporting every slot, and the averaging would stop spreading
         it."""
         cadence = _interval_only_cadence(reading_minutes=60)
-        assert cadence_minutes_by_household_batch(DIFF, cadence) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, cadence) == {
+            _batch(1): 60.0
+        }
 
     def test_the_winner_does_not_depend_on_row_order(self):
         reordered = _cadence([
@@ -261,7 +285,9 @@ class TestWhichCadenceEachStageReads:
             (1, CUM, GRID, 0),
             (1, "ReadingDate", GRID, 1000),
         ])
-        assert cadence_minutes_by_household_batch(DIFF, reordered) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, reordered) == {
+            _batch(1): 60.0
+        }
 
     def test_a_derived_column_still_inherits_from_its_register(self):
         """Cadence is measured on the columns as delivered, so a column the
@@ -271,7 +297,9 @@ class TestWhichCadenceEachStageReads:
             (1, "ReadingDate", GRID, 1000),
             (1, CUM, 60, 100),
         ])
-        assert cadence_minutes_by_household_batch(DIFF, register_only) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, register_only) == {
+            _batch(1): 60.0
+        }
 
     def test_the_averaging_spreads_a_coarse_column_at_its_own_cadence(self):
         """Not at the grid: one hourly reading is twelve slots of consumption,
@@ -290,8 +318,11 @@ class TestWhichCadenceEachStageReads:
 class TestTheCadenceAmendment:
     def test_a_spread_column_reads_at_the_grid(self):
         cadence = _interval_only_cadence(reading_minutes=60)
-        amended = cadence_with_column_at_grid(cadence, DIFF, [1])
-        row = amended[(amended["HuisIdBSV"] == 1) & (amended["column"] == DIFF)]
+        amended = cadence_with_column_at_grid(cadence, DIFF, [_batch(1)])
+        row = amended[
+            (amended["HuisBatchIdBSV"] == _batch(1))
+            & (amended["column"] == DIFF)
+        ]
         assert int(row["cadence_minutes"].iloc[0]) == GRID
 
     def test_no_other_row_moves(self):
@@ -302,8 +333,8 @@ class TestTheCadenceAmendment:
             (2, "ReadingDate", GRID, 1000),
             (2, DIFF, 60, 100),
         ])
-        amended = cadence_with_column_at_grid(cadence, DIFF, [1])
-        untouched = amended["HuisIdBSV"] != 1
+        amended = cadence_with_column_at_grid(cadence, DIFF, [_batch(1)])
+        untouched = amended["HuisBatchIdBSV"] != _batch(1)
         pd.testing.assert_frame_equal(
             amended[untouched].reset_index(drop=True),
             cadence[untouched].reset_index(drop=True),
@@ -314,7 +345,7 @@ class TestTheCadenceAmendment:
         pass is not a fact about the mapped data."""
         cadence = _interval_only_cadence(reading_minutes=60)
         before = cadence.copy()
-        cadence_with_column_at_grid(cadence, DIFF, [1])
+        cadence_with_column_at_grid(cadence, DIFF, [_batch(1)])
         pd.testing.assert_frame_equal(cadence, before)
 
     def test_naming_no_household_changes_nothing(self):

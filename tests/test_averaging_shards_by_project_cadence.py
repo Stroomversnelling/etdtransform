@@ -55,6 +55,18 @@ HOUSEHOLDS = 10
 HOURS = 24
 
 
+def _batch(household):
+    """The dataset id a frame for *household* carries.
+
+    A dataset (`HuisBatchIdBSV`) is one body of data for a household, and a
+    household may have several, so the two ids are distinct here: the sidecar
+    rows, the cadence table and every lookup built from it are keyed on the
+    dataset, and code reaching for the household instead must fail rather than
+    resolve.
+    """
+    return household + 1000
+
+
 @pytest.fixture(autouse=True)
 def _declared_model():
     with declare_synthetic_model(MODEL):
@@ -71,7 +83,9 @@ def _household(household, project, grid):
             values.iloc[position] = READING
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * periods, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([household] * periods, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array(
+            [_batch(household)] * periods, dtype="Int64"
+        ),
         "ProjectIdBSV": pd.array([project] * periods, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * periods, dtype="Float64"),
@@ -92,7 +106,7 @@ def _estate():
             table = detect_column_cadence(frame, grid_minutes=grid)
             table.insert(
                 0, "HuisBatchIdBSV",
-                pd.array([household] * len(table), dtype="Int64"),
+                pd.array([_batch(household)] * len(table), dtype="Int64"),
             )
             cadences.append(table)
     return (
@@ -129,9 +143,11 @@ class TestTheFixtureHoldsTwoGrids:
 
     def test_the_grids_resolve_from_the_measured_cadence(self):
         frame, cadence = _estate()
+        # Which project a dataset belongs to: the cadence table records one grid
+        # per dataset, so that is the key its grids are attributed through.
         membership = {
-            int(h): int(p) for h, p in zip(
-                frame["HuisIdBSV"], frame["ProjectIdBSV"]
+            int(b): int(p) for b, p in zip(
+                frame["HuisBatchIdBSV"], frame["ProjectIdBSV"]
             )
         }
         assert grid_minutes_by_project(cadence, membership) == {
@@ -276,7 +292,7 @@ class TestAGridThatDividesNothing:
         stamps = pd.date_range("2026-01-01", periods=4, freq="5min")
         rows.append(pd.DataFrame({
             "HuisIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1] * 4, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([_batch(1)] * 4, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
             "ReadingDate": stamps,
             DIFF: pd.array([pd.NA, pd.NA, value, pd.NA], dtype="Float64"),
@@ -285,7 +301,7 @@ class TestAGridThatDividesNothing:
         stamps = pd.date_range("2026-01-01", periods=5, freq="7min")
         rows.append(pd.DataFrame({
             "HuisIdBSV": pd.array([2] * 5, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([2] * 5, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([_batch(2)] * 5, dtype="Int64"),
             "ProjectIdBSV": pd.array([3] * 5, dtype="Int64"),
             "ReadingDate": stamps,
             DIFF: pd.array(
@@ -295,7 +311,9 @@ class TestAGridThatDividesNothing:
         frame = pd.concat(rows, ignore_index=True)
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1, 2], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1, 2], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array(
+                [_batch(1), _batch(2)], dtype="Int64"
+            ),
             "cadence_minutes": pd.array([10, 28], dtype="Int64"),
         })
 
@@ -348,7 +366,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
                     [household] * self.SLOTS, dtype="Int64"
                 ),
                 "HuisBatchIdBSV": pd.array(
-                    [household] * self.SLOTS, dtype="Int64"
+                    [_batch(household)] * self.SLOTS, dtype="Int64"
                 ),
                 "ProjectIdBSV": pd.array([2] * self.SLOTS, dtype="Int64"),
                 "ReadingDate": stamps,
@@ -360,13 +378,15 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         return pd.concat(parts, ignore_index=True)
 
     def _cadence(self, frame):
+        """One sidecar row per (dataset, column), measured off the dataset's own
+        rows."""
         tables = []
-        for household in sorted(int(h) for h in frame["HuisIdBSV"].unique()):
-            own = frame[frame["HuisIdBSV"] == household]
+        for batch in sorted(int(b) for b in frame["HuisBatchIdBSV"].unique()):
+            own = frame[frame["HuisBatchIdBSV"] == batch]
             table = detect_column_cadence(own, grid_minutes=self.GRID)
             table.insert(
                 0, "HuisBatchIdBSV",
-                pd.array([household] * len(table), dtype="Int64"),
+                pd.array([batch] * len(table), dtype="Int64"),
             )
             tables.append(table)
         return pd.concat(tables, ignore_index=True)
@@ -458,7 +478,7 @@ class TestAMixedCadenceProjectIsRefused:
             table = detect_column_cadence(frame, grid_minutes=grid)
             table.insert(
                 0, "HuisBatchIdBSV",
-                pd.array([household] * len(table), dtype="Int64"),
+                pd.array([_batch(household)] * len(table), dtype="Int64"),
             )
             cadences.append(table)
 

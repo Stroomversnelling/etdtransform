@@ -159,7 +159,7 @@ class TestItAgreesWithTheScalarTheAveragingAlreadyReported:
     def test_one_project_matches_the_scalar(self):
         frame = pd.DataFrame({
             "HuisIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1] * 4, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * 4], dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=4, freq="5min"),
             DIFF: pd.array([0.0, 0.4, 0.2, 0.1], dtype="Float64"),

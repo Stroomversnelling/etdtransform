@@ -35,7 +35,7 @@ def _frame(values_by_household, project=1, freq_minutes=15):
         n = len(vals)
         frames.append(pd.DataFrame({
             "HuisIdBSV": pd.array([hid] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([hid] * n, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([value + 1000 for value in [hid] * n], dtype="Int64"),
             "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
             "ReadingDate": pd.date_range(
                 "2026-01-05", periods=n, freq=f"{freq_minutes}min"
@@ -51,7 +51,7 @@ def _cadence_for(frame, minutes=15):
     resolves it from -- plus the ReadingDate row carrying the grid."""
     households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
     rows = [
-        {"HuisBatchIdBSV": household, "column": column,
+        {"HuisBatchIdBSV": household + 1000, "column": column,
          "cadence_minutes": minutes}
         for household in households
         for column in (CUM, "ReadingDate")
@@ -66,7 +66,7 @@ def _counts(timestamps, window_minutes, n_slots, n_delivered):
     return pd.DataFrame({
         "ProjectIdBSV": pd.array([1] * len(timestamps), dtype="Int64"),
         "HuisIdBSV": pd.array(range(1, len(timestamps) + 1), dtype="Int64"),
-        "HuisBatchIdBSV": pd.array(range(1, len(timestamps) + 1), dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([value + 1000 for value in range(1, len(timestamps) + 1)], dtype="Int64"),
         "_window": window_index(pd.Series(timestamps), window_minutes),
         "n_slots": pd.array(n_slots, dtype="Int64"),
         "n_delivered": pd.array(n_delivered, dtype="Int64"),

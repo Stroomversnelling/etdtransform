@@ -61,7 +61,7 @@ def _build_fixture_parquet(tmp_dir: str) -> str:
                 ok = False
             rows.append({
                 "HuisIdBSV": hh,
-                "HuisBatchIdBSV": hh,
+                "HuisBatchIdBSV": hh + 1000,
                 "ReadingDate": ts,
                 "kWh": kwh,
                 "validate_ok": ok,

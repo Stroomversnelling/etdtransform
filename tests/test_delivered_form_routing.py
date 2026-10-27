@@ -33,6 +33,17 @@ OTHER_CUM = "Gasgebruik"
 OTHER_DIFF = f"{OTHER_CUM}Diff"
 N = 24
 
+
+def _batch(household):
+    """The dataset id a frame for household *household* carries.
+
+    `HuisBatchIdBSV` keys one body of data -- its time series, its cadence rows,
+    its sidecars -- and a household may own several. The two ids are never equal
+    here, so a lookup built on the wrong one reaches no rows.
+    """
+    return household + 1000
+
+
 #: Flags that only mean something given a register to anchor on. None may land
 #: on a cell the interval logic resolved.
 NEEDS_A_REGISTER = (
@@ -61,7 +72,7 @@ def _quiet_logs():
 def _cadence(rows):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(r[0]) for r in rows], dtype="Int64"),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -69,7 +80,7 @@ def _cadence(rows):
 
 
 def _form_rows(household, cum_col, diff_col, register, intervals, grid=GRID):
-    """Sidecar rows stating which forms arrived for one (household, variable).
+    """Sidecar rows stating which forms arrived for one (dataset, variable).
 
     *grid* is a parameter because routing must not depend on it: which form
     arrived is a fact about the delivery, and a household reporting hourly is
@@ -90,7 +101,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
         values.append(total)
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(household)] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(values, dtype="Float64"),
@@ -106,7 +117,7 @@ def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
     """Delivered intervals at the grid, no register, with cells missing."""
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([_batch(household)] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array([pd.NA] * n, dtype="Float64"),
@@ -291,7 +302,7 @@ class TestTheGuards:
         into nothing-delivered and still satisfy the partition check."""
         df = _register_frame()
         df.loc[3, "HuisBatchIdBSV"] = pd.NA
-        with pytest.raises(ValueError, match="carry no\s+HuisBatchIdBSV"):
+        with pytest.raises(ValueError, match=r"carry no\s+HuisBatchIdBSV"):
             delivery_paths(
                 df, CUM, DIFF, _cadence(_form_rows(1, CUM, DIFF, True, False))
             )
@@ -352,7 +363,7 @@ class TestTheGuards:
         df = _register_frame()
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([_batch(1)], dtype="Int64"),
             "column": pd.array([CUM], dtype="string"),
             "cadence_minutes": pd.array([GRID], dtype="Int64"),
         })
@@ -562,8 +573,12 @@ class TestARegisterCombinedFromTariffRegisters:
         from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(self._split_rows(1, hoog=True, laag=False))
-        assert delivered_by_household_batch(self.SPLITS[0], cadence) == {1: True}
-        assert delivered_by_household_batch(self.SPLITS[1], cadence) == {1: False}
+        assert delivered_by_household_batch(self.SPLITS[0], cadence) == {
+            _batch(1): True
+        }
+        assert delivered_by_household_batch(self.SPLITS[1], cadence) == {
+            _batch(1): False
+        }
 
     def test_a_delivered_root_does_not_need_the_fallback(self):
         """A supplier sending the combined register directly has a root row, and
@@ -571,7 +586,7 @@ class TestARegisterCombinedFromTariffRegisters:
         from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(_form_rows(1, CUM, DIFF, True, False))
-        assert delivered_by_household_batch(CUM, cadence) == {1: True}
+        assert delivered_by_household_batch(CUM, cadence) == {_batch(1): True}
 
     def test_the_interval_form_is_not_delivered_by_a_split_register(self):
         """The splits' own interval columns are differenced at mapping, like the

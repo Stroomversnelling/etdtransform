@@ -47,6 +47,12 @@ GRID = 5
 SLOTS_PER_DAY = 288
 
 
+#: The dataset a household's rows belong to. Distinct from the household id,
+#: so a lookup built on the wrong one reaches no rows.
+def _batch(household):
+    return household + 1000
+
+
 def _frame(per_household, start="2026-01-01", freq="5min", project=1):
     """One frame from ``{household: [values]}``, all on the same slots."""
     rows = []
@@ -55,7 +61,7 @@ def _frame(per_household, start="2026-01-01", freq="5min", project=1):
         for date, value in zip(dates, values):
             rows.append({
                 "HuisIdBSV": household,
-                "HuisBatchIdBSV": household,
+                "HuisBatchIdBSV": _batch(household),
                 "ProjectIdBSV": project,
                 "ReadingDate": date,
                 COL: value,
@@ -81,7 +87,7 @@ def _cadence_for(frame, minutes=GRID):
     """
     households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
     rows = [
-        {"HuisBatchIdBSV": household, "column": column,
+        {"HuisBatchIdBSV": _batch(household), "column": column,
          "cadence_minutes": minutes}
         for household in households
         for column in (CUM, "ReadingDate")
@@ -497,6 +503,9 @@ class TestTheHouseholdFloor:
                 "HuisIdBSV": pd.array(
                     [household] * len(values), dtype="Int64"
                 ),
+                "HuisBatchIdBSV": pd.array(
+                    [_batch(household)] * len(values), dtype="Int64"
+                ),
                 "ProjectIdBSV": pd.array([1] * len(values), dtype="Int64"),
                 "ReadingDate": pd.date_range(
                     "2026-01-01", periods=len(values), freq="5min"
@@ -508,8 +517,9 @@ class TestTheHouseholdFloor:
         frame = pd.concat(parts, ignore_index=True)
         households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
         cadence = pd.DataFrame({
-            "HuisIdBSV": pd.array(households, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array(households, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array(
+                [_batch(h) for h in households], dtype="Int64"
+            ),
             "column": pd.array([cum] * len(households), dtype="string"),
             "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
         })
@@ -533,7 +543,9 @@ class TestTheAveragingAppliesTheGates:
         for household, values in per_household.items():
             frame = pd.DataFrame({
                 "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
-                "HuisBatchIdBSV": pd.array([household] * len(values), dtype="Int64"),
+                "HuisBatchIdBSV": pd.array(
+                    [_batch(household)] * len(values), dtype="Int64"
+                ),
                 "ProjectIdBSV": pd.array([project] * len(values), dtype="Int64"),
                 "ReadingDate": pd.date_range(
                     "2026-01-01", periods=len(values), freq="5min"
@@ -548,7 +560,9 @@ class TestTheAveragingAppliesTheGates:
         households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
         return pd.DataFrame({
             "HuisIdBSV": pd.array(households, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array(households, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array(
+                [_batch(h) for h in households], dtype="Int64"
+            ),
             "column": pd.array([self.CUM] * len(households), dtype="string"),
             "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
         })
