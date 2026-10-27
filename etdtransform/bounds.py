@@ -45,7 +45,6 @@ import os
 import pandas as pd
 from etdmap.data_model import (
     complement_lookup_names,
-    cumulative_column,
     scale_bounds,
     tariff_root_to_splits,
     thresholds_dict,
@@ -78,8 +77,9 @@ def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
     FileNotFoundError
         When no mapped folder is configured, or the sidecar is not in it.
     """
-    import etdtransform
     from etdmap.mapping_helpers import CADENCE_FILENAME
+
+    import etdtransform
 
     folder = mapped_folder_path or getattr(
         etdtransform.options, "mapped_folder_path", None
@@ -171,7 +171,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
     return float(minutes[0])
 
 
-def cadence_minutes_by_household(diff_col, cadence) -> dict:
+def cadence_minutes_by_household_batch(diff_col, cadence) -> dict:
     """
     The interval each household's reading of *diff_col* covers, in minutes.
 
@@ -192,13 +192,13 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
         The column being asked about.
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`: one row per
-        (HuisIdBSV, column), with ``cadence_minutes`` holding the interval that
+        (HuisBatchIdBSV, column), with ``cadence_minutes`` holding the interval that
         column's readings cover. None or empty resolves nothing.
 
     Returns
     -------
     dict
-        HuisIdBSV -> minutes.
+        HuisBatchIdBSV -> minutes.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -206,7 +206,7 @@ def cadence_minutes_by_household(diff_col, cadence) -> dict:
     def _minutes(names):
         rows = cadence[cadence["column"].isin(names)]
         return {
-            int(r.HuisIdBSV): float(r.cadence_minutes)
+            int(r.HuisBatchIdBSV): float(r.cadence_minutes)
             for r in rows.itertuples()
             if pd.notna(r.cadence_minutes)
         }
@@ -225,7 +225,7 @@ def grid_bound(diff_col, bound_key="Max"):
     return thresholds_dict.get(diff_col, {}).get(bound_key, pd.NA)
 
 
-def column_bound_by_household(diff_col, cadence, bound_key="Max") -> dict:
+def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
     """
     The threshold for *diff_col* scaled to each household's cadence.
 
@@ -246,7 +246,7 @@ def column_bound_by_household(diff_col, cadence, bound_key="Max") -> dict:
     Returns
     -------
     dict
-        HuisIdBSV -> bound.
+        HuisBatchIdBSV -> bound.
     """
     declared = thresholds_dict.get(diff_col, {})
     index = 0 if bound_key == "Min" else 1
@@ -255,7 +255,7 @@ def column_bound_by_household(diff_col, cadence, bound_key="Max") -> dict:
 
     return {
         household: scale_bounds(declared, cadence_minutes)[index]
-        for household, cadence_minutes in cadence_minutes_by_household(
+        for household, cadence_minutes in cadence_minutes_by_household_batch(
             diff_col, cadence
         ).items()
     }
@@ -272,7 +272,7 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
     Parameters
     ----------
     df : pd.DataFrame
-        Rows to return a threshold for. Must contain ``HuisIdBSV``.
+        Rows to return a threshold for. Must contain ``HuisBatchIdBSV``.
     diff_col : str
         Interval column name.
     cadence : pd.DataFrame
@@ -312,12 +312,12 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
             f"at the grid interval. Re-map the dataset."
         )
 
-    per_household = column_bound_by_household(diff_col, cadence, bound_key=bound_key)
-    if "HuisIdBSV" not in df.columns:
+    per_household_batch = column_bound_by_household_batch(diff_col, cadence, bound_key=bound_key)
+    if "HuisBatchIdBSV" not in df.columns:
         return bound
 
     unrecorded = sorted(
-        set(df["HuisIdBSV"].dropna().unique()) - set(per_household)
+        set(df["HuisBatchIdBSV"].dropna().unique()) - set(per_household_batch)
     )
     if unrecorded:
         logging.info(
@@ -326,7 +326,7 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
             f"({unrecorded[:10]})."
         )
 
-    scaled = df["HuisIdBSV"].map(per_household).astype("Float64").fillna(bound)
+    scaled = df["HuisBatchIdBSV"].map(per_household_batch).astype("Float64").fillna(bound)
     n_scaled = int((scaled != bound).sum())
     if n_scaled:
         logging.info(
@@ -453,7 +453,7 @@ def usable_readings(df, column):
     return usable
 
 
-def delivered_by_household(column, cadence) -> dict:
+def delivered_by_household_batch(column, cadence) -> dict:
     """
     Whether *column* carried delivered readings, per household.
 
@@ -464,7 +464,7 @@ def delivered_by_household(column, cadence) -> dict:
     The cumulative/interval pairing is **not** followed. A variable delivered in
     both forms has a row for each, and one delivered as intervals only still has
     a row for its absent register, so resolving a column through its partner --
-    as :func:`cadence_minutes_by_household` does, for the stages asking about a
+    as :func:`cadence_minutes_by_household_batch` does, for the stages asking about a
     column derived later -- would report a delivery that never happened.
 
     A tariff root resolves through its splits as well. Where a supplier sends
@@ -491,7 +491,7 @@ def delivered_by_household(column, cadence) -> dict:
     Returns
     -------
     dict
-        HuisIdBSV -> bool, for every household the table has a row for under any
+        HuisBatchIdBSV -> bool, for every household the table has a row for under any
         of the names read.
     """
     if cadence is None or cadence.empty:
@@ -508,14 +508,14 @@ def delivered_by_household(column, cadence) -> dict:
     rows = cadence[cadence["column"].isin(names)]
     delivered = {}
     for r in rows.itertuples():
-        household = int(r.HuisIdBSV)
+        household = int(r.HuisBatchIdBSV)
         delivered[household] = delivered.get(household, False) or bool(
             pd.notna(r.n_readings) and r.n_readings > 0
         )
     return delivered
 
 
-def grid_minutes_by_household(cadence, date_column="ReadingDate") -> dict:
+def grid_minutes_by_household_batch(cadence, date_column="ReadingDate") -> dict:
     """
     The interval each household's rows sit on, in minutes.
 
@@ -536,21 +536,21 @@ def grid_minutes_by_household(cadence, date_column="ReadingDate") -> dict:
     Returns
     -------
     dict
-        HuisIdBSV -> minutes, omitting any household with no usable row.
+        HuisBatchIdBSV -> minutes, omitting any household with no usable row.
     """
     if cadence is None or cadence.empty:
         return {}
 
     rows = cadence[cadence["column"] == date_column]
     return {
-        int(r.HuisIdBSV): float(r.cadence_minutes)
+        int(r.HuisBatchIdBSV): float(r.cadence_minutes)
         for r in rows.itertuples()
         if pd.notna(r.cadence_minutes) and float(r.cadence_minutes) > 0
     }
 
 
 def grid_minutes_by_project(
-    cadence, project_by_household, date_column="ReadingDate"
+    cadence, project_by_household_batch, date_column="ReadingDate"
 ) -> dict:
     """
     The one interval each project's rows sit on, in minutes.
@@ -577,8 +577,8 @@ def grid_minutes_by_project(
     ----------
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`.
-    project_by_household : dict
-        HuisIdBSV -> ProjectIdBSV, from the index rather than from the data:
+    project_by_household_batch : dict
+        HuisBatchIdBSV -> ProjectIdBSV, from the index rather than from the data:
         which project a household belongs to is a registry fact, and a household
         contributing no rows to the frame in hand still belongs to its project.
         Every household the cadence table resolves a grid for must appear, or
@@ -592,13 +592,13 @@ def grid_minutes_by_project(
         ProjectIdBSV -> minutes, omitting any project none of whose households
         resolve a grid.
     """
-    by_household = grid_minutes_by_household(cadence, date_column=date_column)
-    if not by_household:
+    by_household_batch = grid_minutes_by_household_batch(cadence, date_column=date_column)
+    if not by_household_batch:
         return {}
 
     found = {}
-    for household, minutes in by_household.items():
-        project = project_by_household.get(household)
+    for household, minutes in by_household_batch.items():
+        project = project_by_household_batch.get(household)
         if project is None:
             continue
         found.setdefault(int(project), {}).setdefault(minutes, []).append(

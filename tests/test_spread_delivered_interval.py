@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from conftest import spread_average
-from etdtransform.bounds import cadence_minutes_by_household
+from etdtransform.bounds import cadence_minutes_by_household_batch
 from etdtransform.spread import (
     cadence_with_column_at_grid,
     spread_delivered_interval_to_grid,
@@ -34,6 +34,7 @@ def _cadence(rows):
     """The sidecar as load_column_cadence returns it: (household, column) rows."""
     return pd.DataFrame({
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -53,6 +54,7 @@ def _frame(values, household=1, n=None):
     n = len(values) if n is None else n
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array([pd.NA] * n, dtype="Float64"),
         DIFF: pd.array(values, dtype="Float64"),
@@ -251,7 +253,7 @@ class TestWhichCadenceEachStageReads:
         interval as reporting every slot, and the averaging would stop spreading
         it."""
         cadence = _interval_only_cadence(reading_minutes=60)
-        assert cadence_minutes_by_household(DIFF, cadence) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, cadence) == {1: 60.0}
 
     def test_the_winner_does_not_depend_on_row_order(self):
         reordered = _cadence([
@@ -259,7 +261,7 @@ class TestWhichCadenceEachStageReads:
             (1, CUM, GRID, 0),
             (1, "ReadingDate", GRID, 1000),
         ])
-        assert cadence_minutes_by_household(DIFF, reordered) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, reordered) == {1: 60.0}
 
     def test_a_derived_column_still_inherits_from_its_register(self):
         """Cadence is measured on the columns as delivered, so a column the
@@ -269,7 +271,7 @@ class TestWhichCadenceEachStageReads:
             (1, "ReadingDate", GRID, 1000),
             (1, CUM, 60, 100),
         ])
-        assert cadence_minutes_by_household(DIFF, register_only) == {1: 60.0}
+        assert cadence_minutes_by_household_batch(DIFF, register_only) == {1: 60.0}
 
     def test_the_averaging_spreads_a_coarse_column_at_its_own_cadence(self):
         """Not at the grid: one hourly reading is twelve slots of consumption,

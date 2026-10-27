@@ -54,10 +54,10 @@ def _frame(households=(1, 2), n=8):
     values = [3.0] * rows
     values[1] = pd.NA
 
+    ids = [household for household in households for _ in dates]
     return pd.DataFrame({
-        "HuisIdBSV": pd.array(
-            [household for household in households for _ in dates], dtype="Int64"
-        ),
+        "HuisIdBSV": pd.array(ids, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array(ids, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * rows, dtype="Int64"),
         "ReadingDate": dates * len(households),
         DIFF: pd.array(values, dtype="Float64"),

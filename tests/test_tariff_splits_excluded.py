@@ -70,6 +70,7 @@ class TestAveragingMicroMixedSupplier:
         ):
             rows.append(pd.DataFrame({
                 "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+                "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
                 "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
                 "ReadingDate": dates,
                 ROOT_DIFF: pd.array([root_value] * n, dtype="Float64"),
@@ -125,6 +126,7 @@ class TestFillSkipsSplits:
         split_cum = [0.5, 1.0, pd.NA, pd.NA, 2.0, 2.5, 3.0, 3.5]
         return pd.DataFrame({
             "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
             ROOT: pd.array([1.0, 2.0, pd.NA, pd.NA, 5.0, 6.0, 7.0, 8.0], dtype="Float64"),

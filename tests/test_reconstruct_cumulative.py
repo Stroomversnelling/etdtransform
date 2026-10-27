@@ -52,6 +52,7 @@ def _make_df(household_ids: list, seed: int = 42) -> pd.DataFrame:
         for i, dt in enumerate(dates):
             row = {
                 "HuisIdBSV": household_id,
+                "HuisBatchIdBSV": household_id,
                 "ProjectIdBSV": 1,
                 "ReadingDate": dt,
             }

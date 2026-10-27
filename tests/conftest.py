@@ -531,7 +531,9 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
     from etdtransform.impute import _resample_average_ibis
 
     cum_col = cumulative_column(diff_col)
-    minutes = dict(zip(cadence["HuisIdBSV"], cadence["cadence_minutes"]))
+    minutes = dict(
+        zip(cadence["HuisBatchIdBSV"], cadence["cadence_minutes"])
+    )
     has_register = (
         frame[cum_col].notna() if cum_col in frame.columns
         else pd.Series(False, index=frame.index)
@@ -619,28 +621,33 @@ def project_averages(df, project_id_column, diff_columns, **kwargs):
 
 
 def cadence_table(df, columns, minutes=5):
-    """A cadence table declaring *minutes* for each of *df*'s households.
+    """A cadence table declaring *minutes* for each of *df*'s datasets.
 
     Imputation scales every threshold to the cadence the column reports at, and
     an absent cadence is an error rather than an assumed grid. A synthetic frame
     is built at a known spacing, so it declares that spacing here.
 
+    Keyed on ``HuisBatchIdBSV``, as the sidecar the mapping writes is: cadence
+    is measured on one dataset, against the grid that dataset declares.
+
     Parameters
     ----------
     df : pd.DataFrame
-        Must contain ``HuisIdBSV``.
+        Must contain ``HuisBatchIdBSV``.
     columns : iterable of str
         Cumulative column names. Cadence is recorded under the delivered name,
         which is the cumulative side of the pair.
     minutes : float
         The spacing *df* was built at.
     """
-    households = sorted(int(h) for h in df["HuisIdBSV"].dropna().unique())
+    batches = sorted(int(b) for b in df["HuisBatchIdBSV"].dropna().unique())
     rows = [
-        {"HuisIdBSV": household, "column": column, "cadence_minutes": minutes}
-        for household in households
+        {"HuisBatchIdBSV": batch, "column": column, "cadence_minutes": minutes}
+        for batch in batches
         for column in columns
     ]
     return pd.DataFrame(rows).astype({
-        "HuisIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+        "HuisBatchIdBSV": "Int64",
+        "column": "string",
+        "cadence_minutes": "Int64",
     })

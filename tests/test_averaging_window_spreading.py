@@ -41,6 +41,7 @@ def _frame(per_household):
     for household, readings in per_household.items():
         frame = pd.DataFrame({
             "HuisIdBSV": pd.array([household] * len(readings), dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([household] * len(readings), dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * len(readings), dtype="Int64"),
             "ReadingDate": pd.date_range(
                 "2026-01-01", periods=len(readings), freq=f"{GRID}min"
@@ -55,6 +56,7 @@ def _frame(per_household):
 def _cadence(minutes_by_household):
     return pd.DataFrame({
         "HuisIdBSV": pd.array(list(minutes_by_household), dtype="Int64"),
+        "HuisBatchIdBSV": pd.array(list(minutes_by_household), dtype="Int64"),
         "column": pd.array([CUM] * len(minutes_by_household), dtype="string"),
         "cadence_minutes": pd.array(
             list(minutes_by_household.values()), dtype="Int64"
@@ -160,6 +162,7 @@ class TestWhichFormSuppliesTheVolume:
             _cadence({1: 15}),
             pd.DataFrame({
                 "HuisIdBSV": pd.array([2], dtype="Int64"),
+                "HuisBatchIdBSV": pd.array([2], dtype="Int64"),
                 "column": pd.array([IV], dtype="string"),
                 "cadence_minutes": pd.array([15], dtype="Int64"),
             }),

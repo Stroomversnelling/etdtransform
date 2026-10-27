@@ -61,6 +61,7 @@ def _quiet_logs():
 def _cadence(rows):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -89,6 +90,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
         values.append(total)
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(values, dtype="Float64"),
@@ -104,6 +106,7 @@ def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
     """Delivered intervals at the grid, no register, with cells missing."""
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array([pd.NA] * n, dtype="Float64"),
@@ -287,8 +290,8 @@ class TestTheGuards:
         """isin() reads pd.NA as no-match, so such a row would route silently
         into nothing-delivered and still satisfy the partition check."""
         df = _register_frame()
-        df.loc[3, "HuisIdBSV"] = pd.NA
-        with pytest.raises(ValueError, match="carry no HuisIdBSV"):
+        df.loc[3, "HuisBatchIdBSV"] = pd.NA
+        with pytest.raises(ValueError, match="carry no\s+HuisBatchIdBSV"):
             delivery_paths(
                 df, CUM, DIFF, _cadence(_form_rows(1, CUM, DIFF, True, False))
             )
@@ -306,9 +309,9 @@ class TestTheGuards:
         with pytest.raises(ValueError, match="no cadence table"):
             delivery_paths(_register_frame(), CUM, DIFF, None)
 
-    def test_a_frame_without_household_ids_is_refused(self):
-        df = _register_frame().drop(columns=["HuisIdBSV"])
-        with pytest.raises(ValueError, match="no HuisIdBSV"):
+    def test_a_frame_without_dataset_ids_is_refused(self):
+        df = _register_frame().drop(columns=["HuisBatchIdBSV"])
+        with pytest.raises(ValueError, match="no HuisBatchIdBSV"):
             delivery_paths(
                 df, CUM, DIFF, _cadence(_form_rows(1, CUM, DIFF, True, False))
             )
@@ -349,6 +352,7 @@ class TestTheGuards:
         df = _register_frame()
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
             "column": pd.array([CUM], dtype="string"),
             "cadence_minutes": pd.array([GRID], dtype="Int64"),
         })
@@ -555,27 +559,27 @@ class TestARegisterCombinedFromTariffRegisters:
     def test_the_splits_own_delivery_is_read_under_their_own_names(self):
         """The fallback goes root -> splits only. Asking about a split reads that
         split, never its sibling and never the root."""
-        from etdtransform.bounds import delivered_by_household
+        from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(self._split_rows(1, hoog=True, laag=False))
-        assert delivered_by_household(self.SPLITS[0], cadence) == {1: True}
-        assert delivered_by_household(self.SPLITS[1], cadence) == {1: False}
+        assert delivered_by_household_batch(self.SPLITS[0], cadence) == {1: True}
+        assert delivered_by_household_batch(self.SPLITS[1], cadence) == {1: False}
 
     def test_a_delivered_root_does_not_need_the_fallback(self):
         """A supplier sending the combined register directly has a root row, and
         it answers on its own."""
-        from etdtransform.bounds import delivered_by_household
+        from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(_form_rows(1, CUM, DIFF, True, False))
-        assert delivered_by_household(CUM, cadence) == {1: True}
+        assert delivered_by_household_batch(CUM, cadence) == {1: True}
 
     def test_the_interval_form_is_not_delivered_by_a_split_register(self):
         """The splits' own interval columns are differenced at mapping, like the
         root's, so no interval form arrives for either."""
-        from etdtransform.bounds import delivered_by_household
+        from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(self._split_rows(1, hoog=True, laag=True))
-        assert delivered_by_household(DIFF, cadence) == {}
+        assert delivered_by_household_batch(DIFF, cadence) == {}
 
 
 class TestTheIntervalBranchReadsTheRuleBounds:

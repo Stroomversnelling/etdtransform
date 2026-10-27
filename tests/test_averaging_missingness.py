@@ -61,6 +61,7 @@ def diff_fixture_df() -> pd.DataFrame:
                 rows.append({
                     "ProjectIdBSV": project_id,
                     "HuisIdBSV": household_id,
+                    "HuisBatchIdBSV": household_id,
                     "ReadingDate": dt,
                     "ElektriciteitNetgebruikLaagDiff": pd.NA if null_this else float(rng.uniform(1.0, 10.0)),
                     "ZonopwekVerbruikDiff": pd.NA if null_this else float(rng.uniform(0.5, 5.0)),
@@ -69,6 +70,7 @@ def diff_fixture_df() -> pd.DataFrame:
             rows.append({
                 "ProjectIdBSV": project_id,
                 "HuisIdBSV": outlier_id,
+                "HuisBatchIdBSV": outlier_id,
                 "ReadingDate": dt,
                 "ElektriciteitNetgebruikLaagDiff": float(rng.uniform(150.0, 300.0)),
                 "ZonopwekVerbruikDiff": float(rng.uniform(150.0, 300.0)),
@@ -77,6 +79,7 @@ def diff_fixture_df() -> pd.DataFrame:
     df = pd.DataFrame(rows).astype({
         "ProjectIdBSV": "Int64",
         "HuisIdBSV": "Int64",
+        "HuisBatchIdBSV": "Int64",
         "ElektriciteitNetgebruikLaagDiff": "Float64",
         "ZonopwekVerbruikDiff": "Float64",
     })
@@ -127,6 +130,7 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1, 1, 1, 1, 1, 1], dtype="Int64"),
         "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate": list(dates) * 2,
         "ZonopwekVerbruikDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
     })
@@ -165,6 +169,7 @@ def test_empty_project_edge_cases():
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "HuisIdBSV":    pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate":  list(dates) * 2,
         "ZonopwekVerbruikDiff":     pd.array([0.0, 0.0, 0.0, 3.0, 5.0, 4.0], dtype="Float64"),
     })
@@ -223,6 +228,7 @@ def test_flagged_values_excluded_in_both_paths():
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
         "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
         "ReadingDate": list(dates) * 2,
         "ZonopwekVerbruikDiff": pd.array([3.0, 3.0, 3.0, 9.0, 9.0, 9.0], dtype="Float64"),
         flag_column("ZonopwekVerbruikDiff"): pd.array(
@@ -263,6 +269,7 @@ def test_all_null_diffs_edge_case():
     mini = pd.DataFrame({
         "ProjectIdBSV": pd.array([1, 1], dtype="Int64"),
         "HuisIdBSV":    pd.array([1, 1], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1, 1], dtype="Int64"),
         "ReadingDate":  list(dates),
         "ZonopwekVerbruikDiff":     pd.array([pd.NA, pd.NA], dtype="Float64"),
     })

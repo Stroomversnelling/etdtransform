@@ -18,9 +18,9 @@ it is authoritative and the cumulative logic reads it, at its own cadence.
 import pandas as pd
 
 from etdtransform.bounds import (
-    cadence_minutes_by_household,
-    delivered_by_household,
-    grid_minutes_by_household,
+    cadence_minutes_by_household_batch,
+    delivered_by_household_batch,
+    grid_minutes_by_household_batch,
 )
 
 
@@ -52,15 +52,15 @@ def spread_steps_by_household(cum_col, diff_col, cadence) -> dict:
     Returns
     -------
     dict
-        HuisIdBSV -> slots per reading, for the qualifying households only.
+        HuisBatchIdBSV -> slots per reading, for the qualifying datasets only.
     """
-    interval_delivered = delivered_by_household(diff_col, cadence)
+    interval_delivered = delivered_by_household_batch(diff_col, cadence)
     if not any(interval_delivered.values()):
         return {}
 
-    register_delivered = delivered_by_household(cum_col, cadence)
-    minutes = cadence_minutes_by_household(diff_col, cadence)
-    grids = grid_minutes_by_household(cadence)
+    register_delivered = delivered_by_household_batch(cum_col, cadence)
+    minutes = cadence_minutes_by_household_batch(diff_col, cadence)
+    grids = grid_minutes_by_household_batch(cadence)
 
     steps = {}
     for household, delivered in interval_delivered.items():
@@ -78,9 +78,11 @@ def spread_steps_by_household(cum_col, diff_col, cadence) -> dict:
     return steps
 
 
-def cadence_with_column_at_grid(cadence, column, households) -> pd.DataFrame:
+def cadence_with_column_at_grid(
+    cadence, column, household_batches
+) -> pd.DataFrame:
     """
-    A copy of *cadence* recording *column* at the grid, for *households*.
+    A copy of *cadence* recording *column* at the grid, for *household_batches*.
 
     Once a column has been spread it reports every grid row, so that is the
     interval anything judging its values has to use -- the column bound, the
@@ -97,29 +99,32 @@ def cadence_with_column_at_grid(cadence, column, households) -> pd.DataFrame:
         The cadence table from :func:`load_column_cadence`.
     column : str
         The column that was spread.
-    households : iterable of int
-        HuisIdBSV values whose rows for *column* to rewrite.
+    household_batches : iterable of int
+        HuisBatchIdBSV values whose rows for *column* to rewrite.
 
     Returns
     -------
     pd.DataFrame
         The amended copy.
     """
-    households = [int(h) for h in households]
-    if cadence is None or cadence.empty or not households:
+    household_batches = [int(b) for b in household_batches]
+    if cadence is None or cadence.empty or not household_batches:
         return cadence
 
-    grids = grid_minutes_by_household(cadence)
+    grids = grid_minutes_by_household_batch(cadence)
     amended = cadence.copy()
-    rows = (amended["column"] == column) & amended["HuisIdBSV"].isin(households)
+    rows = (
+        (amended["column"] == column)
+        & amended["HuisBatchIdBSV"].isin(household_batches)
+    )
     amended.loc[rows, "cadence_minutes"] = (
-        amended.loc[rows, "HuisIdBSV"].map(grids).astype("Int64")
+        amended.loc[rows, "HuisBatchIdBSV"].map(grids).astype("Int64")
     )
     return amended
 
 
 def spread_delivered_interval_to_grid(
-    df, col, k_by_household, household_col="HuisIdBSV"
+    df, col, k_by_household_batch, household_batch_col="HuisBatchIdBSV"
 ):
     """
     Spread each delivered interval reading over the *k* grid slots it covers.
@@ -143,35 +148,35 @@ def spread_delivered_interval_to_grid(
         row's position is its slot.
     col : str
         The delivered interval column to spread.
-    k_by_household : dict
-        HuisIdBSV -> how many grid slots one of that household's readings
-        covers. Households absent from it are left untouched.
-    household_col : str
-        Name of the household identifier column.
+    k_by_household_batch : dict
+        HuisBatchIdBSV -> how many grid slots one of that dataset's readings
+        covers. Datasets absent from it are left untouched.
+    household_batch_col : str
+        Name of the dataset identifier column.
 
     Returns
     -------
     pd.Series
         Float64 on ``df.index``, holding the spread value at every slot a
         reading covers and ``pd.NA`` everywhere else, including every row of a
-        household not in *k_by_household*.
+        dataset not in *k_by_household_batch*.
     """
     out = pd.Series(pd.NA, index=df.index, dtype="Float64")
-    if not k_by_household:
+    if not k_by_household_batch:
         return out
 
-    households = df[household_col]
+    id_column = df[household_batch_col]
     # One native groupby per distinct k. k is a per-household fact and bfill
     # takes no per-row limit, so the loop is over the distinct values -- two or
     # three across the estate, since Meetfrequentie is 15min or 1h.
-    for k in sorted(set(k_by_household.values())):
-        ids = [h for h, k_h in k_by_household.items() if k_h == k]
-        rows = households.isin(ids)
+    for k in sorted(set(k_by_household_batch.values())):
+        ids = [h for h, k_h in k_by_household_batch.items() if k_h == k]
+        rows = id_column.isin(ids)
         if not rows.any():
             continue
-        block = df.loc[rows, [household_col, col]]
+        block = df.loc[rows, [household_batch_col, col]]
         out.loc[rows] = (
-            block.groupby(household_col, sort=False)[col].bfill(limit=k - 1) / k
+            block.groupby(household_batch_col, sort=False)[col].bfill(limit=k - 1) / k
         )
 
     return out

@@ -41,6 +41,7 @@ def _quiet_logs():
 def _cadence(rows):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -57,6 +58,7 @@ def _interval_only_frame(reading=1.2, missing=(), n=N):
 
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array([pd.NA] * n, dtype="Float64"),
@@ -175,6 +177,7 @@ class TestOtherDeliveryFormsAreUntouched:
             values.append(total if row % K == K - 1 else pd.NA)
         df = pd.DataFrame({
             "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
             "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
             CUM: pd.array(values, dtype="Float64"),
@@ -212,6 +215,7 @@ class TestOtherDeliveryFormsAreUntouched:
         df = _interval_only_frame()
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1, 1], dtype="Int64"),
             "column": pd.array([CUM, DIFF], dtype="string"),
             "cadence_minutes": pd.array([GRID, GRID * K], dtype="Int64"),
         })

@@ -36,6 +36,7 @@ N = 12
 def _household(household, values, project=1):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * len(values), dtype="Int64"),
         "ProjectIdBSV": pd.array([project] * len(values), dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=len(values), freq="5min"),
         DIFF: pd.array(values, dtype="Float64"),

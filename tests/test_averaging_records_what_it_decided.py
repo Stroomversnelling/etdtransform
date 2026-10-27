@@ -62,6 +62,7 @@ def _frame(per_household, project_of=None, register=None):
         stamps = pd.date_range("2026-01-01", periods=len(values), freq=f"{GRID}min")
         part = pd.DataFrame({
             "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([household] * len(values), dtype="Int64"),
             "ProjectIdBSV": pd.array(
                 [(project_of or {}).get(household, 1)] * len(values),
                 dtype="Int64",

@@ -48,6 +48,7 @@ def _frame(cumulative, averages, diffs=None, household=1):
     n = len(cumulative)
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(cumulative, dtype="Float64"),

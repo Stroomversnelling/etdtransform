@@ -30,6 +30,7 @@ def _rows(household, minutes, n=N):
     """One household's rows, spaced at its own reporting interval."""
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range(
             "2026-01-01", periods=n, freq=f"{minutes}min"
@@ -48,10 +49,11 @@ def _cadence(by_household):
     interval column resolves through it.
     """
     return pd.DataFrame([
-        {"HuisIdBSV": household, "column": CUM, "cadence_minutes": minutes}
+        {"HuisBatchIdBSV": household, "column": CUM, "cadence_minutes": minutes}
         for household, minutes in by_household.items()
     ]).astype({
-        "HuisIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
     })
 
 

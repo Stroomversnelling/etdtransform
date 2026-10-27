@@ -30,9 +30,9 @@ from etdtransform.presence import (
 )
 
 from etdtransform.bounds import (
-    cadence_minutes_by_household,
+    cadence_minutes_by_household_batch,
     column_bound,
-    column_bound_by_household,
+    column_bound_by_household_batch,
     grid_minutes_by_project,
     load_column_cadence,
 )
@@ -165,7 +165,7 @@ def assert_bounds_not_inverted(diff_col, cadence) -> None:
     """
     declared = thresholds_dict.get(diff_col, {})
     cadences = sorted(
-        set(cadence_minutes_by_household(diff_col, cadence).values())
+        set(cadence_minutes_by_household_batch(diff_col, cadence).values())
     )
 
     for cadence_minutes in [None, *cadences]:
@@ -571,7 +571,7 @@ def _average_at_one_cadence(
             # from the cadence table report at the grid cadence.
             minutes = _per_household(
                 included["HuisIdBSV"],
-                cadence_minutes_by_household(col, cadence),
+                cadence_minutes_by_household_batch(col, cadence),
                 grid_minutes,
             )
 
@@ -607,7 +607,7 @@ def _average_at_one_cadence(
                 assert_bounds_not_inverted(col, cadence)
                 scaled_bound = _per_household(
                     included["HuisIdBSV"],
-                    column_bound_by_household(col, cadence),
+                    column_bound_by_household_batch(col, cadence),
                     bound,
                 )
                 over = value > scaled_bound
@@ -674,7 +674,7 @@ def _average_at_one_cadence(
                 prepared, col, project_id_column, grid_minutes,
                 max_slots=_max_slots, total_slots=_total_slots,
                 window_minutes=window_minutes_for_column(
-                    cadence_minutes_by_household(col, cadence).values()
+                    cadence_minutes_by_household_batch(col, cadence).values()
                 ),
                 min_eligible=min_eligible,
             )

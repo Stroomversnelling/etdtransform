@@ -55,6 +55,7 @@ def _frame(cumulative, diffs, averages):
     n = len(cumulative)
     return pd.DataFrame({
         "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(cumulative, dtype="Float64"),
@@ -197,6 +198,7 @@ class TestTheThresholdPassAccumulates:
     def _with_flag(self, preset):
         df = pd.DataFrame({
             "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1, 1], dtype="Int64"),
             DIFF: pd.array([0.5, 99.0], dtype="Float64"),
             f"{DIFF}_avg": pd.array([0.5, 0.5], dtype="Float64"),
             f"{DIFF}_impute_type": pd.array([preset, preset], dtype="Int64"),

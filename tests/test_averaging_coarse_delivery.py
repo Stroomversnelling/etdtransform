@@ -26,7 +26,7 @@ import pytest
 from etdmap.data_model import thresholds_dict
 
 from etdtransform.bounds import (
-    cadence_minutes_by_household,
+    cadence_minutes_by_household_batch,
     column_bound,
     grid_bound,
 )
@@ -54,6 +54,7 @@ RISE = 0.6  # consumption delivered in one hour
 def _cadence(rows):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
         "column": pd.array([r[1] for r in rows], dtype="string"),
         "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
         "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
@@ -82,6 +83,7 @@ def _coarse_interval_cadence():
 def _base(n=N):
     return pd.DataFrame({
         "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
     })
@@ -164,7 +166,7 @@ class TestSpreadingACoarseDeliveredRegister:
     def test_the_interval_column_is_found_through_its_register(self):
         """Cadence is measured on the columns as delivered, so a column derived
         later has no row of its own."""
-        assert cadence_minutes_by_household(DIFF, _coarse_register_cadence()) == {
+        assert cadence_minutes_by_household_batch(DIFF, _coarse_register_cadence()) == {
             1: float(GRID * K)
         }
 
@@ -193,7 +195,7 @@ class TestSpreadingACoarseDeliveredInterval:
         """The register's row records no readings and carries the grid. Letting
         it through would report the delivered interval as reporting every slot,
         and the spreading would stop."""
-        assert cadence_minutes_by_household(DIFF, _coarse_interval_cadence()) == {
+        assert cadence_minutes_by_household_batch(DIFF, _coarse_interval_cadence()) == {
             1: float(GRID * K)
         }
 

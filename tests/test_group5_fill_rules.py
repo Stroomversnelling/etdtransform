@@ -46,6 +46,7 @@ DIFF = "ElektriciteitNetgebruikDiff"
 def _household(household_id, n, **columns):
     data = {
         "HuisIdBSV": pd.array([household_id] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household_id] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
     }

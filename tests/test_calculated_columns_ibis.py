@@ -197,6 +197,7 @@ def _make_multi_schema_df():
         for _ in range(N):
             rows.append({
                 "HuisIdBSV": pd.NA if household_id is None else household_id,
+                "HuisBatchIdBSV": pd.NA if household_id is None else household_id,
                 # One batch per household: the stage writes one shard per
                 # (household, batch), and a household artifact always carries
                 # the batch it was mapped in.

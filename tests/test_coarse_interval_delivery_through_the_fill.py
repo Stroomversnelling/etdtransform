@@ -70,6 +70,7 @@ def _delivered(drop_tick=5):
 
     frame = pd.DataFrame({
         "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1] * N, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * N, dtype="Float64"),
@@ -86,7 +87,7 @@ def _cadence(frame):
     production: 60 minutes and a reading count on the interval column, and zero
     readings on the register that never arrived."""
     table = detect_column_cadence(frame, grid_minutes=GRID)
-    table.insert(0, "HuisIdBSV", pd.array([1] * len(table), dtype="Int64"))
+    table.insert(0, "HuisBatchIdBSV", pd.array([1] * len(table), dtype="Int64"))
     return table
 
 
@@ -230,6 +231,7 @@ class TestTheColumnIsJudgedPerSlot:
             values.iloc[position] = over_a_slot
         frame = pd.DataFrame({
             "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1] * N, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
             "ReadingDate": stamps,
             CUM: pd.array([pd.NA] * N, dtype="Float64"),

@@ -55,6 +55,7 @@ def _frame(per_household, start="2026-01-01", freq="5min", project=1):
         for date, value in zip(dates, values):
             rows.append({
                 "HuisIdBSV": household,
+                "HuisBatchIdBSV": household,
                 "ProjectIdBSV": project,
                 "ReadingDate": date,
                 COL: value,
@@ -80,12 +81,14 @@ def _cadence_for(frame, minutes=GRID):
     """
     households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
     rows = [
-        {"HuisIdBSV": household, "column": column, "cadence_minutes": minutes}
+        {"HuisBatchIdBSV": household, "column": column,
+         "cadence_minutes": minutes}
         for household in households
         for column in (CUM, "ReadingDate")
     ]
     return pd.DataFrame(rows).astype({
-        "HuisIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
+        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
     })
 
 
@@ -506,6 +509,7 @@ class TestTheHouseholdFloor:
         households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array(households, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array(households, dtype="Int64"),
             "column": pd.array([cum] * len(households), dtype="string"),
             "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
         })
@@ -529,6 +533,7 @@ class TestTheAveragingAppliesTheGates:
         for household, values in per_household.items():
             frame = pd.DataFrame({
                 "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
+                "HuisBatchIdBSV": pd.array([household] * len(values), dtype="Int64"),
                 "ProjectIdBSV": pd.array([project] * len(values), dtype="Int64"),
                 "ReadingDate": pd.date_range(
                     "2026-01-01", periods=len(values), freq="5min"
@@ -543,6 +548,7 @@ class TestTheAveragingAppliesTheGates:
         households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
         return pd.DataFrame({
             "HuisIdBSV": pd.array(households, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array(households, dtype="Int64"),
             "column": pd.array([self.CUM] * len(households), dtype="string"),
             "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
         })

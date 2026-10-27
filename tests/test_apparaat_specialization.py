@@ -132,6 +132,7 @@ class TestApparaatSetByHousehold:
         pd.DataFrame(
             {
                 "HuisIdBSV": [1, 2],
+                "HuisBatchIdBSV": [1, 2],
                 "ApparaatOntbrekend": [
                     "ElektriciteitsgebruikWTW, ElektriciteitsgebruikRadiator",
                     "",
@@ -160,6 +161,7 @@ class TestRuleSetsByHousehold:
         path = tmp_path / "metadata.csv"
         pd.DataFrame({
             "HuisIdBSV": list(declarations),
+            "HuisBatchIdBSV": list(declarations),
             "ApparaatOntbrekend": list(declarations.values()),
         }).to_csv(path, index=False)
         return path
@@ -254,6 +256,7 @@ def _two_household_frame():
         return pd.DataFrame(
             {
                 "HuisIdBSV": pd.array([household] * 4, dtype="Int64"),
+                "HuisBatchIdBSV": pd.array([household] * 4, dtype="Int64"),
                 "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
                 "ReadingDate": pd.date_range(
                     "2026-01-01", periods=4, freq="5min"

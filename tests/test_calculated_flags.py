@@ -31,6 +31,7 @@ def _frame(values, households=None):
     n = len(values)
     return pd.DataFrame({
         "HuisIdBSV": pd.array(households or [1] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array(households or [1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2024-01-01", periods=n, freq="5min", tz="UTC"),
         COLUMN: pd.array(values, dtype="Float64"),
     })

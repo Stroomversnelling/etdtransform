@@ -12,10 +12,10 @@ from etdmap.flags import (
 from etdmap.record_validators import thresholds_dict
 
 from etdtransform.bounds import (
-    cadence_minutes_by_household,
+    cadence_minutes_by_household_batch,
     clip_to_bounds,
     column_bound,
-    delivered_by_household,
+    delivered_by_household_batch,
     fill_bound,
     load_column_cadence,
     usable_readings,
@@ -278,9 +278,9 @@ def _row_bounds_per_cadence(
 
     *cadence* is the table from
     :func:`etdtransform.bounds.load_column_cadence`: one row per
-    (HuisIdBSV, column), with ``cadence_minutes`` holding the interval that
-    column's readings cover. It supplies one of the three axes the frame is
-    grouped on, so a household reporting at a different interval from its
+    (HuisBatchIdBSV, column), with ``cadence_minutes`` holding the interval
+    that column's readings cover. It supplies one of the three axes the frame
+    is grouped on, so a dataset reporting at a different interval from its
     neighbour is narrowed with its own package.
     """
     from etdtransform.constraints import (
@@ -339,9 +339,9 @@ def _row_bounds_per_cadence(
         set_keys = pd.Series("", index=df.index, dtype="string")
         available_sets = {""}
 
-    by_household = cadence_minutes_by_household(diff_col, cadence)
-    if "HuisIdBSV" in df.columns:
-        minutes = df["HuisIdBSV"].map(by_household)
+    by_household_batch = cadence_minutes_by_household_batch(diff_col, cadence)
+    if "HuisBatchIdBSV" in df.columns:
+        minutes = df["HuisBatchIdBSV"].map(by_household_batch)
     else:
         minutes = pd.Series(pd.NA, index=df.index, dtype="Float64")
 
@@ -803,7 +803,7 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
     Parameters
     ----------
     df : pd.DataFrame
-        The chunk being filled. Must carry ``HuisIdBSV``.
+        The chunk being filled. Must carry ``HuisBatchIdBSV``.
     cum_col : str
         The register column of the variable.
     diff_col : str
@@ -819,22 +819,23 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
     Raises
     ------
     ValueError
-        When ``HuisIdBSV`` is missing or holds pd.NA, or when a household in the
-        frame has no row in the sidecar at all.
+        When ``HuisBatchIdBSV`` is missing or holds pd.NA, or when a dataset in
+        the frame has no row in the sidecar at all.
     """
-    if "HuisIdBSV" not in df.columns:
+    if "HuisBatchIdBSV" not in df.columns:
         raise ValueError(
             f"Cannot route {diff_col} by delivered form: the chunk carries no "
-            f"HuisIdBSV, so no row can be attributed to a household."
+            f"HuisBatchIdBSV, so no row can be attributed to a dataset."
         )
 
-    households = df["HuisIdBSV"]
+    household_batches = df["HuisBatchIdBSV"]
     # isin() reads pd.NA as no-match, so an NA id would route silently into
     # nothing-delivered and still satisfy the partition guard below.
-    if bool(households.isna().any()):
+    if bool(household_batches.isna().any()):
         raise ValueError(
             f"Cannot route {diff_col} by delivered form: "
-            f"{int(households.isna().sum())} row(s) carry no HuisIdBSV."
+            f"{int(household_batches.isna().sum())} row(s) carry no "
+            f"HuisBatchIdBSV."
         )
 
     # A household absent from the sidecar is absent metadata, not a delivery
@@ -866,19 +867,25 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
             nothing=pd.Series(False, index=df.index, dtype="boolean"),
         )
 
-    known = set(int(h) for h in cadence["HuisIdBSV"].dropna().unique())
-    unknown = sorted(set(int(h) for h in households.unique()) - known)
+    known = set(int(b) for b in cadence["HuisBatchIdBSV"].dropna().unique())
+    unknown = sorted(
+        set(int(b) for b in household_batches.unique()) - known
+    )
     if unknown:
         raise ValueError(
-            f"Cannot route {diff_col} by delivered form: household(s) "
+            f"Cannot route {diff_col} by delivered form: household batch(es) "
             f"{unknown[:10]} have no row in the column-cadence sidecar, so "
             f"what the supplier delivered for them is unrecorded. Re-map them."
         )
 
-    register = delivered_by_household(cum_col, cadence)
-    intervals = delivered_by_household(diff_col, cadence)
-    on_register = households.isin([h for h, yes in register.items() if yes])
-    on_intervals = households.isin([h for h, yes in intervals.items() if yes])
+    register = delivered_by_household_batch(cum_col, cadence)
+    intervals = delivered_by_household_batch(diff_col, cadence)
+    on_register = household_batches.isin(
+        [b for b, yes in register.items() if yes]
+    )
+    on_intervals = household_batches.isin(
+        [b for b, yes in intervals.items() if yes]
+    )
 
     paths = DeliveryPaths(
         cumulative=on_register,

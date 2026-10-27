@@ -45,6 +45,7 @@ def _write_index(folder: Path, rows):
     df = pd.DataFrame({
         "HuisIdLeverancier": pd.array([f"L{r[0]}" for r in rows], dtype="string"),
         "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
         "Meenemen": pd.array([r[3] for r in rows], dtype="boolean"),
         "ProjectIdLeverancier": pd.array(["P1"] * n, dtype="string"),
         "ProjectIdBSV": pd.array([r[2] for r in rows], dtype="Int64"),

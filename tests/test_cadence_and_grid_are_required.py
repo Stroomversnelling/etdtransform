@@ -21,6 +21,7 @@ pytestmark = pytest.mark.unit
 def _write_cadence(folder):
     pd.DataFrame({
         "HuisIdBSV": pd.array([1], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
         "column": pd.array(["ElektriciteitNetgebruik"], dtype="string"),
         "cadence_minutes": pd.array([15], dtype="Int64"),
     }).to_parquet(folder / CADENCE_FILENAME, engine="pyarrow")
@@ -29,6 +30,7 @@ def _write_cadence(folder):
 def _write_index(folder, frequency="5min"):
     pd.DataFrame({
         "HuisIdBSV": pd.array([1], dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
         "Gegevensfrequentie": pd.array([frequency], dtype="string"),
     }).to_parquet(folder / "index.parquet", engine="pyarrow")
 
@@ -75,6 +77,7 @@ class TestTheDeclaredGridIsRequired:
     def test_an_index_without_the_field_raises(self, tmp_path):
         pd.DataFrame({
             "HuisIdBSV": pd.array([1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
         }).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         with pytest.raises(ValueError, match="Gegevensfrequentie"):
             dataset_grid_minutes(str(tmp_path))
@@ -93,6 +96,7 @@ class TestTheDeclaredGridIsRequired:
         their grids."""
         pd.DataFrame({
             "HuisIdBSV": pd.array([1, 2], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1, 2], dtype="Int64"),
             "Gegevensfrequentie": pd.array(["15min", "5min"], dtype="string"),
         }).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         assert dataset_grid_minutes(str(tmp_path)) == 5.0
@@ -121,6 +125,7 @@ class TestTheGridIsNotDefaultedDownstream:
         frame = pd.DataFrame({
             "ProjectIdBSV": pd.array([4, 4], dtype="Int64"),
             "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1, 1], dtype="Int64"),
             "ReadingDate": pd.to_datetime(
                 ["2026-01-01 00:00", "2026-01-01 00:05"]
             ),
@@ -132,6 +137,7 @@ class TestTheGridIsNotDefaultedDownstream:
         # which is where the household's grid is recorded.
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1], dtype="Int64"),
             "column": pd.array(["ElektriciteitNetgebruik"], dtype="string"),
             "cadence_minutes": pd.array([5], dtype="Int64"),
         })

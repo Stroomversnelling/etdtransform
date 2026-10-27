@@ -69,6 +69,7 @@ def _household(household):
             values.iloc[position] = READING
     frame = pd.DataFrame({
         "HuisIdBSV": pd.array([household] * N, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * N, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * N, dtype="Float64"),
@@ -84,7 +85,7 @@ def _cadence(frame):
         own = frame[frame["HuisIdBSV"] == household]
         table = detect_column_cadence(own, grid_minutes=GRID)
         table.insert(
-            0, "HuisIdBSV",
+            0, "HuisBatchIdBSV",
             pd.array([household] * len(table), dtype="Int64"),
         )
         tables.append(table)

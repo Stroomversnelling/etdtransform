@@ -71,6 +71,7 @@ def _household(household, project, grid):
             values.iloc[position] = READING
     return pd.DataFrame({
         "HuisIdBSV": pd.array([household] * periods, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([household] * periods, dtype="Int64"),
         "ProjectIdBSV": pd.array([project] * periods, dtype="Int64"),
         "ReadingDate": stamps,
         CUM: pd.array([pd.NA] * periods, dtype="Float64"),
@@ -90,7 +91,7 @@ def _estate():
             frames.append(frame)
             table = detect_column_cadence(frame, grid_minutes=grid)
             table.insert(
-                0, "HuisIdBSV",
+                0, "HuisBatchIdBSV",
                 pd.array([household] * len(table), dtype="Int64"),
             )
             cadences.append(table)
@@ -275,6 +276,7 @@ class TestAGridThatDividesNothing:
         stamps = pd.date_range("2026-01-01", periods=4, freq="5min")
         rows.append(pd.DataFrame({
             "HuisIdBSV": pd.array([1] * 4, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1] * 4, dtype="Int64"),
             "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
             "ReadingDate": stamps,
             DIFF: pd.array([pd.NA, pd.NA, value, pd.NA], dtype="Float64"),
@@ -283,6 +285,7 @@ class TestAGridThatDividesNothing:
         stamps = pd.date_range("2026-01-01", periods=5, freq="7min")
         rows.append(pd.DataFrame({
             "HuisIdBSV": pd.array([2] * 5, dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([2] * 5, dtype="Int64"),
             "ProjectIdBSV": pd.array([3] * 5, dtype="Int64"),
             "ReadingDate": stamps,
             DIFF: pd.array(
@@ -292,6 +295,7 @@ class TestAGridThatDividesNothing:
         frame = pd.concat(rows, ignore_index=True)
         cadence = pd.DataFrame({
             "HuisIdBSV": pd.array([1, 2], dtype="Int64"),
+            "HuisBatchIdBSV": pd.array([1, 2], dtype="Int64"),
             "cadence_minutes": pd.array([10, 28], dtype="Int64"),
         })
 
@@ -343,6 +347,9 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
                 "HuisIdBSV": pd.array(
                     [household] * self.SLOTS, dtype="Int64"
                 ),
+                "HuisBatchIdBSV": pd.array(
+                    [household] * self.SLOTS, dtype="Int64"
+                ),
                 "ProjectIdBSV": pd.array([2] * self.SLOTS, dtype="Int64"),
                 "ReadingDate": stamps,
                 CUM: pd.array([pd.NA] * self.SLOTS, dtype="Float64"),
@@ -358,7 +365,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
             own = frame[frame["HuisIdBSV"] == household]
             table = detect_column_cadence(own, grid_minutes=self.GRID)
             table.insert(
-                0, "HuisIdBSV",
+                0, "HuisBatchIdBSV",
                 pd.array([household] * len(table), dtype="Int64"),
             )
             tables.append(table)
@@ -450,7 +457,7 @@ class TestAMixedCadenceProjectIsRefused:
             frames.append(frame)
             table = detect_column_cadence(frame, grid_minutes=grid)
             table.insert(
-                0, "HuisIdBSV",
+                0, "HuisBatchIdBSV",
                 pd.array([household] * len(table), dtype="Int64"),
             )
             cadences.append(table)

@@ -26,7 +26,7 @@ import pytest
 
 from etdmap.flags import MappingFlag, flag_column
 from etdmap.mapping_helpers import (
-    _detect_frozen_spans_for_household,
+    _detect_frozen_spans_for_household_batch,
     _treat_frozen_spans,
 )
 from etdtransform.vectorized_impute import impute_and_normalize
@@ -76,6 +76,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
 
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([hh] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         CUM: pd.array(values, dtype="Float64"),
@@ -84,7 +85,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
     df.loc[0, DIFF] = 0
     df[f"{DIFF}_avg"] = pd.array([NORMAL] * n, dtype="Float64")
 
-    rows = _detect_frozen_spans_for_household(
+    rows = _detect_frozen_spans_for_household_batch(
         df, hh, cadence=cadence_table(df, [CUM])
     )
     assert rows, "the fixture must produce a detected span"
@@ -104,6 +105,7 @@ def _clean_household(hh, n=40):
     """
     df = pd.DataFrame({
         "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
+        "HuisBatchIdBSV": pd.array([hh] * n, dtype="Int64"),
         "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
         DIFF: pd.array([0.0] + [NORMAL] * (n - 1), dtype="Float64"),
@@ -119,7 +121,9 @@ def _project(n_clean=19, with_span=1):
         _household_with_a_treated_span(hh)
         for hh in range(n_clean + 1, n_clean + with_span + 1)
     ]
-    keep = ["HuisIdBSV", "ProjectIdBSV", "ReadingDate", DIFF, FLAGS]
+    keep = [
+        "HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV", "ReadingDate", DIFF, FLAGS
+    ]
     return pd.concat([f[keep] for f in frames], ignore_index=True)
 
 
