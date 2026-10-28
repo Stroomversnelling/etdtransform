@@ -252,7 +252,7 @@ def sharded_fixture_mapped(mapped_dataset, _include_updated):
     expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
     found = mapped_household_paths(mapped_dataset)
     assert len(found) == expected, (
-        f"expected {expected} dataset(s), found {len(found)}"
+        f"expected {expected} household batch(es), found {len(found)}"
     )
     return Path(mapped_dataset)
 

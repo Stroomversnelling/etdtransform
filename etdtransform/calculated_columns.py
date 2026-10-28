@@ -281,7 +281,7 @@ def add_calculated_columns_adaptive(
     missing_rule_vars = rule_all_variables - set(result.columns)
     if missing_rule_vars:
         logging.info(
-            f"[adaptive] Rule variables not present in dataset: {sorted(missing_rule_vars)}"
+            f"[adaptive] Rule variables not present in the mapped data: {sorted(missing_rule_vars)}"
         )
 
     return result

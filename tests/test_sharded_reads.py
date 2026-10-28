@@ -167,9 +167,13 @@ class TestReadMappedHouseholds:
         _write_sharded(shard_root, [1, 2])
         df_flat = read_mapped_households([1, 2], mapped_folder_path=flat_root)
         df_shard = read_mapped_households([1, 2], mapped_folder_path=shard_root)
+        # Sorted on the household batch, which both layouts carry: the flat one
+        # has no household-batch level, so the reader reports the household id
+        # in its place and the two frames still line up.
+        order = [ids.HOUSEHOLD_BATCH, "ReadingDate"]
         pd.testing.assert_frame_equal(
-            df_flat.sort_values([ids.HOUSEHOLD, "ReadingDate"]).reset_index(drop=True),
-            df_shard.sort_values([ids.HOUSEHOLD, "ReadingDate"]).reset_index(drop=True),
+            df_flat.sort_values(order).reset_index(drop=True),
+            df_shard.sort_values(order).reset_index(drop=True),
         )
 
     def test_column_projection(self, tmp_path):

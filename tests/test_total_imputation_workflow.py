@@ -301,7 +301,7 @@ def test_a_grouping_interval_buckets_each_household_separately(
     five = chain_frames["5min"]
     expected = (
         five.assign(_bucket=five["ReadingDate"].dt.floor(f"{minutes}min"))
-        .groupby([ids.HOUSEHOLD, "_bucket"])
+        .groupby([ids.HOUSEHOLD_BATCH, "_bucket"])
         .ngroups
     )
     assert len(chain_frames[interval]) == expected

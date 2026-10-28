@@ -141,8 +141,10 @@ class TestResampleDuckdb:
             assert base_col in df.columns, f"{base_col} missing from {interval} output"
             # DuckDB uses SUM() OVER (UNBOUNDED PRECEDING) which skips NULLs.
             # pandas .expanding().sum() is the equivalent (also skips NAs).
+            # Per household batch: a running total belongs to one series, and
+            # household-plus-project is that same key written the long way.
             expected = (
-                df.groupby([ids.HOUSEHOLD, ids.PROJECT], group_keys=False)[diff_col]
+                df.groupby(ids.HOUSEHOLD_BATCH, group_keys=False)[diff_col]
                 .transform(lambda x: x.expanding().sum())
             )
             actual = df[base_col]

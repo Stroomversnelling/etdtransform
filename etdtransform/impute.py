@@ -434,7 +434,7 @@ def calculate_average_diff_ibis(
             f"{len(unassigned)} household batch(es) carry no "
             f"{project_id_column}, so their readings belong to no project "
             f"average: {sorted(unassigned)[:10]}. The project is joined from "
-            f"the index before averaging; a dataset missing from it cannot "
+            f"the index before averaging; a household batch missing from it cannot "
             f"contribute."
         )
 
@@ -1422,10 +1422,10 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
         multi = sorted(int(h) for h, n in counts.items() if n > 1)
         if multi:
             raise HouseBatchOverlapError(
-                f"[imputation] Household(s) {multi} span more than one batch. "
-                f"Imputing a concatenated multi-batch series would fill the "
-                f"between-batch gap (real non-delivery). Batch-aware imputation "
-                f"is not implemented yet; impute per batch or exclude."
+                f"[imputation] Household(s) {multi} span more than one household batch. "
+                f"Imputing a concatenated multi-household-batch series would fill the "
+                f"between-household-batch gap (real non-delivery). Household-batch-aware imputation "
+                f"is not implemented yet; impute per household batch or exclude."
             )
     dup_mask = df.duplicated(subset=[ids.HOUSEHOLD_BATCH, "ReadingDate"])
     if bool(dup_mask.any()):
@@ -1434,7 +1434,7 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
         )
         raise ValueError(
             f"[imputation] Duplicate ({ids.HOUSEHOLD_BATCH}, ReadingDate) rows "
-            f"for dataset(s) {bad} -- a timestamp twice in one series "
+            f"for household batch(es) {bad} -- a timestamp twice in one series "
             f"double-weights the project averages and breaks the diff math. "
             f"Resolve the duplication first."
         )
@@ -1454,16 +1454,17 @@ def _assert_batch_safe_ibis(tbl) -> None:
         if len(multi):
             raise HouseBatchOverlapError(
                 f"[prepare_diff_averages] Household(s) {sorted(int(h) for h in multi)} span "
-                f"more than one batch; project averages would mix batches. "
-                f"Batch-aware averaging is not implemented yet."
+                f"more than one household batch; project averages would mix "
+                f"household batches. "
+                f"Household-batch-aware averaging is not implemented yet."
             )
     n_rows = int(tbl.count().execute())
     n_keys = int(tbl[[ids.HOUSEHOLD, "ReadingDate"]].distinct().count().execute())
     if n_rows != n_keys:
         raise ValueError(
-            f"[prepare_diff_averages] {n_rows - n_keys} duplicate (HuisIdBSV, ReadingDate) "
-            f"row(s) -- overlapping batch periods would double-weight the project "
-            f"averages. Resolve the batch overlap first."
+            f"[prepare_diff_averages] {n_rows - n_keys} duplicate ({ids.HOUSEHOLD}, ReadingDate) "
+            f"row(s) -- overlapping household batch periods would double-weight the project "
+            f"averages. Resolve the household batch overlap first."
         )
 
 

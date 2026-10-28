@@ -144,7 +144,7 @@ def add_calculated_columns_to_hh_data_ibis(
     except (FileNotFoundError, ValueError) as _grid_error:
         _calc_grid_minutes = None
         logging.warning(
-            "[calc ibis] dataset grid unavailable (%s) -- CALCULATED_COLUMN "
+            "[calc ibis] mapped dataset's grid unavailable (%s) -- CALCULATED_COLUMN "
             "and CALCULATED_THRESHOLD_VIOLATED will not be written",
             _grid_error,
         )
@@ -205,10 +205,10 @@ def add_calculated_columns_to_hh_data_ibis(
         _assert_batch_safe_ibis(tbl)
     if ids.HOUSEHOLD_BATCH not in parquet_col_set:
         raise ValueError(
-            "add_calculated_columns_to_hh_data_ibis: the output is written one "
-            "shard per (household, batch) and the source has no "
-            "HuisBatchIdBSV column. A household artifact always carries the "
-            "batch it was mapped in."
+            f"add_calculated_columns_to_hh_data_ibis: the output is written "
+            f"one shard per (household, household batch) and the source has "
+            f"no {ids.HOUSEHOLD_BATCH} column. A household artifact always "
+            f"carries the household batch it was mapped as."
         )
 
     # Zon-opwekTotaalDiff -> ZonopwekBruto compatibility shim
@@ -318,7 +318,8 @@ def add_calculated_columns_to_hh_data_ibis(
         mark["note"] = (
             f"{len(_shard_units)} shard(s) over "
             f"{len({h for h, _ in _shard_units})} household(s)"
-            + ("; some households span batches" if _households_with_many else "")
+            + ("; some households span household batches"
+               if _households_with_many else "")
         )
 
     # The writer owns and clears its output directory -- re-runs are
@@ -532,7 +533,7 @@ def add_calculated_columns_to_hh_data_ibis(
         )
     logging.info(
         f"[calc ibis] Wrote {len(_written_units)} shard "
-        f"unit(s), one write per (household, batch)"
+        f"unit(s), one write per (household, household batch)"
     )
     logging.info(
         f"[calc ibis] Saved calculated hive shards -> {output_path}"

@@ -204,9 +204,9 @@ class RuleSet:
     package: "ConstraintPackage"
 
 
-def rule_sets_by_household(household_ids, catalog, cadence_minutes,
-                           metadata_path=None) -> dict:
-    """What each of *household_ids* may derive, keyed by its apparaat-set.
+def rule_sets_by_household_batch(household_batch_ids, catalog, cadence_minutes,
+                                 metadata_path=None) -> dict:
+    """What each of *household_batch_ids* may derive, by its apparaat-set.
 
     A row may only be derived with a formula whose variables are actually
     present. Where no heat pump is declared there is no heat-pump term to
@@ -214,41 +214,45 @@ def rule_sets_by_household(household_ids, catalog, cadence_minutes,
     must not be a candidate -- not rejected later by a null check, absent from
     the formula set.
 
-    ``ApparaatOntbrekend`` declares that, per household batch. Everything
-    sharing a declaration shares everything that follows from it, so the work
-    is done once per distinct set rather than once per member: the catalog is
-    specialized and the constraint package is built per set, and every member
-    of the set gets the same two objects.
+    ``ApparaatOntbrekend`` declares that per household batch, which is why
+    this resolves per household batch: a later household batch may hold the
+    same household renovated, so its devices -- and therefore the formulas it
+    may use -- differ from the earlier one's. Everything sharing a declaration
+    shares everything that follows from it, so the work is done once per
+    distinct set rather than once per member: the catalog is specialized and
+    the constraint package is built per set, and every member gets the same
+    two objects.
 
-    Returns ``{apparaat_set_key: RuleSet}``. A household the metadata does
-    not mention raises rather than falling back to the full model: the full
-    model has MORE rules and so narrows HARDER, and absence may only widen.
+    Returns ``{apparaat_set_key: RuleSet}``. A household batch the metadata
+    does not mention raises rather than falling back to the full model: the
+    full model has MORE rules and so narrows HARDER, and absence may only
+    widen.
 
     Parameters
     ----------
-    household_ids : iterable of int
+    household_batch_ids : iterable of int
     catalog : pd.DataFrame
         The derivation catalog, unspecialized.
     cadence_minutes : int
         The grid, which is what a calculated cell covers.
     metadata_path : str or None
-        Passed through to :func:`apparaat_set_by_household`.
+        Passed through to :func:`apparaat_set_by_household_batch`.
     """
-    declared = apparaat_set_by_household(metadata_path)
+    declared = apparaat_set_by_household_batch(metadata_path)
     grouped: dict = {}
     unknown = []
-    for household_id in household_ids:
-        household_id = int(household_id)
-        if household_id not in declared:
-            unknown.append(household_id)
+    for batch_id in household_batch_ids:
+        batch_id = int(batch_id)
+        if batch_id not in declared:
+            unknown.append(batch_id)
             continue
-        grouped.setdefault(declared[household_id], []).append(household_id)
+        grouped.setdefault(declared[batch_id], []).append(batch_id)
 
     if unknown:
         raise ValueError(
-            f"{len(unknown)} household(s) are not in the BSV metadata, so "
-            f"their ApparaatOntbrekend declarations are unknown and the "
-            f"formulas they may use cannot be resolved (first 10: "
+            f"{len(unknown)} household batch(es) are not in the BSV "
+            f"metadata, so their ApparaatOntbrekend declarations are unknown "
+            f"and the formulas they may use cannot be resolved (first 10: "
             f"{sorted(unknown)[:10]}). Rebuild the metadata rather than "
             f"deriving them against the full model."
         )
@@ -274,19 +278,22 @@ def rule_sets_by_household(household_ids, catalog, cadence_minutes,
 _APPARAAT_SETS_CACHE: dict = {}
 
 
-def apparaat_set_by_household(metadata_path=None) -> dict:
-    """``ids.HOUSEHOLD -> canonical apparaat-set key`` from the BSV metadata.
+def apparaat_set_by_household_batch(metadata_path=None) -> dict:
+    """``ids.HOUSEHOLD_BATCH -> canonical apparaat-set key`` from the metadata.
 
     ``ApparaatOntbrekend`` is declared per household batch: the Grist table
     behind the BSV metadata holds one row per ``ids.HOUSEHOLD_BATCH``, because
     a later household batch may hold the same household renovated and so
     carrying different devices. The declarations flow through
     ``build_bsv_metadata`` into the BSV metadata CSV; this reads them once per
-    path and keys the result on the household, which is the grain the callers
-    ask at. Mirrors how ``physical_model_by_project`` resolves the model: the
-    set decides which compiled rules apply, so a stale metadata file (no
-    declaration column) raises rather than defaulting every household to the
-    full model.
+    path and keys the result on the household batch, which is the grain they
+    are declared at.
+
+    Mirrors how ``physical_model_by_project`` resolves the model: the set
+    decides which compiled rules apply, so a metadata file missing either the
+    declaration column or the household batch column raises rather than
+    defaulting -- the full model has MORE rules and so narrows HARDER, and an
+    absent declaration may only widen.
     """
     if metadata_path is None:
         import etdmap
@@ -312,13 +319,22 @@ def apparaat_set_by_household(metadata_path=None) -> dict:
             f"metadata predates the device declarations. Run "
             f"sync_data_model.py (or build_bsv_metadata.py) to rebuild it."
         )
+    if ids.HOUSEHOLD_BATCH not in metadata.columns:
+        raise ValueError(
+            f"{metadata_path} has no {ids.HOUSEHOLD_BATCH} column -- the BSV "
+            f"metadata predates keying the declarations on the household "
+            f"batch. ApparaatOntbrekend is declared per household batch, and "
+            f"resolving it per household would give a renovated household "
+            f"batch its earlier devices. Run sync_data_model.py (or "
+            f"build_bsv_metadata.py) to rebuild it."
+        )
 
     resolved: dict = {}
     for _, row in metadata.iterrows():
-        household_id = row.get(ids.HOUSEHOLD)
-        if pd.isna(household_id):
+        batch_id = row.get(ids.HOUSEHOLD_BATCH)
+        if pd.isna(batch_id):
             continue
-        resolved[int(household_id)] = apparaat_set_key(
+        resolved[int(batch_id)] = apparaat_set_key(
             parse_device_declaration(row.get("ApparaatOntbrekend"))
         )
     _APPARAAT_SETS_CACHE[cache_key] = resolved

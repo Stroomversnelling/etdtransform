@@ -183,7 +183,7 @@ class TestCrossJoinPadding:
             & (out["column"] == "kWh")
             & (out["season"] == "annual")
         ]
-        assert len(sub) == 1, "expected exactly one row for that dataset, kWh, annual"
+        assert len(sub) == 1, "expected exactly one row for that household batch, kWh, annual"
         row = sub.iloc[0]
         assert int(row["count"]) == 0
         assert int(row["missing"]) > 0

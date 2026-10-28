@@ -113,7 +113,7 @@ def _cadence(frame):
     batches = sorted(
         int(b) for b in frame[ids.HOUSEHOLD_BATCH].dropna().unique()
     )
-    assert len(batches) == 1, "one dataset per frame here"
+    assert len(batches) == 1, "one household batch per frame here"
     return sidecar_frame(
         "cadence",
         cadence_to_rows(

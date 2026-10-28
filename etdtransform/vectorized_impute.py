@@ -839,7 +839,7 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
     if ids.HOUSEHOLD_BATCH not in df.columns:
         raise ValueError(
             f"Cannot route {diff_col} by delivered form: the chunk carries no "
-            f"{ids.HOUSEHOLD_BATCH}, so no row can be attributed to a dataset."
+            f"{ids.HOUSEHOLD_BATCH}, so no row can be attributed to a household batch."
         )
 
     household_batches = df[ids.HOUSEHOLD_BATCH]
@@ -861,7 +861,7 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
     if cadence is None or getattr(cadence, "empty", True):
         raise ValueError(
             f"Cannot route {diff_col} by delivered form: no cadence table. "
-            f"Re-map the dataset to produce the column-cadence sidecar."
+            f"Re-map the data to produce the column-cadence sidecar."
         )
     # A table without n_readings records no delivery counts at all, so the form
     # of every column is unknown. Routing on that would put every row on the
@@ -1321,7 +1321,7 @@ def impute_and_normalize(
                     if ids.HOUSEHOLD in df.columns else 1
                 )
                 logging.info(
-                    f"{diff_col}: {_n_house} household(s) have a dataset that "
+                    f"{diff_col}: {_n_house} household(s) have a household batch that "
                     f"delivers no usable reading in this column (interval or "
                     f"cumulative); their "
                     f"{int(_no_usable_readings.sum())} row(s) are not treated as "

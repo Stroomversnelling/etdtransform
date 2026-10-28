@@ -133,7 +133,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
     )
     if not folder:
         raise FileNotFoundError(
-            "No mapped folder is configured, so the dataset grid cannot be "
+            "No mapped folder is configured, so the mapped dataset's grid cannot be "
             "read. Set etdtransform.options.mapped_folder_path or pass "
             "mapped_folder_path."
         )
@@ -141,7 +141,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
     path = os.path.join(str(folder), "index.parquet")
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"No index.parquet in {folder}, so the dataset grid is unknown. "
+            f"No index.parquet in {folder}, so the mapped dataset's grid is unknown. "
             f"Every threshold is judged at the grid spacing. Re-map the dataset."
         )
 
@@ -149,7 +149,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
     if "Gegevensfrequentie" not in index.columns:
         raise ValueError(
             f"index.parquet in {folder} carries no Gegevensfrequentie, so the "
-            f"dataset grid is unknown. Check the data model. Re-map the dataset."
+            f"mapped dataset's grid is unknown. Check the data model. Re-map the data."
         )
 
     declared = index["Gegevensfrequentie"].dropna().unique()
@@ -160,14 +160,14 @@ def dataset_grid_minutes(mapped_folder_path=None):
     if not minutes:
         raise ValueError(
             f"index.parquet in {folder} declares no readable Gegevensfrequentie "
-            f"({list(declared)}), so the dataset grid is unknown. "
+            f"({list(declared)}), so the mapped dataset's grid is unknown. "
             f"Check the data model."
         )
     if len(minutes) > 1:
         logging.info(
             f"Household batches declare {len(minutes)} different grids "
             f"({', '.join(str(m) for m in minutes)} minutes). Using the finest "
-            f"as the dataset grid; coarser household batches contribute level "
+            f"as the mapped dataset's grid; coarser household batches contribute level "
             f"but not shape."
         )
     return float(minutes[0])
