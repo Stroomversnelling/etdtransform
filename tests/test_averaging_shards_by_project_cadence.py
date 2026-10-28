@@ -89,7 +89,7 @@ def _household(household, project, grid):
         start=START,
         freq=f"{grid}min",
         tz=None,
-        # The averaging takes a dataset's volume from the cumulative column
+        # The averaging takes a household batch's volume from the cumulative column
         # wherever that column holds a value, and what this file measures is
         # the spreading of the interval column.
         pairs=PAIRS_EMPTY,
@@ -97,7 +97,7 @@ def _household(household, project, grid):
 
 
 def _cadence_rows(frame, household, grid):
-    """The sidecar rows for *household*'s dataset, measured off its own rows."""
+    """The sidecar rows for *household*'s household batch, measured off its own rows."""
     return cadence_to_rows(
         household_batch_of(household),
         detect_column_cadence(frame, grid_minutes=grid),
@@ -149,8 +149,8 @@ class TestTheFixtureHoldsTwoGrids:
 
     def test_the_grids_resolve_from_the_measured_cadence(self):
         frame, cadence = _estate()
-        # Which project a dataset belongs to: the cadence table records one grid
-        # per dataset, so that is the key its grids are attributed through.
+        # Which project a household batch belongs to: the cadence table records one grid
+        # per household batch, so that is the key its grids are attributed through.
         membership = {
             int(b): int(p) for b, p in zip(
                 frame[ids.HOUSEHOLD_BATCH], frame[ids.PROJECT]
@@ -380,7 +380,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         )
 
     def _cadence(self, frame):
-        """One sidecar row per (dataset, column), measured off the dataset's own
+        """One sidecar row per (household batch, column), measured off the household batch's own
         rows."""
         rows = []
         for batch in sorted(int(b) for b in frame[ids.HOUSEHOLD_BATCH].unique()):
@@ -433,7 +433,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         assert bool(imputed.iloc[self.GAP].all())
 
     def test_one_shared_grid_publishes_a_third_of_the_interval(self):
-        """What the dataset-wide grid did to the artifact itself. A consumer
+        """What the household-batch-wide grid did to the artifact itself. A consumer
         reading an average of a quarter-hourly project got a third of the
         energy that interval carries."""
         frame = self._frame()

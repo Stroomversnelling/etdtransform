@@ -46,7 +46,7 @@ CONDITIONS = {m for m in ALL_FLAGS if m & ImputeType.SIGNALS}
 
 
 def _frame(cumulative, averages, diffs=None, household=1):
-    """One dataset of *household*, tz-naive, at the 5-minute grid.
+    """One household batch of *household*, tz-naive, at the 5-minute grid.
 
     Both halves of the cumulative/interval pair are stated, so the builder
     completes neither: the cumulative readings bound the gaps and the interval

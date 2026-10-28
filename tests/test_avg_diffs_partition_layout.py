@@ -137,7 +137,7 @@ class TestWhatTheFillReceives:
 
     def test_it_merges_onto_a_chunk_on_project_and_date(self, tmp_path):
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
-        # One dataset of project 2, on that project's quarter-hourly grid and
+        # One household batch of project 2, on that project's quarter-hourly grid and
         # tz-naive, which is what the merge keys have to meet.
         chunk = datasets_frame(
             {household_batch_of(7): {}}, n_rows=2, project=2,

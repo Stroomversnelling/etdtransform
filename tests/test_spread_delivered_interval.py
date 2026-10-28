@@ -39,11 +39,11 @@ READING = 0.6
 
 
 def _cadence(rows):
-    """The sidecar as load_column_cadence returns it: (dataset, column) rows.
+    """The sidecar as load_column_cadence returns it: (household batch, column) rows.
 
     Each row is ``(household, column, cadence_minutes, n_readings)``. Cadence is
     a fact about one body of data, so the row is recorded under the household
-    batch that household's rows carry. Rows are kept in the order given, which
+    household batch that household's rows carry. Rows are kept in the order given, which
     is what lets a test state an order a lookup must not depend on.
     """
     return sidecar_frame("cadence", [
@@ -68,7 +68,7 @@ def _interval_only_cadence(household=1, reading_minutes=15, grid=GRID):
 
 
 def _frame(values, household=1):
-    """One dataset's rows, carrying *values* as the delivered interval column.
+    """One household batch's rows, carrying *values* as the delivered interval column.
 
     The register is present and empty throughout, which is what keeps the
     interval column the volume source where the frame reaches the averaging.
@@ -98,7 +98,7 @@ def _as_list(series):
 
 
 class TestTheSmokeTest:
-    """One dataset, k = 3, 24 rows, and the tick at row 11 never delivered."""
+    """One household batch, k = 3, 24 rows, and the tick at row 11 never delivered."""
 
     K = 3
     N = 24
@@ -135,7 +135,7 @@ class TestTheSmokeTest:
         assert float(spread.sum()) == pytest.approx(float(delivered.sum()))
 
     def test_a_household_not_given_a_step_is_untouched(self):
-        """A step is given per dataset, so only the named dataset's rows move."""
+        """A step is given per household batch, so only the named household batch's rows move."""
         df = pd.concat(
             [
                 _frame(_ticks(self.N, self.K), household=1),
@@ -157,7 +157,7 @@ class TestTheSmokeTest:
 class TestTheLeadingPartialWindow:
     def test_only_the_in_frame_share_is_placed(self):
         """A first reading on row 1 with k = 3 covers a slot before the frame
-        starts. That share is consumption from before the dataset and is simply
+        starts. That share is consumption from before the household batch and is simply
         not placed."""
         df = _frame(_ticks(24, 3, first=1))
         spread = spread_delivered_interval_to_grid(
@@ -191,11 +191,11 @@ class TestTwoCadencesInOneCall:
 
 class TestAgreementWithTheAveraging:
     """The fill spreads with a limited backward fill; the averaging expands each
-    window against a table of offsets in SQL. A dataset's own values and the
+    window against a table of offsets in SQL. A household batch's own values and the
     project average they are scaled against have to sit on the same footing,
     because the interval branch multiplies one by the other.
 
-    One dataset contributes, so the project average at a slot is that dataset's
+    One household batch contributes, so the project average at a slot is that household batch's
     own spread value there."""
 
     @pytest.mark.parametrize("k", [3, 4, 12])
@@ -255,7 +255,7 @@ class TestWhichHouseholdsAreSpread:
         assert spread_steps_by_household(CUM, DIFF, cadence) == {}
 
     def test_households_are_decided_one_by_one(self):
-        """Form is per (dataset, column): one dataset's register absence does
+        """Form is per (household batch, column): one household batch's register absence does
         not make its neighbour's column interval-only."""
         cadence = _cadence([
             (1, "ReadingDate", GRID, 1000),
@@ -270,7 +270,7 @@ class TestWhichHouseholdsAreSpread:
         }
 
     def test_each_household_takes_its_own_grid(self):
-        """An aggregated dataset spans batches, so a dataset on a coarser grid
+        """An aggregated artifact spans household batches, so a household batch on a coarser grid
         must not be stepped against the finest of them."""
         cadence = _cadence([
             (1, "ReadingDate", 5, 1000),

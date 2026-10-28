@@ -29,7 +29,7 @@ N = 4
 
 
 def _rows(household, minutes, n=N):
-    """One dataset's rows, spaced at its own reporting interval."""
+    """One household batch's rows, spaced at its own reporting interval."""
     return datasets_frame(
         {household_batch_of(household): {
             DIFF: [0.1] * n,
@@ -49,10 +49,10 @@ def _rows(household, minutes, n=N):
 
 
 def _cadence(by_household):
-    """A cadence table recording a different interval per dataset.
+    """A cadence table recording a different interval per household batch.
 
     Under the cumulative name, which is where cadence is recorded -- the
-    interval column resolves through it. Every dataset sits on the five-minute
+    interval column resolves through it. Every household batch sits on the five-minute
     grid and reports the column at its own interval, so the column is as coarse
     as or coarser than the grid and the ratio the bound scales by is the
     column's own.

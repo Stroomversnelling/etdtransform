@@ -3,7 +3,7 @@ Stage 6: project aggregation.
 
 Two subjects. **What the stage computes** -- the project value at a timestamp
 is the mean over that project's households and no other project's. **What it
-refuses** -- a source with duplicate (HuisIdBSV, ReadingDate) rows.
+refuses** -- a source with duplicate (ids.HOUSEHOLD, ReadingDate) rows.
 
 Project outputs are single parquet files by design, whatever shape the
 household artifacts they read had; that is this writer's own behaviour, not a
@@ -91,7 +91,7 @@ class TestSourceGuards:
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
                                                             fresh_shards):
-        # Copies a batch directory in, so it needs a tree of its own.
+        # Copies a household batch directory in, so it needs a tree of its own.
         from conftest import shard_dir
 
         shard_src = fresh_shards("household_calculated")
@@ -100,7 +100,7 @@ class TestSourceGuards:
         resample_hh_data_duckdb(
             str(shard_src), str(out_dir), intervals=("60min",),
         )
-        # Duplicate one household's resampled shard under a second batch id.
+        # Duplicate one household's resampled shard under a second household batch id.
         hh_dir = next((out_dir / "household_60min").glob("HuisIdBSV=*"))
         household_id = int(hh_dir.name.split("=")[1])
         src_batch = next(hh_dir.glob("HuisBatchIdBSV=*"))

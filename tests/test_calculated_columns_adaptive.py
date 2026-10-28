@@ -53,7 +53,7 @@ def _sparse_col(n=100, frac=0.5, value=1.0):
 
 
 def _make_df(cols: dict, household_id=1) -> pd.DataFrame:
-    """One household dataset's rows over *cols*, carrying the index ids.
+    """One household batch's rows over *cols*, carrying the index ids.
 
     Each value in *cols* is that column's values in full, so the longest of
     them sets the row count (use _full_col / _sparse_col). No cumulative

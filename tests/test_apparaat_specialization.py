@@ -298,7 +298,7 @@ RADIATOR_SET = "ElektriciteitsgebruikRadiator"
 
 
 def _cadence(frame):
-    """The cadence sidecar for every dataset in *frame*, over its full schema.
+    """The cadence sidecar for every household batch in *frame*, over its full schema.
 
     The register's reading count is stated because the fill routes on it: a
     table that records none sends every row down the nothing-delivered path and

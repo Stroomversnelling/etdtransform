@@ -57,8 +57,8 @@ HOURLY_MAX = DECLARED_MAX * K**0.5
 N = 288 * 2
 RISE = 0.6  # consumption delivered in one hour
 
-#: The household every frame below describes. Its dataset -- keyed on
-#: `HuisBatchIdBSV`, which the cadence sidecar and every lookup built from it
+#: The household every frame below describes. Its household batch -- keyed on
+#: `ids.HOUSEHOLD_BATCH`, which the cadence sidecar and every lookup built from it
 #: are keyed on too -- is ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
@@ -131,7 +131,7 @@ def _coarse_interval_frame(n=N, reading=RISE):
         freq=f"{GRID}min",
         tz=None,
         # The register is present and empty: the stages refuse half a pair, and
-        # the averaging takes a dataset's volume from the register wherever that
+        # the averaging takes a household batch's volume from the register wherever that
         # column holds any value, which would displace the intervals stated
         # here.
         pairs=PAIRS_EMPTY,

@@ -117,7 +117,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
 
     An undeclared grid is an error rather than a default. The grid sets the
     spacing every threshold is judged at, so assuming one silently rescales
-    every bound in the dataset.
+    every bound in the household batch.
 
     Raises
     ------
@@ -242,7 +242,7 @@ def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
         The column being bounded.
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`. Each household
-        batch's bound is the declared threshold scaled to the interval its readings of
+        household batch's bound is the declared threshold scaled to the interval its readings of
         *diff_col* cover.
     bound_key : str
         ``"Max"`` or ``"Min"``.
@@ -527,7 +527,7 @@ def grid_minutes_by_household_batch(cadence, date_column="ReadingDate") -> dict:
     columns, so its row carries the grid the household batch declares -- the
     spacing ``ensure_intervals`` padded it to. Read from the table rather than
     from a figure spanning the whole mapped data, because that spans household
-    batches and one on a coarser grid would be judged against the finest of
+    household batches and one on a coarser grid would be judged against the finest of
     them.
 
     Parameters
@@ -561,7 +561,7 @@ def grid_minutes_by_project(
     The one interval each project's rows sit on, in minutes.
 
     A project average is a shape placed on the slots a project reports at, so it
-    needs one interval per project. Where every dataset in a project sits on
+    needs one interval per project. Where every household batch in a project sits on
     the same grid -- which is what declaring ``Gegevensfrequentie`` per
     household batch is for -- that interval is well defined and this returns
     it.
@@ -574,7 +574,7 @@ def grid_minutes_by_project(
     Raises
     ------
     ValueError
-        When a project's datasets declare more than one grid. There is no
+        When a project's household batches declare more than one grid. There is no
         rule for which grid such a project's average sits on, and picking one
         would either invent slots the project never reported at or discard
         volume.
@@ -585,9 +585,9 @@ def grid_minutes_by_project(
         The cadence table from :func:`load_column_cadence`.
     project_by_household_batch : dict
         ``ids.HOUSEHOLD_BATCH`` -> ``ids.PROJECT``, from the index rather than
-        from the data: which project a dataset belongs to is a registry fact,
-        and a dataset contributing no rows to the frame in hand still belongs to
-        its project. Every dataset the cadence table resolves a grid for must
+        from the data: which project a household batch belongs to is a registry fact,
+        and a household batch contributing no rows to the frame in hand still belongs to
+        its project. Every household batch the cadence table resolves a grid for must
         appear, or its grid cannot be attributed to a project.
     date_column : str
         Name of the timestamp column, whose row carries the grid.
@@ -595,7 +595,7 @@ def grid_minutes_by_project(
     Returns
     -------
     dict
-        ``ids.PROJECT`` -> minutes, omitting any project none of whose datasets
+        ``ids.PROJECT`` -> minutes, omitting any project none of whose household batches
         resolve a grid.
     """
     by_household_batch = grid_minutes_by_household_batch(cadence, date_column=date_column)

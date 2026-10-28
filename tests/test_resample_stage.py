@@ -4,8 +4,8 @@ Stage 5: resampling household intervals.
 Two subjects. **What the stage computes** -- a resampled value sums within one
 household and one interval, so neither how rows are grouped into files nor
 which other households are present can change a household's answer. **What the
-writer refuses** -- a source with duplicate (HuisIdBSV, ReadingDate) rows, or
-one with no HuisBatchIdBSV to partition on.
+writer refuses** -- a source with duplicate (ids.HOUSEHOLD, ReadingDate) rows, or
+one with no ids.HOUSEHOLD_BATCH to partition on.
 
 Cross-FORMAT reading (resolving a monolith or a hive tree) is
 `etdmap.storage`'s subject and is tested there, in
@@ -109,7 +109,7 @@ class TestSourceGuards:
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
                                                             fresh_shards):
-        # Copies a batch directory in, so it needs a tree of its own.
+        # Copies a household batch directory in, so it needs a tree of its own.
         from conftest import shard_dir
 
         shard_src = fresh_shards("household_calculated")
@@ -122,7 +122,7 @@ class TestSourceGuards:
             )
 
     def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
-        # As in test_calculated_stage: a source with no batch id to file the rows
+        # As in test_calculated_stage: a source with no household batch id to file the rows
         # under is a caller error, stated with a frame that has none.
         from conftest import dataset_frame
 

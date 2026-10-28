@@ -54,7 +54,7 @@ FILL_ROUTES = (
 
 
 def _frame(cumulative, diffs, averages):
-    """One dataset's rows, as the fill reads them: the register, its interval
+    """One household batch's rows, as the fill reads them: the register, its interval
     column, and the project average the scaling routes read."""
     return datasets_frame(
         {household_batch_of(1): {

@@ -70,7 +70,7 @@ def _frame(column, households=(1, 2), n=8):
 
     ``PAIRS_EMPTY``: *column*'s cumulative counterpart is present -- a frame
     holding half a pair is not a household artifact -- and empty, so the
-    averaging takes each dataset's volume from the values stated here.
+    averaging takes each household batch's volume from the values stated here.
     """
     values = [3.0] * (len(households) * n)
     values[1] = pd.NA

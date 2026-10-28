@@ -24,7 +24,7 @@ DIFF = "ElektriciteitNetgebruikDiff"
 CUM_B = "ElektriciteitTeruglevering"
 DIFF_B = "ElektriciteitTerugleveringDiff"
 
-#: The household every frame here describes. One dataset of it, so a frame
+#: The household every frame here describes. One household batch of it, so a frame
 #: states one time series.
 HOUSEHOLD = 1
 
@@ -36,7 +36,7 @@ CONFLICT = (
 
 
 def _frame(columns):
-    """One dataset of HOUSEHOLD, tz-naive at the 5-minute grid.
+    """One household batch of HOUSEHOLD, tz-naive at the 5-minute grid.
 
     Every caller states each cumulative column alongside its interval one, so
     the builder completes neither half and the stated readings bound the gaps.

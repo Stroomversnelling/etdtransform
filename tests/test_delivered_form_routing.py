@@ -65,8 +65,8 @@ def _cadence(rows):
     """The cadence sidecar for the rows below, over its full schema.
 
     Each row is ``(household, column, cadence_minutes, n_readings)``. Keyed on
-    the household's dataset, as the sidecar is: the routing joins the table on
-    `HuisBatchIdBSV`, so a table keyed on anything else reaches no row.
+    the household's household batch, as the sidecar is: the routing joins the table on
+    `ids.HOUSEHOLD_BATCH`, so a table keyed on anything else reaches no row.
     """
     return sidecar_frame(
         "cadence",
@@ -83,7 +83,7 @@ def _cadence(rows):
 
 
 def _form_rows(household, cum_col, diff_col, register, intervals, grid=GRID):
-    """Sidecar rows stating which forms arrived for one (dataset, variable).
+    """Sidecar rows stating which forms arrived for one (household batch, variable).
 
     *grid* is a parameter because routing must not depend on it: which form
     arrived is a fact about the delivery, and a household reporting hourly is

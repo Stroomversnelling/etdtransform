@@ -50,7 +50,7 @@ SLOTS_PER_DAY = 288
 
 
 def _frame(per_dataset, start="2026-01-01", freq="5min", project=1):
-    """One frame from ``{dataset: [values]}``, all on the same slots.
+    """One frame from ``{household batch: [values]}``, all on the same slots.
 
     The gates are judged on the interval column standing alone, so the
     cumulative counterpart is left off: present, it would supply the values in
@@ -73,7 +73,7 @@ def _cumulative(values):
 
 
 def _cadence_for(frame, minutes=GRID):
-    """A cadence table for *frame*'s datasets, over the sidecar's full schema.
+    """A cadence table for *frame*'s household batches, over the sidecar's full schema.
 
     Recorded under the cumulative name, which is where cadence is recorded and
     where the interval column resolves it from, plus the ``ReadingDate`` row
@@ -105,7 +105,7 @@ def _averaged(frame, **kwargs):
 
 
 def _presence_of(frame, **kwargs):
-    """The per (dataset, window) counts and judgements the gates made."""
+    """The per (household batch, window) counts and judgements the gates made."""
     return _averaged(frame, **kwargs)["window_presence"]
 
 
@@ -118,7 +118,7 @@ def _published(frame, **kwargs):
 
 
 def _by_dataset(frame, **kwargs):
-    """The presence rows indexed by the dataset they were measured on."""
+    """The presence rows indexed by the household batch they were measured on."""
     return _presence_of(frame, **kwargs).set_index(ids.HOUSEHOLD_BATCH)
 
 
@@ -199,7 +199,7 @@ class TestCoverageIsMeasuredOverWhatTheWindowHeld:
         assert not bool(row["eligible"])
 
     def test_a_partial_window_is_judged_on_what_it_could_have_held(self):
-        """A window clipped by the start of the dataset is not counted short for
+        """A window clipped by the start of the household batch is not counted short for
         sitting at the edge: a household present for every slot it has covered
         that window. So the denominator is the twelve slots it held, not a day."""
         row = _by_dataset(

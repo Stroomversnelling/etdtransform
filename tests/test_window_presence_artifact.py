@@ -38,7 +38,7 @@ SPREAD_MEASUREMENTS = ["n_outage_windows", "n_outage_slots", "source"]
 
 def _frame(values_by_dataset, project=1, freq_minutes=15):
     # The cumulative counterpart must carry no readings, so the averaging takes
-    # each dataset's volume from the interval values stated here: it prefers the
+    # each household batch's volume from the interval values stated here: it prefers the
     # cumulative column wherever that holds any value.
     return datasets_frame(
         {
@@ -54,7 +54,7 @@ def _frame(values_by_dataset, project=1, freq_minutes=15):
 
 
 def _cadence_for(frame, minutes=15):
-    """A cadence table for *frame*'s datasets, recorded under the cumulative
+    """A cadence table for *frame*'s household batches, recorded under the cumulative
     name -- which is where cadence is recorded, and where the interval column
     resolves it from -- plus the ReadingDate row carrying the grid."""
     return pd.concat(
@@ -69,8 +69,8 @@ def _cadence_for(frame, minutes=15):
 def _counts(timestamps, window_minutes, n_slots, n_delivered):
     # The tallies are the only input the judgements are derived from, so each
     # test states the coverage it means to have judged rather than leaving it to
-    # be counted off readings. One dataset per stated coverage, because a
-    # judgement is per (project, dataset, window).
+    # be counted off readings. One household batch per stated coverage, because a
+    # judgement is per (project, household batch, window).
     frame = pd.concat(
         [
             datasets_frame(

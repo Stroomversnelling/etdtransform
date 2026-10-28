@@ -1,5 +1,5 @@
 """
-DatasetAdapter -- per-dataset query against the pre-built catalog.
+DatasetAdapter -- per-household-batch query against the pre-built catalog.
 
 Given a DataFrame (the actual mapped dataset from a provider), the adapter:
   1. Assesses which columns are available (present and sufficiently non-null).
@@ -11,7 +11,7 @@ Given a DataFrame (the actual mapped dataset from a provider), the adapter:
 'Available' means: the column exists in the DataFrame AND holds at least one
 value. There is no fraction test: pd.NA propagates through the arithmetic, so a
 partly-missing input yields a partly-missing output, which is the honest answer
-and needs no threshold to protect it. This is assessed per dataset -- a column
+and needs no threshold to protect it. This is assessed per household batch -- a column
 available for Provider B (who supplies it directly) may need to be derived for
 Provider A (who only supplies its components).
 """
@@ -27,7 +27,7 @@ class DatasetAdapter:
     Query interface over a pre-loaded catalog DataFrame.
 
     Load the catalog once per process (from parquet via catalog_from_parquet),
-    then call feasibility_report() or execution_plan() for each dataset.
+    then call feasibility_report() or execution_plan() for each household batch.
 
     Parameters
     ----------
@@ -105,7 +105,7 @@ class DatasetAdapter:
 
     def feasibility_report(self, df: pd.DataFrame, required_targets: set, physical_model=None) -> dict:
         """
-        Determine which required target columns can be derived from this dataset.
+        Determine which required target columns can be derived from this household batch.
 
         Uses an iterative fixed-point approach: a newly derivable column is added
         to the available set and may unlock further derivations.

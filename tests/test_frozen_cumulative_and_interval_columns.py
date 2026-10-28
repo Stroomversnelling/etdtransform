@@ -28,7 +28,7 @@ FREEZE_FIRST, FREEZE_LAST = 10, 29  # stale repeats; catch-up at FREEZE_LAST + 1
 NORMAL = 3.0  # litres per 5-min interval
 BASE = 1000.0
 
-#: The household the single-dataset frames below describe. Its dataset -- the
+#: The household the single-household-batch frames below describe. Its household batch -- the
 #: key of the series, of the cadence sidecar and of every per-series
 #: computation -- is ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
@@ -50,7 +50,7 @@ def _quiet_logs():
 
 def _series(catchup: float) -> pd.DataFrame:
     """
-    One household dataset on a 5-min grid: the cumulative variable rises by
+    One household batch on a 5-min grid: the cumulative variable rises by
     NORMAL per interval, holds flat across FREEZE_FIRST..FREEZE_LAST, then jumps
     by `catchup`.
 
@@ -317,7 +317,7 @@ class TestWhichThresholdAppliesWhere:
 
     # Two households: one whose cumulative variable reports hourly, the other
     # every five minutes. The frame and the cadence sidecar below are keyed on
-    # their datasets, which are household_batch_of these.
+    # their household batches, which are household_batch_of these.
     HOURLY, GRID = 1, 2
 
     def _frame(self):
@@ -342,7 +342,7 @@ class TestWhichThresholdAppliesWhere:
         )
 
     def _cadence(self):
-        """The per-column cadence sidecar for the two datasets.
+        """The per-column cadence sidecar for the two household batches.
 
         Both sit on the five-minute grid; what differs is the interval each
         one's readings of the cumulative variable cover.

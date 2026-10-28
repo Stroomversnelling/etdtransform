@@ -195,7 +195,7 @@ _MULTI_SCHEMA_VALUES = {
 
 
 def _make_multi_schema_df():
-    """One dataset per household, each over A, B and C.
+    """One household batch per household, each over A, B and C.
 
     No cumulative counterpart is completed: A, B and C are not data model
     variables, so none of them has one.

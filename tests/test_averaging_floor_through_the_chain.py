@@ -5,7 +5,7 @@ it builds. This covers the stage that reads a mapped dataset applying the same
 floor: a project with enough eligible households gets an average and one below
 it does not.
 
-The shape is the behaviour here, so this file builds its own dataset rather than
+The shape is the behaviour here, so this file builds its own household batch rather than
 sharing the integration one: two projects at the floor, with one household of
 the first excluded through ``Meenemen``, which is how production drops a
 household.
@@ -34,10 +34,10 @@ FULL_PROJECT = 2
 
 @pytest.fixture(scope="module")
 def averaged(tmp_path_factory):
-    """`avg_diffs`, from a dataset where one project is one household short.
+    """`avg_diffs`, from a household batch where one project is one household short.
 
     Module-scoped: the chain is run once and both verdicts are read from it,
-    rather than generating a dataset per assertion.
+    rather than generating a household batch per assertion.
     """
     config_dir = tmp_path_factory.mktemp("floor")
     # Captured before generating: generate_mapped_dataset points etdmap.options

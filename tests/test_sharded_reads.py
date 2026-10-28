@@ -5,7 +5,7 @@ Built per a measured comparison of shard read strategies:
 
 - household-batch materialisation = DIRECT per-shard file reads (pandas,
   nullable dtypes) -- `read_mapped_households`;
-- whole-dataset reads = DuckDB/Ibis hive-glob with union_by_name --
+- whole-household-batch reads = DuckDB/Ibis hive-glob with union_by_name --
   `mapped_household_table`;
 - polars not adopted.
 
@@ -101,8 +101,8 @@ class TestReadStageFrame:
 
 class TestMappedHouseholdFiles:
     """Shared read-layer resolver: no function builds mapped file paths
-    inline. Returns [(path, HuisBatchIdBSV), ...]. It does NOT raise on a
-    multi-batch household -- loaders return what exists; one-batch-per-
+    inline. Returns [(path, ids.HOUSEHOLD_BATCH), ...]. It does NOT raise on a
+    multi-household-batch household -- loaders return what exists; one-household-batch-per-
     household assumptions are guarded where the computation starts."""
 
     def test_sharded_single_batch(self, tmp_path):
@@ -179,9 +179,10 @@ class TestReadMappedHouseholds:
         assert set(df.columns) == {ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, "ReadingDate", "Gasgebruik"}
 
     def test_two_batches_yield_distinct_batch_ids(self, tmp_path):
-        """Regression: HuisBatchIdBSV must come from the shard PATH per file.
-        A silent fall-back to HuisBatchIdBSV=HuisIdBSV masks multi-batch data
-        and blinds the imputation batch guard (a path pattern that matched
+        """Regression: ids.HOUSEHOLD_BATCH must come from the shard PATH per file.
+        A silent fall-back to the household id in its place masks
+        multi-household-batch data
+        and blinds the imputation household-batch guard (a path pattern that matched
         only '/' once made every Windows path fall back that way)."""
         for household_batch_id in (1, 9):
             d = tmp_path / "sharded" / "HuisIdBSV=1" / f"HuisBatchIdBSV={household_batch_id}"
@@ -193,8 +194,8 @@ class TestReadMappedHouseholds:
 
     def test_unparseable_shard_path_raises_not_defaults(self, tmp_path, monkeypatch):
         """In SHARDED mode a shard path that fails to parse must RAISE, never
-        silently default HuisBatchIdBSV to the household id: a silent
-        fallback masks multi-batch data and blinds the imputation batch
+        silently default ids.HOUSEHOLD_BATCH to the household id: a silent
+        fallback masks multi-household-batch data and blinds the imputation household-batch
         guard."""
         d = tmp_path / "sharded" / "HuisIdBSV=1" / "HuisBatchIdBSV=1"
         d.mkdir(parents=True)

@@ -44,7 +44,7 @@ FLAG = impute_type_column(COLUMN)
 
 
 def _frame(values, households=None, flags=None):
-    """One dataset per household named in *households*, carrying the flag
+    """One household batch per household named in *households*, carrying the flag
     column where *flags* states one per row.
 
     ``pairs=False`` leaves COLUMN without a cumulative counterpart: the values

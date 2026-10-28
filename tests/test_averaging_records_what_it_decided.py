@@ -59,7 +59,7 @@ def _declared_model():
 
 def _frame(per_household, project_of=None, register=None):
     """``{household: [interval values]}`` on one tz-naive five-minute grid,
-    one dataset per household.
+    one household batch per household.
 
     *project_of* maps a household to its project, defaulting to project 1.
     *register* maps a household to its cumulative readings, which is what makes
@@ -169,7 +169,7 @@ class TestTheFillIsNotGivenThem:
 
 
 class TestWhatTheAveragingThrewOut:
-    """A5. Per project, beside the coverage it produced: a dataset-wide total
+    """A5. Per project, beside the coverage it produced: a household-batch-wide total
     cannot say which project lost readings."""
 
     def test_a_reading_over_the_bound_is_counted_against_its_project(self):
@@ -250,8 +250,8 @@ class TestWindowsSkippedAsOutages:
 
 
 class TestWhichSourceFedEachDataset:
-    """The source is decided per dataset per column, and recorded rather than
-    used and discarded: without it a reader cannot tell whether a dataset's
+    """The source is decided per household batch per column, and recorded rather than
+    used and discarded: without it a reader cannot tell whether a household batch's
     volume came from its cumulative readings or its delivered intervals."""
 
     def test_a_register_household_reads_cumulative(self):

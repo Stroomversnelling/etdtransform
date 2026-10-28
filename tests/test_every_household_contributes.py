@@ -36,11 +36,11 @@ N = 12
 
 
 def _household(household, values, project=1):
-    """One dataset's rows, holding *values*.
+    """One household batch's rows, holding *values*.
 
     ``PAIRS_EMPTY``: the cumulative counterpart is present -- a frame holding
     half a pair is not a household artifact -- and empty, so the averaging
-    takes the dataset's volume from the values stated here.
+    takes the household batch's volume from the values stated here.
     """
     return datasets_frame(
         {household_batch_of(household): {DIFF: values}},

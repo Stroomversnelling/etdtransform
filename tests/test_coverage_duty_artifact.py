@@ -162,7 +162,7 @@ class TestItAgreesWithTheScalarTheAveragingAlreadyReported:
 
     def test_one_project_matches_the_scalar(self):
         # PAIRS_EMPTY: the cumulative counterpart is present and empty, so the
-        # averaging takes the dataset's volume from the values stated here.
+        # averaging takes the household batch's volume from the values stated here.
         frame = datasets_frame(
             {household_batch_of(1): {DIFF: [0.0, 0.4, 0.2, 0.1]}},
             start="2026-01-01",

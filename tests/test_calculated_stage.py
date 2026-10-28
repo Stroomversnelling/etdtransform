@@ -3,8 +3,8 @@ Stage 4: the calculated columns.
 
 Two subjects. **What the stage computes** -- a derived column comes from its
 own row's inputs, so how rows are grouped into files cannot change it. **What
-the writer refuses** -- a source with duplicate (HuisIdBSV, ReadingDate) rows
-(overlapping batches), or one with no HuisBatchIdBSV to partition on.
+the writer refuses** -- a source with duplicate (ids.HOUSEHOLD, ReadingDate) rows
+(overlapping household batches), or one with no ids.HOUSEHOLD_BATCH to partition on.
 
 Cross-FORMAT reading (resolving a monolith or a hive tree) is
 `etdmap.storage`'s subject and is tested there.
@@ -25,11 +25,11 @@ class TestSourceGuards:
 
     def test_duplicate_reading_dates_in_sharded_source_raise(self, tmp_path,
                                                             fresh_shards):
-        # Copies a batch directory in, so it needs a tree of its own.
+        # Copies a household batch directory in, so it needs a tree of its own.
         from conftest import shard_dir
 
         shard_src = fresh_shards("household_imputed")
-        # Duplicate household 1 under a second batch: overlapping periods.
+        # Duplicate household 1 under a second household batch: overlapping periods.
         src1 = next(shard_dir(shard_src, 1).parent.glob("HuisBatchIdBSV=*"))
         shutil.copytree(src1, shard_dir(shard_src, 1, 999))
 
@@ -40,10 +40,10 @@ class TestSourceGuards:
             )
 
     def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
-        # The output is one shard per (household, batch), so a source with no
-        # batch id to file the rows under is a caller error and must fail
+        # The output is one shard per (household, household batch), so a source with no
+        # household batch id to file the rows under is a caller error and must fail
         # before anything is written. Stated with a frame that simply has no
-        # HuisBatchIdBSV, rather than borrowing an artifact that happens to
+        # ids.HOUSEHOLD_BATCH, rather than borrowing an artifact that happens to
         # lack one.
         from conftest import dataset_frame
 

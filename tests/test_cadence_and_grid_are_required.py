@@ -3,7 +3,7 @@
 Both set the spacing a threshold is judged at. Assuming five minutes for a
 household that reports hourly judges its hour of consumption against a
 five-minute bound, so the reading is nulled as out of bounds and its volume
-leaves the dataset silently. The absence of either is therefore an error that
+leaves the household batch silently. The absence of either is therefore an error that
 names the fix, not a default.
 """
 
@@ -25,7 +25,7 @@ from etdtransform.impute import calculate_average_diff_ibis
 
 pytestmark = pytest.mark.unit
 
-#: The household the artifacts below describe. Its dataset -- the key of the
+#: The household the artifacts below describe. Its household batch -- the key of the
 #: index, of the cadence sidecar and of every lookup built from them -- is
 #: ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
@@ -110,7 +110,7 @@ class TestTheDeclaredGridIsRequired:
         assert dataset_grid_minutes(str(tmp_path)) == 15.0
 
     def test_the_finest_declared_grid_wins(self, tmp_path):
-        """An aggregated dataset spans batches; its rows sit on the finest of
+        """An aggregated household batch spans household batches; its rows sit on the finest of
         their grids."""
         index_frame(
             [household_batch_of(1), household_batch_of(2)],
@@ -144,7 +144,7 @@ class TestTheGridIsNotDefaultedDownstream:
             project=4,
             start="2026-01-01",
             tz=None,
-            # The averaging takes a dataset's volume from the cumulative column
+            # The averaging takes a household batch's volume from the cumulative column
             # wherever that column holds a value; here the interval column is
             # the source.
             pairs=PAIRS_EMPTY,

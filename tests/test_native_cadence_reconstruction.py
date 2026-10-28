@@ -39,7 +39,7 @@ CUM = "WatergebruikWarmTapwater"
 DIFF = f"{CUM}Diff"
 NORMAL = 3.0
 
-#: The household the fixture below describes. Its dataset -- the key the
+#: The household the fixture below describes. Its household batch -- the key the
 #: cadence table and the frozen-span sidecar rows are recorded against -- is
 #: ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1

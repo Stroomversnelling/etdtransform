@@ -38,14 +38,14 @@ RULE_SOURCE = "rule bound from known values"
 
 
 def grid_scaled_bounds(column: str, grid_minutes) -> tuple:
-    """The declared threshold for *column*, scaled to the dataset grid.
+    """The declared threshold for *column*, scaled to the household batch grid.
 
     A calculated column is judged at the GRID cadence, never at a delivered
     column's own cadence and never at the threshold's declared unit. The
     derivation runs after imputation, by which point every variable it reads
     sits on the grid, so one grid interval is what a calculated cell covers --
-    for every dataset, which is why there is one bound and not one per
-    dataset. The cadence table does not enter into it: it records the
+    for every household batch, which is why there is one bound and not one per
+    household batch. The cadence table does not enter into it: it records the
     interval a column's READINGS arrived at, which the fill has already
     resolved away.
     """
@@ -100,7 +100,7 @@ def scan_calculated_columns(
         The columns this run derived. The caller knows them from the
         derivation plan; deriving them again here would be a second copy.
     grid_minutes : int, float or None
-        The dataset grid. Read from *mapped_folder_path* when None.
+        The household batch grid. Read from *mapped_folder_path* when None.
     package : constraint package or None
         From :func:`etdtransform.constraints.build_constraint_package` at the
         grid cadence. When None the rule-bound flag is skipped and only the
@@ -228,7 +228,7 @@ def calculated_flag_expressions(table, derived_columns, grid_minutes, undefined=
     ``{impute_type_column: expression}`` for the caller to pass to ``mutate``,
     OR-ed onto an existing impute-type column where one is present.
 
-    One bound per column serves every dataset, because a calculated column
+    One bound per column serves every household batch, because a calculated column
     is judged at the grid and the grid is the same for all of them.
 
     ``CALCULATED_OUTSIDE_RULE_BOUND`` is NOT written here: the rule bound is a
@@ -577,10 +577,10 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
 #: table is written, so they never reach an output schema.
 FILL_SUFFIX = "__fill"
 BITS_SUFFIX = "__bits"
-#: Row identity for the patch join. The dataset id is what makes the pair
+#: Row identity for the patch join. The household batch id is what makes the pair
 #: unique: a household can hold several household batches covering the same
 #: ReadingDate, and keying on the household would fan the join out and write a
-#: value filled in one dataset onto another dataset's row.
+#: value filled in one household batch onto another household batch's row.
 KEY_COLUMNS = (ids.HOUSEHOLD_BATCH, "ReadingDate")
 
 

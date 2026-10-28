@@ -3,7 +3,7 @@
 Stage 4 of the pipeline. Reads the imputed households, works out per household
 which catalog variables it can derive from what it has, derives them, fills the
 gaps the derivation cannot reach, and writes the result as a hive shard tree --
-one shard per (household, batch).
+one shard per (household, household batch).
 
 This stage lives apart from aggregate.py, which holds the imputation and the
 resample/aggregate stages. The three stages share almost nothing but the
@@ -102,7 +102,7 @@ def add_calculated_columns_to_hh_data_ibis(
       1. Availability analysis -- one DuckDB GROUP BY pass over the parquet.
       2. Planning -- DatasetAdapter.execution_plan_for_available per schema group.
       3. Mutate per schema group -- ibis filter + sequential mutate per derived col.
-      4. Write -- one hive shard per (household, batch).
+      4. Write -- one hive shard per (household, household batch).
 
     Parameters
     ----------
@@ -119,7 +119,7 @@ def add_calculated_columns_to_hh_data_ibis(
     source_path may be a parquet FILE or a hive-sharded DIRECTORY
     (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/*.parquet); reads are format-detected.
     With a directory source the input is validated at entry: a household with
-    more than one dataset over the same ReadingDate raises (overlapping batch
+    more than one household batch over the same ReadingDate raises (overlapping household batch
     periods).
     """
     import shutil
@@ -199,8 +199,8 @@ def add_calculated_columns_to_hh_data_ibis(
     assert_cumulative_interval_pairs_complete(parquet_col_set)
 
     if source_is_shards:
-        # Batch-safety guard at this compute entry point: a household with
-        # more than one dataset over the same ReadingDate raises.
+        # Household-batch-safety guard at this compute entry point: a household with
+        # more than one household batch over the same ReadingDate raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(tbl)
     if ids.HOUSEHOLD_BATCH not in parquet_col_set:
@@ -294,15 +294,15 @@ def add_calculated_columns_to_hh_data_ibis(
     _written_units: list = []
     _PARTITION_KEYS = (ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH)
 
-    # Which batch each household's shard belongs to, resolved in one pass
+    # Which household batch each household's shard belongs to, resolved in one pass
     # rather than per unit.
     #
-    # THE UNIT IS THE SHARD: one (household, household dataset) pair, not one
-    # household. A household can appear in several batches, and between them
+    # THE UNIT IS THE SHARD: one (household, household batch) pair, not one
+    # household. A household can appear in several household batches, and between them
     # it may have been renovated -- different devices, different metadata --
-    # so its batches are different datasets that happen to share an address.
-    # Collapsing them to one key per household would file one batch's rows
-    # under another batch's path.
+    # so its household batches are different household batches that happen to share an address.
+    # Collapsing them to one key per household would file one household batch's rows
+    # under another household batch's path.
     with checkpoints.phase("shard_units") as mark:
         _pairs = (
             tbl.select(*_PARTITION_KEYS).distinct().execute()
@@ -403,7 +403,7 @@ def add_calculated_columns_to_hh_data_ibis(
                 scoped[ids.HOUSEHOLD].isin(household_ids)
             )
             if batch_ids is not None:
-                # A household's batches are separate datasets; a unit is
+                # A household's household batches are separate household batches; a unit is
                 # one of them, never all of a household's rows.
                 scoped = scoped.filter(
                     scoped[ids.HOUSEHOLD_BATCH].isin(batch_ids)
@@ -467,7 +467,7 @@ def add_calculated_columns_to_hh_data_ibis(
         for _hid in group_ids:
             _prov_hh_rows.append({ids.HOUSEHOLD: int(_hid), "schema_group_id": group_idx})
 
-        # ONE SHARD IS THE UNIT OF WORK: one (household, batch) pair,
+        # ONE SHARD IS THE UNIT OF WORK: one (household, household batch) pair,
         # derived, filled and written on its own, so the amount of data in
         # flight never depends on how many units exist. A write whose
         # fan-out is proportional to the whole population is not a bulk
@@ -520,8 +520,8 @@ def add_calculated_columns_to_hh_data_ibis(
             "[calc ibis] No shard units written -- no output produced."
         )
     # Every unit the source holds must be in the output. A household
-    # whose batches were collapsed to one key would pass a row count
-    # and still have lost a batch, so the units are compared as pairs.
+    # whose household batches were collapsed to one key would pass a row count
+    # and still have lost a household batch, so the units are compared as pairs.
     _missing_units = sorted(set(_shard_units) - set(_written_units))
     if _missing_units:
         raise RuntimeError(

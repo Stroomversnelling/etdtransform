@@ -29,7 +29,7 @@ def sympy_to_ibis(expr, table):
     installed -- is handled by ``specialize_catalog_for_absent``, which
     substitutes zero inside the expression from the declaration that says so.
     The substitution follows the declaration because the fact does: one
-    dataset's missing solar is an unknown, another's absent booster is a
+    household batch's missing solar is an unknown, another's absent booster is a
     real zero, and only the metadata separates them.
 
     Parameters
@@ -152,9 +152,9 @@ def add_calculated_columns_adaptive(
     """
     Derive missing columns from available data using the pre-built equation catalog.
 
-    Availability is assessed per household (HuisIdBSV): a column is considered
+    Availability is assessed per household (ids.HOUSEHOLD): a column is considered
     available for a household only if it holds at least one value for that
-    household.  This correctly handles mixed datasets where different providers
+    household.  This correctly handles mixed household batches where different providers
     supply different column sets.
 
     Households with the same column-availability pattern share a cached derivation
@@ -163,7 +163,7 @@ def add_calculated_columns_adaptive(
     Parameters
     ----------
     df : pd.DataFrame
-        The mapped dataset with a HuisIdBSV column.
+        The mapped dataset with a ids.HOUSEHOLD column.
     catalog_df : pd.DataFrame or None
         Pre-built derivation catalog.  Loaded automatically when None.
     target_columns : set[str] or None
@@ -206,19 +206,19 @@ def add_calculated_columns_adaptive(
     has_project_col = ids.PROJECT in df.columns
 
     # Plan cache keyed on (frozenset(available), frozenset(targets)).
-    # Datasets with identical column-availability patterns share a plan.
+    # Household batches with identical column-availability patterns share a plan.
     # plan_stats tracks per-plan: derived cols, not_derivable cols, and which
-    # (project, dataset) pairs used it -- for structured end-of-run logging.
+    # (project, household batch) pairs used it -- for structured end-of-run logging.
     _plan_cache: dict = {}
     _plan_stats: dict = {}  # cache_key -> {derived, not_derivable, households}
 
-    # Write new columns in-place via df.loc to avoid per-dataset copies and
-    # the pd.concat peak at the end.  The groupby yields (dataset, row_index)
-    # pairs so we never materialise a per-dataset copy of the full frame.
+    # Write new columns in-place via df.loc to avoid per-household-batch copies and
+    # the pd.concat peak at the end.  The groupby yields (household batch, row_index)
+    # pairs so we never materialise a per-household-batch copy of the full frame.
     #
     # Per household batch dataset, not per household: which columns are
-    # available is a property of what the dataset's devices delivered, and a
-    # later dataset of the same household may hold it renovated -- different
+    # available is a property of what the household batch's devices delivered, and a
+    # later household batch of the same household may hold it renovated -- different
     # devices, so a different plan.
     for batch_id, idx in df.groupby(ids.HOUSEHOLD_BATCH, sort=False).groups.items():
         household_slice = df.loc[idx]

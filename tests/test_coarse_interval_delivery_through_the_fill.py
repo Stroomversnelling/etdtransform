@@ -65,7 +65,7 @@ def _declared_model():
 
 
 def _hourly_frame(reading):
-    """One dataset on the grid, carrying *reading* on every hourly tick.
+    """One household batch on the grid, carrying *reading* on every hourly tick.
 
     Returns the frame and the row positions those ticks landed on.
     """
@@ -91,7 +91,7 @@ def _hourly_frame(reading):
 
 
 def _delivered(drop_tick=5):
-    """One dataset: register absent, interval delivered hourly, one tick gone.
+    """One household batch: register absent, interval delivered hourly, one tick gone.
 
     *drop_tick* indexes the hourly ticks, not the rows.
     """
@@ -106,8 +106,8 @@ def _cadence(frame):
     production: 60 minutes and a reading count on the interval column, and zero
     readings on the register that never arrived.
 
-    Keyed on the dataset *frame* carries, as the sidecar is: the fill joins the
-    table on `HuisBatchIdBSV`, so a table keyed on anything else reaches no row
+    Keyed on the household batch *frame* carries, as the sidecar is: the fill joins the
+    table on `ids.HOUSEHOLD_BATCH`, so a table keyed on anything else reaches no row
     and the delivered form goes unrecorded.
     """
     batches = sorted(

@@ -2,7 +2,7 @@
 Wide-stage stats (etdtransform.data_stats.get_data_stats).
 
 Two subjects. **What it computes** -- a household batch dataset's stats come
-from that dataset's rows and no others. **How it degrades** -- a column whose
+from that household batch's rows and no others. **How it degrades** -- a column whose
 variance overflows float64 reports NA with a warning rather than killing the
 report.
 
@@ -54,7 +54,7 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
 
 
 #: Two household batch datasets of ONE household -- the only shape in which
-#: keying on the dataset differs from keying on the dwelling. Each block's
+#: keying on the household batch differs from keying on the dwelling. Each block's
 #: mean, min and max share no value with the other's, so stats pooled across
 #: the two would be wrong rather than close: pooled, both means read 7.0.
 _HOUSEHOLD = 1
@@ -65,7 +65,7 @@ _EXPECTED = {101: {"mean": 2.0, "min": 0.0, "max": 4.0, "count": 5},
 
 @pytest.fixture
 def per_dataset_stats(tmp_path):
-    """Stats over a sharded source holding one household's two datasets."""
+    """Stats over a sharded source holding one household's two household batches."""
     from conftest import dataset_frame, write_shard_tree
 
     root = write_shard_tree(tmp_path / "stage", {
@@ -76,9 +76,9 @@ def per_dataset_stats(tmp_path):
 
 
 def test_stats_are_computed_over_each_datasets_own_rows(per_dataset_stats):
-    """A dataset's stats come from its rows and no others.
+    """A household batch's stats come from its rows and no others.
 
-    Both datasets here belong to one household, so a producer keyed on the
+    Both household batches here belong to one household, so a producer keyed on the
     dwelling returns ONE row per column holding the pooled figures. The
     monolith-versus-shards comparison could not catch that, because both
     layouts would pool identically.
@@ -96,15 +96,15 @@ def test_stats_are_computed_over_each_datasets_own_rows(per_dataset_stats):
 
 
 def test_a_dataset_holding_no_value_still_gets_a_row(tmp_path):
-    """A dataset present in the artifact but with nothing in a column gets a
+    """A household batch present in the artifact but with nothing in a column gets a
     row for it anyway, reporting count 0.
 
-    This is what the (dataset x column) cross product is reinstated for, and
-    it is the only shape in which the per-dataset row count can be wrong:
-    with every dataset holding values, any grouping at all returns one row
-    each, so a fixture without an empty dataset asserts nothing.
+    This is what the (household batch x column) cross product is reinstated for, and
+    it is the only shape in which the per-household-batch row count can be wrong:
+    with every household batch holding values, any grouping at all returns one row
+    each, so a fixture without an empty household batch asserts nothing.
 
-    Absent rather than zero: a dataset with no reading for a variable has not
+    Absent rather than zero: a household batch with no reading for a variable has not
     measured nothing, it has measured nothing at all, and the report says so by
     carrying the row with a count of 0 instead of omitting it.
     """

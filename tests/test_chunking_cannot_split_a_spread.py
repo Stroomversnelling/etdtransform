@@ -1,7 +1,7 @@
 """A chunk is a memory window, and the spread must not be able to see it.
 
-Chunking batches by **household**: ``_chunk_ids_by_project`` returns household
-household_ids and ``impute_mapped_households_sharded`` reads batches of ``chunk_size``
+Chunking households by **household**: ``_chunk_ids_by_project`` returns household
+household_ids and ``impute_mapped_households_sharded`` reads chunks of ``chunk_size``
 households. So a household's whole series is always in one chunk, and a spread
 window -- which lives inside one household's series -- cannot straddle a chunk
 boundary.
@@ -87,8 +87,8 @@ def _household(household):
 
 
 def _cadence(frame):
-    """The sidecar rows *frame* would be mapped with: one block per dataset,
-    keyed on ``HuisBatchIdBSV``, measured on that dataset's own readings."""
+    """The sidecar rows *frame* would be mapped with: one block per household batch,
+    keyed on ``ids.HOUSEHOLD_BATCH``, measured on that household batch's own readings."""
     rows = []
     for household_batch in sorted(
         int(b) for b in frame[ids.HOUSEHOLD_BATCH].unique()

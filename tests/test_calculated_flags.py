@@ -30,7 +30,7 @@ COLUMN = "ElektriciteitsgebruikTotaalBruto"
 
 
 def _frame(values, households=None):
-    """One dataset per household named in *households*, taking that
+    """One household batch per household named in *households*, taking that
     household's values in the order given.
 
     ``pairs=False`` leaves COLUMN without a cumulative counterpart: the values

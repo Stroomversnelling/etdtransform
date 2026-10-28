@@ -24,10 +24,10 @@ from etdtransform.knmi import (
 
 
 def households_of_household_batches(household_batch_ids) -> list:
-    """The households the given datasets belong to, from the index.
+    """The households the given household batches belong to, from the index.
 
     The shard path carries a household level, so pruning directories needs the
-    households a request's datasets sit under. Selecting rows is a separate,
+    households a request's household batches sit under. Selecting rows is a separate,
     exact step on ``ids.HOUSEHOLD_BATCH``.
     """
     from etdmap.index_helpers import read_index
@@ -52,9 +52,9 @@ def _household_table(name: str, household_batch_ids=None) -> ibis.Expr:
     source = resolve_source_path(
         etdtransform.options.aggregate_folder_path, f"household_{name}"
     )
-    # Directory pruning takes the households the datasets sit under, because
+    # Directory pruning takes the households the household batches sit under, because
     # that is the level the shard path has. Row selection is exact and keys on
-    # the dataset, so a household's other datasets do not ride along.
+    # the household batch, so a household's other household batches do not ride along.
     prune_to = (
         None if household_batch_ids is None
         else households_of_household_batches(household_batch_ids)
@@ -74,13 +74,13 @@ def _household_table(name: str, household_batch_ids=None) -> ibis.Expr:
 
 def household_batches_in_projects(projects) -> list:
     """
-    The household datasets belonging to the given projects.
+    The household batches belonging to the given projects.
 
     Projects are a column inside the data, not a storage partition, so a
-    project filter cannot select files on its own. Resolving it to datasets
+    project filter cannot select files on its own. Resolving it to household batches
     through the index lets the reader open only the shards concerned.
 
-    Resolved to datasets rather than households because a household's datasets
+    Resolved to household batches rather than households because a household's household batches
     may sit in different projects: resolving to the household would pull in the
     ones the request did not ask for.
     """
@@ -105,8 +105,8 @@ def get_household_table(
 
     Callers name the data they want, never a file path.
 
-    Restricting to datasets or projects is worth doing here rather than
-    filtering the returned table: a dataset's rows sit in their own shard
+    Restricting to household batches or projects is worth doing here rather than
+    filtering the returned table: a household batch's rows sit in their own shard
     directory, so naming them up front lets the reader skip the others
     entirely instead of opening every one to find out.
 
@@ -122,10 +122,10 @@ def get_household_table(
         prefer that function: it reads the weather tables once and reuses
         them instead of per table.
     household_batch_ids : iterable of int, optional
-        Restrict to these ``ids.HOUSEHOLD_BATCH`` values -- the datasets to
-        read. None reads every dataset.
+        Restrict to these ``ids.HOUSEHOLD_BATCH`` values -- the household batches to
+        read. None reads every household batch.
     projects : iterable of int, optional
-        Restrict to these ``ids.PROJECT`` values, resolved to their datasets
+        Restrict to these ``ids.PROJECT`` values, resolved to their household batches
         through the index. Combines with ``household_batch_ids`` as an
         intersection.
 
@@ -209,7 +209,7 @@ def join_index_table(
     """
     Joins a given table with an index table on specified columns.
 
-    index.parquet holds one row per household dataset, so
+    index.parquet holds one row per household batch, so
     ``ids.HOUSEHOLD_BATCH`` is its key and the household id is not unique in
     it. ``ids.PROJECT`` stays in the key because both sides carry it; the
     index's household id arrives with a ``_right`` suffix and the data table's
@@ -713,10 +713,10 @@ def source_table(path, household_ids=None) -> "ibis.Expr":
 
 def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
     """
-    Whole-dataset lazy table over the SHARDED mapped data: one Ibis expression
-    over all shards (hive partition columns HuisIdBSV/HuisBatchIdBSV included;
+    Whole-household-batch lazy table over the SHARDED mapped data: one Ibis expression
+    over all shards (hive partition columns ids.HOUSEHOLD/ids.HOUSEHOLD_BATCH included;
     per-supplier schema differences handled by union_by_name). Filters on
-    HuisIdBSV/HuisBatchIdBSV prune partitions engine-side.
+    ids.HOUSEHOLD/ids.HOUSEHOLD_BATCH prune partitions engine-side.
 
     Sharded-forward API: for a flat-only folder the legacy whole-table view is
     the stage-2 monolith (household_default.parquet via the existing loaders),
@@ -738,12 +738,12 @@ def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
 
 def included_household_ids(mapped_folder_path=None) -> list:
     """
-    The households whose dataset has `Meenemen` == True, from the index.
+    The households whose household batch has `Meenemen` == True, from the index.
 
     A household-level grouping for reading, not a unit of analysis: callers
     use it to choose which shard directories to open.
 
-    `Meenemen` is defined per household dataset (one index row per
+    `Meenemen` is defined per household batch (one index row per
     ``ids.HOUSEHOLD_BATCH``). Collapsing the decision to household ids is valid
     only while no household holds more than one household batch; this function
     raises HouseBatchOverlapError otherwise.

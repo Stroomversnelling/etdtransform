@@ -5,11 +5,11 @@ pipeline artifacts emitted by etdtransform (``household_imputed``,
 
 This module is the symmetric counterpart to
 ``etdmap.mapping_helpers.get_data_stats``. That function handles the
-raw and mapped stages -- many small per-dataset parquet files, fanned
+raw and mapped stages -- many small per-household-batch parquet files, fanned
 out with ProcessPoolExecutor and pandas vectorised reductions. This
 function handles transform's own output: one wide artifact per stage,
 holding every household batch dataset, processed lazily through ibis /
-DuckDB so the data stays on disk and only the per-(dataset, col) aggregate
+DuckDB so the data stays on disk and only the per-(household batch, col) aggregate
 result lands in pandas.
 
 The output schema is identical to ``get_data_stats`` (enforced via the
@@ -63,7 +63,7 @@ def get_data_stats(
 
     The artifact is keyed by (``ids.HOUSEHOLD_BATCH``, ReadingDate) and holds
     every household batch dataset, which is the unit these statistics are
-    taken over: two datasets of one household are two series, and a min, max,
+    taken over: two household batches of one household are two series, and a min, max,
     mean or percentile over both concatenated describes neither.
     ``parquet_path`` may be a single parquet file or a directory of hive
     shards; the read layer resolves either, so the stats do not depend on how
@@ -77,10 +77,10 @@ def get_data_stats(
     Implementation: one ibis lazy aggregation per (season slice x
     column) combination. Predicate pushdown filters at the parquet scan
     layer so each season is a single DuckDB pass with no full
-    materialisation in pandas. To preserve parity with the per-dataset
+    materialisation in pandas. To preserve parity with the per-household-batch
     mapped path -- which emits a row even for all-NA columns -- the
-    (dataset x col) cross product is reinstated after the lazy aggregation,
-    with ``count=0`` and the per-(dataset, season) row count fed into
+    (household batch x col) cross product is reinstated after the lazy aggregation,
+    with ``count=0`` and the per-(household batch, season) row count fed into
     ``missing`` / ``errors``.
 
     Parameters
@@ -201,7 +201,7 @@ def get_data_stats(
         else:
             slc = tbl.filter(tbl.ReadingDate.month().isin(list(month_set)))
 
-        # Per-dataset row count for this season slice. Drives the
+        # Per-household-batch row count for this season slice. Drives the
         # missing / errors columns: missing = group_n - count(non-null).
         # One small ibis execute per season.
         n_df = (
@@ -299,10 +299,10 @@ def get_data_stats(
         else pd.DataFrame(columns=[ids.HOUSEHOLD_BATCH, "_group_n", "season"])
     )
 
-    # Reinstate (dataset x col x season) combos that the lazy aggregation
+    # Reinstate (household batch x col x season) combos that the lazy aggregation
     # dropped because count was zero. For wide parquets that means an
-    # all-NA column for a dataset -- which the mapped producer would
-    # emit as a count=0 row. Left-join keeps the (dataset, col, season)
+    # all-NA column for a household batch -- which the mapped producer would
+    # emit as a count=0 row. Left-join keeps the (household batch, col, season)
     # universe; missing stats stay NaN.
     seasons_emitted = [s for s, _ in slice_specs]
     grid = pd.MultiIndex.from_product(

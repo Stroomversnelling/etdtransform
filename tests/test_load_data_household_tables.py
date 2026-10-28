@@ -31,7 +31,7 @@ pytestmark = pytest.mark.integration
 _HOUSEHOLDS = [1, 2]
 _ROWS_PER_HH = 4
 
-#: The dataset each household in this folder is read through. HuisBatchIdBSV
+#: The household batch each household in this folder is read through. ids.HOUSEHOLD_BATCH
 #: is what the index is joined on, so every artifact here carries it.
 _DATASETS = {
     household_id: household_batch_of(household_id)
@@ -139,7 +139,7 @@ class TestLoadersAgree:
 
 class TestDatasetAndProjectFilters:
     """A filter prunes shard paths so the reader skips the other directories,
-    then selects rows on the dataset; results must be identical either way."""
+    then selects rows on the household batch; results must be identical either way."""
 
     def test_dataset_ids_restrict_rows(self, aggregate_folder):
         one = _DATASETS[1]
@@ -165,7 +165,7 @@ class TestDatasetAndProjectFilters:
 
     def test_projects_resolve_to_their_datasets(self, aggregate_folder):
         """Projects are a column, not a partition, so they are resolved to
-        dataset ids through the index before reading."""
+        household batch ids through the index before reading."""
         df = get_household_table("60min", include_weather=False, projects=[1]).execute()
         assert set(df[ids.HOUSEHOLD_BATCH]) == set(_DATASETS.values())
 

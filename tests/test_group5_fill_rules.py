@@ -46,7 +46,7 @@ DIFF = "ElektriciteitNetgebruikDiff"
 
 
 def _household(household_id, n, **columns):
-    """One dataset of *household_id* over *n* rows, tz-naive at the 5-minute
+    """One household batch of *household_id* over *n* rows, tz-naive at the 5-minute
     grid. A `_flags` column holds bits, so it is Int64 rather than Float64.
 
     Every caller states the cumulative column alongside its interval one, so
@@ -136,7 +136,7 @@ class TestNoDeliveredNoFill:
         gaps = volume_reports[-1]
         assert not gaps.empty
         # A gap belongs to the series it was found in, so the accumulator
-        # names the dataset.
+        # names the household batch.
         assert set(gaps[ids.HOUSEHOLD_BATCH].astype(int)) == {
             household_batch_of(1)
         }

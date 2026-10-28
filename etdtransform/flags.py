@@ -2,7 +2,7 @@
 
 ``ImputeType`` records, per cell, what the fill found and what it did, plus
 what the calculated stage did to a derived cell. It is written into every
-dataset those stages produce, so it is the vocabulary a reader needs rather
+household batch those stages produce, so it is the vocabulary a reader needs rather
 than an implementation detail of either -- which is why it lives here and not
 in the module that happens to write it. The calculated stage shares this class
 rather than declaring its own: three members do not justify a second
@@ -33,7 +33,7 @@ class ImputeType(IntFlag):
     would be a second copy that drifts.
 
     ``auto()`` ties a value to its declaration position, and the values are
-    already written into datasets on disk. So a new member is **appended**, and
+    already written into household batches on disk. So a new member is **appended**, and
     no member is ever inserted, reordered or removed.
     """
 

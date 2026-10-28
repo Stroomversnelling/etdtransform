@@ -6,7 +6,7 @@ Provides tools to:
      subset of other variables (using equations defined in the data model's
 rule table).
   2. Serialize/deserialize the catalog to/from Parquet for fast loading.
-  3. At query time, assess which columns in a specific dataset are 'effectively raw'
+  3. At query time, assess which columns in a specific household batch are 'effectively raw'
      (have sufficient real data) and select the best derivation formulas.
 
 Public API:
@@ -28,7 +28,7 @@ Public API:
                           confirm semantic key-set equality.
   catalog_to_parquet    -- serialize catalog DataFrame to parquet with hash metadata
   catalog_from_parquet  -- load catalog DataFrame from parquet, verify hash
-  DatasetAdapter        -- per-dataset query: feasibility report + execution plan
+  DatasetAdapter        -- per-household-batch query: feasibility report + execution plan
   compile_expression    -- the callable form of a catalog expression, built once
                           per expression; compile_plan does a whole execution
                           plan so lambdify stays out of the per-household loop

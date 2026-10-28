@@ -15,7 +15,7 @@ def get_project_weather_station_data():
     pandas.DataFrame
         DataFrame containing project weather station data with uppercase station names.
     """
-    # Load mapping of ProjectIdBSV to weather stations and ensure names are uppercase
+    # Load mapping of ids.PROJECT to weather stations and ensure names are uppercase
     weather_station_file = etdtransform.options.weather_stations_summary_file
     project_weather_station_df = pd.read_excel(
         weather_station_file,

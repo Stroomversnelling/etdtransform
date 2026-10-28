@@ -129,7 +129,7 @@ class TestValueParityExactPrecision:
     def test_exact_quantile_matches_kernel_for_a_single_dataset(
         self, fixture_parquet
     ):
-        """For one dataset, column=kWh, annual: get_data_stats(exact) row
+        """For one household batch, column=kWh, annual: get_data_stats(exact) row
         values match compute_numeric_column_stats on the same series."""
         df = pd.read_parquet(
             fixture_parquet,
@@ -168,15 +168,15 @@ class TestValueParityExactPrecision:
 
 
 class TestCrossJoinPadding:
-    """The cross-product (dataset x col x season) is reinstated after the
+    """The cross-product (household batch x col x season) is reinstated after the
     ibis aggregation -- the mapped-mode kernel emits a count=0 row
     for an all-NA column, and the wide-stage path must too."""
 
     def test_zero_count_row_for_a_dataset_with_no_column_data(
         self, fixture_parquet
     ):
-        """The third dataset has no kWh data. Output must contain a row for
-        (that dataset, kWh, annual) with count=0, missing>0, and NA stat
+        """The third household batch has no kWh data. Output must contain a row for
+        (that household batch, kWh, annual) with count=0, missing>0, and NA stat
         values -- not a missing row."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
@@ -192,11 +192,11 @@ class TestCrossJoinPadding:
             assert pd.isna(row[stat]), f"{stat} should be NA when count=0"
 
     def test_seasonal_padding_covers_all_seasons(self, fixture_parquet):
-        """With seasonal=True every (dataset, col) combo gets a row per
-        season slice -- annual, cold, warm -- even when the dataset has no
+        """With seasonal=True every (household batch, col) combo gets a row per
+        season slice -- annual, cold, warm -- even when the household batch has no
         data for that slice."""
         out = get_data_stats(fixture_parquet, seasonal=True)
-        # The second dataset has data only in cold months; the warm slice
+        # The second household batch has data only in cold months; the warm slice
         # should still emit a row, with count=0.
         warm = out[
             (out[ids.HOUSEHOLD_BATCH] == household_batch_of(2))
@@ -213,7 +213,7 @@ class TestBooleanBranch:
     stay NA. This mirrors the mapped-mode kernel's boolean branch."""
 
     def test_boolean_emits_only_cheap_stats(self, fixture_parquet):
-        """For the first dataset, column=validate_ok, annual:
+        """For the first household batch, column=validate_ok, annual:
         count/mean/min/max are populated, quantile stats are NA."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
@@ -222,7 +222,7 @@ class TestBooleanBranch:
             & (out["season"] == "annual")
         ].iloc[0]
         assert int(sub["count"]) == 12
-        # All True for that dataset -> mean / min / max all 1.0
+        # All True for that household batch -> mean / min / max all 1.0
         assert float(sub["mean"]) == pytest.approx(1.0)
         assert float(sub["min"]) == pytest.approx(1.0)
         assert float(sub["max"]) == pytest.approx(1.0)

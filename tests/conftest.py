@@ -3,7 +3,7 @@ Shared test configuration for etdtransform.
 
 Test fixture dataset: paths are loaded from config_test.yaml (see
 config_test_template.yaml for the committed reference template). This is a
-small anonymised dataset -- NOT production data. All tests in this suite must
+small anonymised household batch -- NOT production data. All tests in this suite must
 pass against that fixture; there are no "pre-existing" failures (see ADR-007).
 
 The builders a test should use, and the idioms that go with them, are in
@@ -94,11 +94,11 @@ def mapped_dataset(tmp_path_factory):
 
     Built into this session's temporary folder, so no two runs share it and a
     run cannot be left broken by one that was interrupted. The stages write
-    into the dataset -- `_include_updated` rewrites index.parquet through
+    into the household batch -- `_include_updated` rewrites index.parquet through
     `update_include` -- so a folder shared between runs is mutable state, not a
     cache.
 
-    Setting `fixture_cache_path` reuses a dataset between sessions instead,
+    Setting `fixture_cache_path` reuses a household batch between sessions instead,
     keyed on the contents of the installed etdmap plus the metadata it is
     generated from. A reinstall of changed code changes the key; the version
     number does not move during development and is deliberately not used.
@@ -144,9 +144,9 @@ def _include_updated(mapped_dataset):
 
     update_include saves through save_index_to_parquet, which writes the
     index.parquet (including the household-batch columns) from the HuisBatch
-    sync CSV. That CSV is written inside the dataset by whichever run generated
-    it, so it is resolved from the dataset rather than from an option the
-    generating call set: a session reusing a cached dataset never makes that
+    sync CSV. That CSV is written inside the household batch by whichever run generated
+    it, so it is resolved from the household batch rather than from an option the
+    generating call set: a session reusing a cached household batch never makes that
     call.
     """
     etdmap.options.household_batch_csv_path = (
@@ -165,21 +165,21 @@ def _cum_cols():
 #
 # One definition each, because a household artifact has requirements a test
 # should not have to rediscover: both halves of every cumulative/interval pair
-# (a stage asserts it), the id columns, and the split where HuisIdBSV lives in
+# (a stage asserts it), the id columns, and the split where ids.HOUSEHOLD lives in
 # the hive path rather than in the file. Hand-rolling a frame per test file
 # means finding each of those by failing, and the versions drift.
 #
-# THE TWO IDS ARE NEVER EQUAL IN A TEST FRAME. `HuisBatchIdBSV` identifies the
-# dataset -- a time series, its cadence, its sidecar rows, its shard -- and
-# `HuisIdBSV` the household it belongs to, which matters for accounting and in
+# THE TWO IDS ARE NEVER EQUAL IN A TEST FRAME. `ids.HOUSEHOLD_BATCH` identifies the
+# household batch -- a time series, its cadence, its sidecar rows, its shard -- and
+# `ids.HOUSEHOLD` the household it belongs to, which matters for accounting and in
 # the index. Frames here declare the household batch as the household id plus
 # 1000, so code that reaches for the wrong one fails instead of passing on an
-# equality that only holds while the mapping writes one dataset per household.
+# equality that only holds while the mapping writes one household batch per household.
 # ---------------------------------------------------------------------------
 
-# `dataset_frame` (one dataset's rows, no id columns -- for a shard tree, whose
-# path carries them) and `datasets_frame` (several datasets in one frame,
-# keyed on HuisBatchIdBSV and carrying both ids -- for a stage that takes a
+# `dataset_frame` (one household batch's rows, no id columns -- for a shard tree, whose
+# path carries them) and `datasets_frame` (several household batches in one frame,
+# keyed on ids.HOUSEHOLD_BATCH and carrying both ids -- for a stage that takes a
 # frame) live in `etdmap.testing`, which both suites import, and are
 # re-exported here for the tests that name them.
 
@@ -208,14 +208,14 @@ def write_shard_tree(root, frames):
     """Write synthetic household frames as the hive layout the stages read.
 
     *frames* is keyed either by household id, taking the default household
-    batch id, or by ``(household_id, household_batch_id)`` where a test needs a
+    household batch id, or by ``(household_id, household_batch_id)`` where a test needs a
     household delivered in several household batches.
 
     Written through the mapping's own shard writer, so the tree is laid out the
     way a mapped dataset is.
 
-    `HuisIdBSV` is dropped from the file because the path carries it;
-    `HuisBatchIdBSV` is a path key too, and the writers refuse a source
+    `ids.HOUSEHOLD` is dropped from the file because the path carries it;
+    `ids.HOUSEHOLD_BATCH` is a path key too, and the writers refuse a source
     without it.
     """
     root = Path(root)
@@ -243,11 +243,11 @@ def sharded_fixture_mapped(mapped_dataset, _include_updated):
     """The mapped dataset, with its index `Meenemen`-populated.
 
     The mapping writes whichever layout `mapped_output_format` names, which is
-    the sharded one by default, so this is the dataset as generated rather than
+    the sharded one by default, so this is the household batch as generated rather than
     a copy of it in another layout. Depends on `_include_updated`, which
     rewrites the index the stages filter on.
     """
-    # The count the dataset was generated with. The shape is a parameter of
+    # The count the household batch was generated with. The shape is a parameter of
     # the generator, so a literal here would contradict any other shape.
     expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
     found = mapped_household_paths(mapped_dataset)
@@ -261,7 +261,7 @@ def sharded_fixture_mapped(mapped_dataset, _include_updated):
 def sharded_stage3(sharded_fixture_mapped, _cum_cols, tmp_path_factory):
     """The full sharded stage-3 chain once: diffs -> impute (+ summaries).
 
-    At the production floor. The dataset carries enough households per project
+    At the production floor. The household batch carries enough households per project
     to meet it, so the averaging runs the constant it ships with rather than a
     lowered one -- an average published under a floor of one proves only that
     averaging runs.
@@ -286,7 +286,7 @@ def sharded_calculated(sharded_stage3, tmp_path_factory):
     it.
 
     The shape is load-bearing for the consumers, not a convenience. The
-    resample carries the batch id only when its source is sharded
+    resample carries the household batch id only when its source is sharded
     (`aggregate.py:1714`), and that is the column its own output partitions
     on -- so a flat source here would make the resample unable to write.
     """
@@ -513,7 +513,7 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
     ``test_averaging_coarse_delivery.py``.
 
     *grid_minutes* is the spacing the rows sit on. Pass a dict of
-    ``ProjectIdBSV -> minutes`` for a frame whose projects sit on different
+    ``ids.PROJECT -> minutes`` for a frame whose projects sit on different
     grids: each project is then spread over its own slots, one pass per distinct
     grid, which is what the averaging itself does. A scalar means every project
     shares that grid.
@@ -616,19 +616,20 @@ def project_averages(df, project_id_column, diff_columns, **kwargs):
 
 
 def cadence_table(df, columns, minutes=5):
-    """A cadence table declaring *minutes* for each of *df*'s datasets.
+    """A cadence table declaring *minutes* for each of *df*'s household batches.
 
     Imputation scales every threshold to the cadence the column reports at, and
     an absent cadence is an error rather than an assumed grid. A synthetic frame
     is built at a known spacing, so it declares that spacing here.
 
-    Keyed on ``HuisBatchIdBSV``, as the sidecar the mapping writes is: cadence
-    is measured on one dataset, against the grid that dataset declares.
+    Keyed on ``ids.HOUSEHOLD_BATCH``, as the sidecar the mapping writes is:
+    cadence is measured on one household batch's readings, against the grid it
+    declares.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Must contain ``HuisBatchIdBSV``.
+        Must contain ``ids.HOUSEHOLD_BATCH``.
     columns : iterable of str
         Cumulative column names. Cadence is recorded under the delivered name,
         which is the cumulative side of the pair.

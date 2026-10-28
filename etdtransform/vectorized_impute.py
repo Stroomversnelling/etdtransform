@@ -209,9 +209,9 @@ def _catchup_positions(df, diff_col, upper_bound) -> pd.Series:
     counts as a catch-up only when a flat run of non-advancing readings sits
     directly before it.
 
-    Runs per dataset, since a span is a property of one delivered series.
+    Runs per household batch, since a span is a property of one delivered series.
     *upper_bound* is a scalar or one value per row; the bound is the same for
-    every row of a dataset, so the first of them is the dataset's bound.
+    every row of a household batch, so the first of them is the household batch's bound.
     """
     found = pd.Series(False, index=df.index)
     if df.empty:
@@ -254,7 +254,7 @@ def _row_bounds_per_cadence(
     physical model and apparaat-set.
 
     A constraint package fixes one cadence and one rule subset, and the rows
-    differ on all three axes: the datasets report at more than one cadence,
+    differ on all three axes: the household batches report at more than one cadence,
     the physical model decides which rules apply at all, and the
     declared-absent device set selects which SPECIALIZED compile of those
     rules the row narrows with (the sync substitutes 0 for absent variables
@@ -263,7 +263,7 @@ def _row_bounds_per_cadence(
     through the project and the household respectively, which is the grain the
     metadata readers expose. So the frame is resolved in (cadence, model,
     apparaat-set) groups, each with its own package built once per call into
-    *packages* -- selection only, no sympy here. A dataset absent from the
+    *packages* -- selection only, no sympy here. A household batch absent from the
     cadence table takes the declared bounds unscaled -- the same resolution
     the column thresholds apply through ``grid_bound``. A project absent from
     *physical_model_by_project* raises: the model decides the rules, so an
@@ -284,7 +284,7 @@ def _row_bounds_per_cadence(
     :func:`etdtransform.bounds.load_column_cadence`: one row per
     (``ids.HOUSEHOLD_BATCH``, column), with ``cadence_minutes`` holding the
     interval that column's readings cover. It supplies one of the three axes
-    the frame is grouped on, so a dataset reporting at a different interval
+    the frame is grouped on, so a household batch reporting at a different interval
     from its neighbour is narrowed with its own package.
     """
     from etdtransform.constraints import (
@@ -718,8 +718,8 @@ def _gap_volume_report(df, diff_col, impute_type_col, routed_by_gap):
     post-processor never has to trust re-derived gap numbering.
 
     A gap is constructed along ONE series, so it belongs to the household
-    batch dataset it was found in. Recording the household instead would put
-    two datasets' gaps under one id, and the span columns the join relies on
+    household batch dataset it was found in. Recording the household instead would put
+    two household batches' gaps under one id, and the span columns the join relies on
     are only unique within a series.
 
     Data-volume sums take ``min_count=1``, so a gap holding no values
@@ -790,7 +790,7 @@ class DeliveryPaths(NamedTuple):
     """Which logic each row's variable is resolved by, as row-aligned masks.
 
     The three partition the frame. ``cumulative`` and ``interval`` are the two
-    logics; ``nothing`` is the rows of a (dataset, column) the supplier never
+    logics; ``nothing`` is the rows of a (household batch, column) the supplier never
     sent in either form, which no logic resolves.
     """
 
@@ -834,7 +834,7 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
     ------
     ValueError
         When ``ids.HOUSEHOLD_BATCH`` is missing or holds pd.NA, or when a
-        dataset in the frame has no row in the sidecar at all.
+        household batch in the frame has no row in the sidecar at all.
     """
     if ids.HOUSEHOLD_BATCH not in df.columns:
         raise ValueError(
@@ -852,9 +852,9 @@ def delivery_paths(df, cum_col, diff_col, cadence) -> DeliveryPaths:
             f"{ids.HOUSEHOLD_BATCH}."
         )
 
-    # A dataset absent from the sidecar is absent metadata, not a delivery
+    # A household batch absent from the sidecar is absent metadata, not a delivery
     # fact: both lookups would return False and every one of its rows would be
-    # classified as nothing-delivered and left unfilled. A dataset present
+    # classified as nothing-delivered and left unfilled. A household batch present
     # with no row for THIS column is the legitimate case -- that is what not
     # delivered means (ADR-003: a missing required input fails rather than
     # defaults).
@@ -1169,7 +1169,7 @@ def impute_and_normalize(
 
         drop_temp_cols(df, logLeftoverError=True)
 
-        # The no-usable-reading-no-fill rule: a (dataset, column) whose every
+        # The no-usable-reading-no-fill rule: a (household batch, column) whose every
         # reading the mapping stage disqualified is never filled -- there is
         # nothing to anchor or scale from, and the only thing the fill could do
         # is invent the whole column from peer averages.
@@ -1312,7 +1312,7 @@ def impute_and_normalize(
                 df.loc[_paths.interval, "cumulative_value_group"] = pd.NA
                 df.loc[_paths.interval, "gap_length"] = pd.NA
 
-            # Datasets with no usable reading leave the gap structures
+            # Household batches with no usable reading leave the gap structures
             # entirely: their rows are not gaps, so no route writes, no flag is
             # set, no volume row is collected, and the cells stay NA.
             if _no_usable_readings.any():
@@ -1382,7 +1382,7 @@ def impute_and_normalize(
 
         # The factor and the figures it is built from, so a factor can be
         # audited in the data it produced rather than reconstructed by proxy.
-        # Each is constant over a (dataset, column), so "first" reads it.
+        # Each is constant over a (household batch, column), so "first" reads it.
         _factor_stats = {
             name: (name, "first")
             for name in (
@@ -1396,9 +1396,9 @@ def impute_and_normalize(
             if name in df.columns
         }
 
-        # Per dataset, which is the grain the factor stats above already have:
+        # Per household batch, which is the grain the factor stats above already have:
         # grouping on the household would hold one factor against two
-        # datasets' gap counts.
+        # household batches' gap counts.
         _grp = df.groupby([project_id_column, ids.HOUSEHOLD_BATCH])
         # One C-level pass for all scalar stats; apply only for the methods list.
         _stats = _grp.agg(
@@ -1547,7 +1547,7 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
 
     This function identifies gaps in the data, creates gap groups, and
     establishes cumulative value groups based on the presence of NA values
-    and transitions between datasets.
+    and transitions between household batches.
 
     Parameters
     ----------
@@ -1567,7 +1567,7 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
     Notes
     -----
     This function adds several temporary columns to the DataFrame:
-    - 'gap_start': Identifies the start of a diff column gap or transition between datasets.
+    - 'gap_start': Identifies the start of a diff column gap or transition between household batches.
     - 'gap_group': Groups consecutive NA values in diff columns.
     - 'cum_value_encountered': Marks where a non-NA value is encountered in cumulative column.
     - 'cumulative_value_group': Groups gaps based on cumulative values.
@@ -1588,12 +1588,12 @@ def process_gap_and_cumulative_groups(df, diff_col, cum_col):
     is_na_mask = df[diff_col].isna()
 
     # Step 2: Identify gap start only for NA values and transitions between
-    # datasets -- a gap does not run across the boundary between two series.
+    # household batches -- a gap does not run across the boundary between two series.
     df["gap_start"] = (is_na_mask & (~is_na_mask.shift(1, fill_value=False))) | (
         (df[ids.HOUSEHOLD_BATCH] != df[ids.HOUSEHOLD_BATCH].shift(1)) & is_na_mask
     )
 
-    # Step 3: Create gap groups by cumulative sum, but now ensure it doesn't increment unnecessarily at dataset boundaries
+    # Step 3: Create gap groups by cumulative sum, but now ensure it doesn't increment unnecessarily at household batch boundaries
     df["gap_group"] = df["gap_start"].cumsum()
 
     # Step 4: Ensure non-NA values are not included in any gap group
@@ -1691,7 +1691,7 @@ def process_imputation_vectorized(
     - Filling with zeros for flat or near-zero gaps
     - Linear filling for positive gaps with near-zero impute jumps
     - Scaled impute value filling for positive gaps with positive impute jumps
-    - Handling cases with no gap jump (e.g., at the start or end of the dataset)
+    - Handling cases with no gap jump (e.g., at the start or end of the household batch)
 
     The function also applies thresholds to remove physically impossible outliers.
 
@@ -1715,7 +1715,7 @@ def process_imputation_vectorized(
         )
 
         # remove all values that are not the first in the group or that are
-        # from another dataset
+        # from another household batch
         df.loc[
             ~first_in_group_mask | df["cumulative_value_group"].isna() | first_in_house,
             "prev_cum_value",
@@ -1795,13 +1795,13 @@ def process_imputation_vectorized(
         return df
 
     def setup_proportional_adjustment_to_impute(df, diff_col, avg_col):
-        """The dataset's level relative to its project's average.
+        """The household batch's level relative to its project's average.
 
-        The median of the dataset's own column over the median of the project
+        The median of the household batch's own column over the median of the project
         average for the same rows. 1.0 matches the average, 2.0 is twice it, and
-        it multiplies the average to bring it to this dataset's level.
+        it multiplies the average to bring it to this household batch's level.
 
-        Zeros are excluded on both sides. A dataset without the device
+        Zeros are excluded on both sides. A household batch without the device
         contributes legitimate zeros to the project average, so a denominator
         that admitted them would measure how many peers lack the device rather
         than what the device consumes -- which inflates the factor without
@@ -1810,7 +1810,7 @@ def process_imputation_vectorized(
         """
         # Both medians are taken over the same rows, so the ratio compares like
         # with like. A zero is a real measurement but not evidence of the
-        # dataset's level when the device is idle or absent, and a reading the
+        # household batch's level when the device is idle or absent, and a reading the
         # mapping stage disqualified is not a measurement at all.
         df["comparable_to_impute_mask"] = (
             usable_readings(df, diff_col)
@@ -1849,7 +1849,7 @@ def process_imputation_vectorized(
 
         factor = df["house_diff_median"] / df["project_avg_median"]
         # True where the factor is the neutral 1.0 rather than a value computed
-        # from the dataset's own rows. The fill branches read it to choose
+        # from the household batch's own rows. The fill branches read it to choose
         # between the scaled and unscaled impute types.
         df["house_factor_is_fallback"] = degenerate | not_enough_comparable
         df["house_impute_factor"] = factor.mask(
@@ -2031,8 +2031,8 @@ def process_imputation_vectorized(
             wo_gap_jump_mask & df["end_cum_value"].isna() & df["prev_cum_value"].isna()
         )
         if nogpjump_no_start_no_end_value_mask.any():
-            # add_diff_columns seeds row 0 of each dataset with 0, so that row
-            # is excluded when testing whether the dataset delivers intervals.
+            # add_diff_columns seeds row 0 of each household batch with 0, so that row
+            # is excluded when testing whether the household batch delivers intervals.
             _first_in_series = (
                 df[ids.HOUSEHOLD_BATCH] != df[ids.HOUSEHOLD_BATCH].shift(1)
             )
@@ -2046,7 +2046,7 @@ def process_imputation_vectorized(
             # Neither end of this gap carries a register reading, though the
             # supplier did deliver the register -- a variable with none is on
             # the interval path and never reaches this route. So the gap has no
-            # anchor of its own, and the dataset's intervals are what is left
+            # anchor of its own, and the household batch's intervals are what is left
             # to scale from.
             _unanchored_gap = (
                 nogpjump_no_start_no_end_value_mask
@@ -2375,7 +2375,7 @@ def process_imputation_vectorized(
                 | ImputeType.INFEASIBLE_GAP.value
             )
 
-    # Gap cells no branch above wrote to. Row 0 of a dataset bounds no gap,
+    # Gap cells no branch above wrote to. Row 0 of a household batch bounds no gap,
     # so it is excluded.
     _first_in_series = df[ids.HOUSEHOLD_BATCH] != df[ids.HOUSEHOLD_BATCH].shift(1)
     _unfilled = (

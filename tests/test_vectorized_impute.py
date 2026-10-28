@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
 
-#: The household every frame below describes. Its dataset -- `HuisBatchIdBSV`,
+#: The household every frame below describes. Its household batch -- `ids.HOUSEHOLD_BATCH`,
 #: which the cadence table and the per-series fill are keyed on -- is
 #: ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1

@@ -21,8 +21,8 @@ CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
 ITYPE = f"{DIFF}_impute_type"
 
-#: One household per project, as ``household -> ProjectIdBSV``. Each
-#: household's dataset is ``household_batch_of`` of its number.
+#: One household per project, as ``household -> ids.PROJECT``. Each
+#: household's household batch is ``household_batch_of`` of its number.
 PROJECT_OF_HOUSEHOLD = {1: 1, 2: 2}
 
 #: The readings every household carries. Identical in both projects, so the

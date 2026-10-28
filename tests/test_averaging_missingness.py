@@ -32,7 +32,7 @@ def _cadence(frame, diff_columns):
 pytestmark = pytest.mark.unit
 
 # Two projects: 20 normal + 1 outlier household per project. Each household's
-# dataset -- the key of its series, its cadence and its contribution to the
+# household batch -- the key of its series, its cadence and its contribution to the
 # average -- is `household_batch_of` of its number.
 # Outlier values are ~15-20x larger than the normal range so the
 # 95th-percentile upper-bound logic clearly excludes them.
@@ -43,7 +43,7 @@ _P2_OUTLIER = 299
 
 DIFF_COLS = ["ElektriciteitNetgebruikLaagDiff", "ZonopwekVerbruikDiff"]
 
-#: Slots every dataset in the module fixture reports at.
+#: Slots every household batch in the module fixture reports at.
 SLOTS = 20
 
 # Rows whose measurement values are set to pd.NA to verify null handling.
@@ -51,7 +51,7 @@ SLOTS = 20
 _NULL_SLOTS = {(1, 105, 3), (1, 110, 7), (2, 207, 0), (2, 215, 12)}
 
 # Every frame below carries interval columns alone, built with `pairs=False`.
-# The averaging takes a dataset's volume from the cumulative counterpart
+# The averaging takes a household batch's volume from the cumulative counterpart
 # wherever that column holds a value, so a completed counterpart would supply
 # the averages in place of the values and the nulls each test states.
 

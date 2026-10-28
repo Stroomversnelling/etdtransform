@@ -1,8 +1,8 @@
 """One cadence per project, or a refusal that says which project.
 
 A project average is a shape placed on the slots a project reports at, so it
-needs one interval per project. The dataset-wide figure cannot supply it: it is
-the finest grid any batch declares, so a project reporting quarter-hourly would
+needs one interval per project. The household-batch-wide figure cannot supply it: it is
+the finest grid any household batch declares, so a project reporting quarter-hourly would
 be spread across five-minute steps because some other project reports that
 often.
 

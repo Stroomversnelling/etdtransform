@@ -99,7 +99,7 @@ def assert_averageable(diff_columns) -> None:
 def assert_cumulative_interval_pairs_complete(columns) -> None:
     """Refuse a column set holding one half of a cumulative/interval pair.
 
-    By the time a dataset reaches the stages after imputation, every cumulative
+    By the time a household batch reaches the stages after imputation, every cumulative
     variable should carry its interval column and every interval column its
     cumulative: the mapping derives whichever was not delivered. A set with one
     half missing means that conversion did not happen, and every later stage
@@ -309,7 +309,7 @@ def _combine_cadence_groups(per_grid, project_id_column, diff_columns) -> dict:
         )
         # Recombined from the per-project rows rather than from each pass's own
         # figure: the rows partition the slots, so summing them gives the
-        # dataset-wide share exactly, with no weighting to get wrong.
+        # household-batch-wide share exactly, with no weighting to get wrong.
         slots = int(duty_frame["slots"].sum()) if len(duty_frame) else 0
         present = int(duty_frame["present"].sum()) if len(duty_frame) else 0
         consuming = int(duty_frame["consuming"].sum()) if len(duty_frame) else 0
@@ -341,7 +341,7 @@ def calculate_average_diff_ibis(
     The project average of each interval column, per project and reading date.
 
     This is what imputation fills from, and the only implementation: the
-    aggregations run as SQL, so the full dataset never materialises in Python
+    aggregations run as SQL, so the full household batch never materialises in Python
     memory. Only the small result tables (one row per project, or one row per
     project x date) are executed.
 
@@ -391,7 +391,7 @@ def calculate_average_diff_ibis(
         - ``coverage`` -- the share of slots the average has a value for
         - ``duty`` -- of those, the share carrying consumption
         - ``coverage_duty`` -- the same two per project
-        - ``window_presence`` -- which datasets covered which window
+        - ``window_presence`` -- which household batches covered which window
 
     Warnings
     --------
@@ -517,7 +517,7 @@ def _average_at_one_cadence(
 
     # Every column's flagged count in one aggregate, so the loop below does not
     # make a round trip per column. Grouped by project, which costs the same
-    # round trip and is the grain the counts are published at -- a dataset-wide
+    # round trip and is the grain the counts are published at -- a household-batch-wide
     # total cannot say which project lost readings.
     _guard_agg = {}
     for i, c in enumerate(diff_columns):
@@ -574,7 +574,7 @@ def _average_at_one_cadence(
             included = tbl
             value = included[col].cast("float64")
 
-            # The interval each dataset's readings cover. A dataset absent
+            # The interval each household batch's readings cover. A household batch absent
             # from the cadence table reports at the grid cadence.
             minutes = _per_dataset(
                 included[ids.HOUSEHOLD_BATCH],
@@ -608,7 +608,7 @@ def _average_at_one_cadence(
                     )
 
             # Values above the column threshold are discarded, not clipped.
-            # The threshold is scaled to each dataset's cadence.
+            # The threshold is scaled to each household batch's cadence.
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
                 assert_bounds_not_inverted(col, cadence)
@@ -646,8 +646,8 @@ def _average_at_one_cadence(
                 value = over.ifelse(ibis.null().cast("float64"), value)
 
             # The cumulative variable supplies the volume wherever it holds
-            # usable readings. Decided per dataset, so one column is behind
-            # every reading of that dataset.
+            # usable readings. Decided per household batch, so one column is behind
+            # every reading of that household batch.
             cumulative = cumulative_column(col)
             cum_value = None
             on_cumulative_ids = []
@@ -720,9 +720,9 @@ def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.Da
 
 def _per_dataset(dataset_column, by_dataset, default):
     """
-    A per-dataset number as an ibis expression, defaulting where unknown.
+    A per-household-batch number as an ibis expression, defaulting where unknown.
 
-    An empty mapping means nothing is known per dataset, which is the state
+    An empty mapping means nothing is known per household batch, which is the state
     when no cadence sidecar exists, so every row takes *default*.
     """
     import ibis
@@ -764,7 +764,7 @@ def _resample_average_ibis(
     The project average of *diff_col*, computed in SQL by resampling.
 
     The spreading step, followed by a plain mean. Two consecutive usable
-    readings of one dataset bound a window; its volume is spread evenly over
+    readings of one household batch bound a window; its volume is spread evenly over
     the grid slots between them, ending at the later reading.
 
     ``_value`` arrives with every disqualified value already NULL, so a usable
@@ -781,7 +781,7 @@ def _resample_average_ibis(
     ----------
     prepared : ibis.Table
         Carrying ``_value`` (the value after exclusions) and ``_minutes`` (the
-        interval each dataset's readings cover).
+        interval each household batch's readings cover).
     diff_col : str
         Interval column being averaged.
     project_id_column : str
@@ -885,10 +885,10 @@ def _resample_average_ibis(
     )
 
     # The denominator is every grid row the household has in the window, so a
-    # window clipped by the edge of the dataset is judged on what it held.
+    # window clipped by the edge of the household batch is judged on what it held.
     #
     # Which source fed the household rides out of the same aggregate. It is
-    # decided per dataset per column and then used and forgotten, so without
+    # decided per household batch per column and then used and forgotten, so without
     # this a reader cannot tell whether a household's volume came from its
     # cumulative readings or from its delivered intervals.
     grid = prepared.mutate(
@@ -920,7 +920,7 @@ def _resample_average_ibis(
 
     coverage_keys = [project_id_column, ids.HOUSEHOLD_BATCH, "_window"]
 
-    # The counts the eligibility gate below judges, exported per dataset and
+    # The counts the eligibility gate below judges, exported per household batch and
     # window. One small execute per column: (household, window) rows, not data
     # rows. The judgements themselves are derived in window_presence_frame so
     # both averaging implementations share one definition.
@@ -1119,9 +1119,9 @@ def sort_for_impute(df: pd.DataFrame, project_id_column: str):
     Notes
     -----
     The sorting order is: project, household batch dataset, ReadingDate. Each
-    dataset's rows then form one contiguous run in date order, which the
+    household batch's rows then form one contiguous run in date order, which the
     imputation reads positionally. The household is not in the key: the
-    dataset determines it, so naming it sorts on the same thing twice.
+    household batch determines it, so naming it sorts on the same thing twice.
 
     """
     logging.info("Sorting to prepare for imputation.")
@@ -1187,7 +1187,7 @@ def prepare_diff_averages_for_impute_ibis(
     min_eligible : int
         Eligible households a window needs before its average is published
         (:func:`etdtransform.presence.window_is_averageable`). Lower it only for
-        a dataset deliberately smaller than a project -- a ten-household sample
+        a household batch deliberately smaller than a project -- a ten-household sample
         is below the floor by construction, and leaving the floor there would
         publish no average at all and send every column down the no-average
         path, which looks like a passing run and tests almost nothing.
@@ -1402,17 +1402,17 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
     """
     Reject imputation input that cannot be imputed correctly.
 
-    Expects one row per (HuisIdBSV, ReadingDate), and at most one
-    HuisBatchIdBSV per HuisIdBSV. Call before averaging or imputing.
+    Expects one row per (ids.HOUSEHOLD, ReadingDate), and at most one
+    ids.HOUSEHOLD_BATCH per ids.HOUSEHOLD. Call before averaging or imputing.
 
     Raises
     ------
     HouseBatchOverlapError
-        A household has rows in more than one batch. Imputing the
-        concatenated series would fill the between-batch gap, which is real
+        A household has rows in more than one household batch. Imputing the
+        concatenated series would fill the between-household-batch gap, which is real
         non-delivery rather than missing data.
     ValueError
-        Duplicate (HuisIdBSV, ReadingDate) rows. These double-weight the
+        Duplicate (ids.HOUSEHOLD, ReadingDate) rows. These double-weight the
         project averages and break the diff and sort order.
     """
     from etdmap.index_helpers import HouseBatchOverlapError
@@ -1480,13 +1480,13 @@ def prepare_diff_averages_sharded(
 
     I/O shell only -- the computation is the SAME prepare_diff_averages_for_impute_ibis
     the legacy path uses, fed a lazy table built from mapped_household_table
-    (DuckDB hive-glob, per the measured perf decision) with `ProjectIdBSV` joined
+    (DuckDB hive-glob, per the measured perf decision) with `ids.PROJECT` joined
     from the index and `Meenemen` inclusion applied at read time.
 
     Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
     pipeline's artifact area), keeping legacy artifacts untouched.
 
-    Batch safety: refuses multi-batch households and overlapping batch periods
+    Household-batch safety: refuses multi-household-batch households and overlapping household batch periods
     (see assert_imputation_input_batch_safe) -- the estimation inputs feed
     everything downstream.
     """
@@ -1516,12 +1516,12 @@ def prepare_diff_averages_sharded(
             "re-run the index save to add the household-batch columns."
         )
     # Keyed on the household batch, NOT the household: a household's project assignment is
-    # constant WITHIN a batch but may differ BETWEEN batches (project
+    # constant WITHIN a household batch but may differ BETWEEN household batches (project
     # definitions change over time; the household does not). So
-    # HuisIdBSV -> ProjectIdBSV is not a function over time, while
-    # HuisBatchIdBSV -> ProjectIdBSV is. HuisBatchIdBSV is also the primary key
-    # of index.parquet (one row per household batch), so keying on HuisIdBSV
-    # would additionally keep whichever batch row happened to come last.
+    # ids.HOUSEHOLD -> ids.PROJECT is not a function over time, while
+    # ids.HOUSEHOLD_BATCH -> ids.PROJECT is. ids.HOUSEHOLD_BATCH is also the primary key
+    # of index.parquet (one row per household batch), so keying on ids.HOUSEHOLD
+    # would additionally keep whichever household-batch row happened to come last.
 
     household_batch_projects = index_df[[ids.HOUSEHOLD_BATCH, ids.PROJECT]].dropna()
     project_map = _ibis.memtable(

@@ -121,7 +121,7 @@ def _calculated_tree(tmp_path):
     """6 rows on a 5min grid for one household = two 15min buckets of 3.
 
     Written as the hive tree the stage reads in production. The shape matters
-    to the resample: the batch id rides along only when the source is sharded
+    to the resample: the household batch id rides along only when the source is sharded
     (`aggregate.py:1714`), and that is the column the output partitions on.
     """
     from conftest import write_shard_tree

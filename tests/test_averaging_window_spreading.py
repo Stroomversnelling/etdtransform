@@ -36,9 +36,9 @@ def _average(frame, cadence, drop_na=True):
 
 
 def _frame(per_household):
-    """per_household: {HuisIdBSV: [cumulative readings, pd.NA where absent]}
+    """per_household: {ids.HOUSEHOLD: [cumulative readings, pd.NA where absent]}
 
-    One dataset per household: the readings are the dataset's, and the
+    One household batch per household: the readings are the household batch's, and the
     household is the one it is counted under. Timestamps are tz-naive, the
     shape the averaging receives.
 
@@ -62,12 +62,12 @@ def _frame(per_household):
 
 
 def _cadence(minutes_by_household, column=CUM):
-    """A cadence row per household's dataset, declaring what its readings cover.
+    """A cadence row per household's household batch, declaring what its readings cover.
 
-    Cadence is a property of the dataset, so the rows are keyed on
-    ``HuisBatchIdBSV``. *column* is the form the readings arrive in: the
+    Cadence is a property of the household batch, so the rows are keyed on
+    ``ids.HOUSEHOLD_BATCH``. *column* is the form the readings arrive in: the
     cumulative variable, or the interval column where that is what the supplier
-    delivered. Every dataset sits on the grid the frames are built at.
+    delivered. Every household batch sits on the grid the frames are built at.
     """
     return pd.concat(
         [

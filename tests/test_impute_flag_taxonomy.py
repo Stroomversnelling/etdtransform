@@ -97,7 +97,7 @@ class TestTheThresholdPassIsSeparate:
 
 
 class TestValuesAreStable:
-    """Bits are written into every imputed dataset, so a member's value is part
+    """Bits are written into every imputed household batch, so a member's value is part
     of what the data means and cannot move once written.
 
     The values themselves are not restated here. They are configuration, recorded
@@ -116,7 +116,7 @@ class TestValuesAreStable:
     def test_declaration_order_is_ascending(self):
         """auto() ties a value to its source position, so a member out of order
         means the source was reordered and every later value moved with it --
-        which silently reinterprets every dataset written before the change."""
+        which silently reinterprets every household batch written before the change."""
         singles = [m.value for m in ImputeType if m.name and m.value]
         assert singles == sorted(singles), (
             "members are not in ascending value order, so one was inserted "

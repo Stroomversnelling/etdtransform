@@ -29,7 +29,7 @@ ROWS = 20
 def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     """Original loop-based implementation used as ground truth.
 
-    Per dataset, not per household: a cumulative total runs over one time
+    Per household batch, not per household: a cumulative total runs over one time
     series, and a household can have several.
     """
     modified = []
@@ -48,12 +48,12 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
-    """Frames for *datasets*, each ``(HuisIdBSV, HuisBatchIdBSV)``.
+    """Frames for *household batches*, each ``(ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH)``.
 
     Not `conftest.dataset_frame`: that builds one household's rows and fills
     the cumulative counterpart with arbitrary values, while the relation
     ``cumulative == cumsum(interval) + 100`` is what reconstruction is checked
-    against here, and these frames carry several datasets at once.
+    against here, and these frames carry several household batches at once.
 
     The draw is numpy's because pandas has no generator; every column it feeds
     is stored as nullable Float64 (ADR-005).
@@ -88,7 +88,7 @@ def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-#: Three households, one dataset each, plus a SECOND dataset of household 1
+#: Three households, one household batch each, plus a SECOND household batch of household 1
 #: over the same timestamps. Grouping the rebuild by household would run one
 #: cumulative total across both of household 1's deliveries.
 DATASETS = [(1, 1001), (2, 1002), (3, 1003), (1, 2001)]
@@ -157,7 +157,7 @@ def test_pandas_check_column_is_diff_of_residual(base_df):
 
 
 def test_pandas_single_row_per_dataset():
-    """Edge case: one row per dataset -- check should be NaN."""
+    """Edge case: one row per household batch -- check should be NaN."""
     df = (
         _make_df([(10, 1010), (11, 1011)])
         .groupby(ids.HOUSEHOLD_BATCH).head(1).reset_index(drop=True)
