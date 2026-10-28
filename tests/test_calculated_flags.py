@@ -682,12 +682,12 @@ class TestFillCalculatedGaps:
         )
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            households=[1],
+            household_batches=[household_batch_of(1)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, plan = fill_gaps_in_table(
-            ibis.memtable(frame), [1], rule_sets
+            ibis.memtable(frame), [household_batch_of(1)], rule_sets
         )
         out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
 
@@ -717,12 +717,12 @@ class TestFillCalculatedGaps:
         )
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            households=[1],
+            household_batches=[household_batch_of(1)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, _ = fill_gaps_in_table(
-            ibis.memtable(frame), [1], rule_sets
+            ibis.memtable(frame), [household_batch_of(1)], rule_sets
         )
         out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
         assert report["cells"] == 1
@@ -743,12 +743,12 @@ class TestFillCalculatedGaps:
         # therefore has no formulas and no bounds of its own.
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            households=[2],
+            household_batches=[household_batch_of(2)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, plan = fill_gaps_in_table(
-            ibis.memtable(frame), [1], rule_sets
+            ibis.memtable(frame), [household_batch_of(1)], rule_sets
         )
         assert report["cells"] == 0
         assert plan.empty

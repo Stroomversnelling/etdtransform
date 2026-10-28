@@ -23,7 +23,7 @@ from pandas.testing import assert_frame_equal
 from test_constraint_package import _constraints
 
 from etdtransform.constraints import (
-    apparaat_set_by_household,
+    apparaat_set_by_household_batch,
     apparaat_set_key,
     specialize_catalog_for_absent,
 )
@@ -61,14 +61,16 @@ def _row(lhs, rhs_text, rhs_vars):
 def _metadata_csv(folder, declarations):
     """The BSV metadata the selection reads, written inside *folder*.
 
-    *declarations* maps a household to its ApparaatOntbrekend text. The row
-    shape is the review-metadata one the index maps describe; the declaration
-    column is added on top of it, since no index map carries one.
+    *declarations* maps a household to its ApparaatOntbrekend text, and the
+    row written for it is that household's household batch -- which is the
+    grain the declaration is made at, and the key the selection resolves
+    through. The household-batch columns are therefore carried: without them
+    the reader raises, because resolving a declaration per household would
+    give a renovated household batch its earlier devices.
     """
     path = folder / "metadata.csv"
     frame = index_frame(
-        [household_batch_of(household) for household in declarations],
-        batch_fields=False,
+        [household_batch_of(household) for household in declarations]
     )
     frame["ApparaatOntbrekend"] = pd.array(
         list(declarations.values()), dtype="string"
@@ -156,16 +158,17 @@ class TestSpecializeCatalogForAbsent:
         ]
 
 
-class TestApparaatSetByHousehold:
-    def test_resolves_each_household_to_its_canonical_key(self, tmp_path):
+class TestApparaatSetByHouseholdBatch:
+    def test_resolves_each_household_batch_to_its_canonical_key(self, tmp_path):
         path = _metadata_csv(tmp_path, {
             1: "ElektriciteitsgebruikWTW, ElektriciteitsgebruikRadiator",
             2: "",
         })
-        resolved = apparaat_set_by_household(path)
+        resolved = apparaat_set_by_household_batch(path)
         assert resolved == {
-            1: "ElektriciteitsgebruikRadiator|ElektriciteitsgebruikWTW",
-            2: "",
+            household_batch_of(1):
+                "ElektriciteitsgebruikRadiator|ElektriciteitsgebruikWTW",
+            household_batch_of(2): "",
         }
 
     def test_metadata_without_the_column_raises(self, tmp_path):
@@ -177,11 +180,11 @@ class TestApparaatSetByHousehold:
             path, index=False
         )
         with pytest.raises(ValueError, match="ApparaatOntbrekend"):
-            apparaat_set_by_household(path)
+            apparaat_set_by_household_batch(path)
 
 
-class TestRuleSetsByHousehold:
-    """What a household may derive, resolved from its declarations. One
+class TestRuleSetsByHouseholdBatch:
+    """What a household batch may derive, resolved from its declarations. One
     composition in the library, so no caller repeats the two steps."""
 
     def _catalog_with_a_device_term(self):
@@ -193,32 +196,37 @@ class TestRuleSetsByHousehold:
             ),
         ])
 
-    def test_households_are_grouped_by_their_declaration(self, tmp_path):
-        from etdtransform.constraints import rule_sets_by_household
+    def test_household_batches_are_grouped_by_their_declaration(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household_batch
 
         path = _metadata_csv(tmp_path, {
             1: "ElektriciteitsgebruikRadiator",
             2: "ElektriciteitsgebruikRadiator",
             3: "",
         })
-        resolved = rule_sets_by_household(
-            [1, 2, 3], self._catalog_with_a_device_term(), 5,
+        resolved = rule_sets_by_household_batch(
+            [household_batch_of(n) for n in (1, 2, 3)],
+            self._catalog_with_a_device_term(), 5,
             metadata_path=path,
         )
         assert set(resolved) == {"ElektriciteitsgebruikRadiator", ""}
-        assert resolved["ElektriciteitsgebruikRadiator"].households == [1, 2]
-        assert resolved[""].households == [3]
+        assert resolved["ElektriciteitsgebruikRadiator"].household_batches == [
+            household_batch_of(1), household_batch_of(2)
+        ]
+        assert resolved[""].household_batches == [household_batch_of(3)]
 
     def test_an_absent_device_leaves_the_formula_set(self, tmp_path):
-        from etdtransform.constraints import rule_sets_by_household
+        from etdtransform.constraints import rule_sets_by_household_batch
 
         path = _metadata_csv(tmp_path, {
             1: "ElektriciteitsgebruikRadiator", 2: "",
         })
-        resolved = rule_sets_by_household(
-            [1, 2], self._catalog_with_a_device_term(), 5, metadata_path=path,
+        resolved = rule_sets_by_household_batch(
+            [household_batch_of(1), household_batch_of(2)],
+            self._catalog_with_a_device_term(), 5, metadata_path=path,
         )
-        # Household 1 has no radiator meter, so the term is substituted to zero and
+        # The first household batch has no radiator meter, so the term is
+        # substituted to zero and
         # its formula no longer names it -- it is not a candidate that a null
         # check rejects later, it is simply not in the set.
         specialized = resolved["ElektriciteitsgebruikRadiator"].formulas
@@ -230,24 +238,27 @@ class TestRuleSetsByHousehold:
             [DIFF, "ElektriciteitsgebruikRadiatorDiff"]
         ]
 
-    def test_a_household_the_metadata_does_not_mention_raises(self, tmp_path):
-        from etdtransform.constraints import rule_sets_by_household
+    def test_a_household_batch_the_metadata_does_not_mention_raises(self, tmp_path):
+        from etdtransform.constraints import rule_sets_by_household_batch
 
         path = _metadata_csv(tmp_path, {1: ""})
-        # Defaulting to the full model would narrow HARDER on a household
-        # whose devices are unknown, and absence may only widen.
+        # Defaulting to the full model would narrow HARDER on a
+        # household batch whose devices are unknown, and absence may only
+        # widen.
         with pytest.raises(ValueError, match="not in the BSV metadata"):
-            rule_sets_by_household(
-                [1, 99], self._catalog_with_a_device_term(), 5,
+            rule_sets_by_household_batch(
+                [household_batch_of(1), 99],
+                self._catalog_with_a_device_term(), 5,
                 metadata_path=path,
             )
 
     def test_each_set_gets_a_package_at_the_grid_cadence(self, tmp_path):
-        from etdtransform.constraints import rule_sets_by_household
+        from etdtransform.constraints import rule_sets_by_household_batch
 
         path = _metadata_csv(tmp_path, {1: ""})
-        resolved = rule_sets_by_household(
-            [1], self._catalog_with_a_device_term(), 15, metadata_path=path,
+        resolved = rule_sets_by_household_batch(
+            [household_batch_of(1)], self._catalog_with_a_device_term(), 15,
+            metadata_path=path,
         )
         assert resolved[""].package is not None
         assert resolved[""].apparaat_set == ""
@@ -331,7 +342,7 @@ def _impute(frame, constraints, apparaat_sets=None):
 
 
 class TestRunTimeSelection:
-    def test_each_household_narrows_with_its_own_sets_table(self):
+    def test_each_household_batch_narrows_with_its_own_sets_table(self):
         constraints = _set_keyed(
             [
                 ("", _constraints((DIFF, "K", {"K": 1}))),
@@ -341,10 +352,13 @@ class TestRunTimeSelection:
         out = _impute(
             _two_household_frame(),
             constraints,
-            apparaat_sets={1: "", 2: RADIATOR_SET},
+            apparaat_sets={
+                household_batch_of(1): "",
+                household_batch_of(2): RADIATOR_SET,
+            },
         )
-        one = out[out[ids.HOUSEHOLD] == 1]
-        two = out[out[ids.HOUSEHOLD] == 2]
+        one = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]
+        two = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(2)]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([0.5] * 3)
 
@@ -354,16 +368,19 @@ class TestRunTimeSelection:
             _impute(
                 _two_household_frame(),
                 constraints,
-                apparaat_sets={1: "", 2: RADIATOR_SET},
+                apparaat_sets={
+                household_batch_of(1): "",
+                household_batch_of(2): RADIATOR_SET,
+            },
             )
 
-    def test_a_household_without_a_set_raises_as_metadata_gap(self):
+    def test_a_household_batch_without_a_set_raises_as_metadata_gap(self):
         constraints = _set_keyed([("", _constraints((DIFF, "K", {"K": 1})))])
         with pytest.raises(ValueError, match="apparaat-set registered"):
             _impute(
                 _two_household_frame(),
                 constraints,
-                apparaat_sets={1: ""},
+                apparaat_sets={household_batch_of(1): ""},
             )
 
     def test_pre_specialization_table_is_the_empty_set_with_a_warning(
@@ -376,7 +393,7 @@ class TestRunTimeSelection:
         # Both households narrow with the one table, exactly as before the
         # split: household 2's bound follows K too, so its jump of 6 cannot
         # be placed inside [1, 1] rows and the values pin at 1 each.
-        one = out[out[ids.HOUSEHOLD] == 1]
-        two = out[out[ids.HOUSEHOLD] == 2]
+        one = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]
+        two = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(2)]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)

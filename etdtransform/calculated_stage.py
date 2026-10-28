@@ -34,7 +34,7 @@ def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
     Two compact sidecars (factored by schema group, so size is groups x derived
     vars + one row per household, not households x vars):
       - derivation_plan.parquet:      schema_group_id -> (variable, rhs_text, rhs_vars)
-      - household_derivation.parquet: ``ids.HOUSEHOLD`` -> schema_group_id
+      - household_derivation.parquet: ``ids.HOUSEHOLD_BATCH`` -> schema_group_id
 
     A variable absent from a group's plan was provided/measured (not derived).
     Both carry catalog_hash so the equations are reproducible.
@@ -57,8 +57,8 @@ def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
     plan_df.to_parquet(os.path.join(out_dir, "derivation_plan.parquet"))
 
     hh_df = pd.DataFrame(
-        hh_rows, columns=[ids.HOUSEHOLD, "schema_group_id"]
-    ).astype({ids.HOUSEHOLD: "Int64", "schema_group_id": "Int64"})
+        hh_rows, columns=[ids.HOUSEHOLD_BATCH, "schema_group_id"]
+    ).astype({ids.HOUSEHOLD_BATCH: "Int64", "schema_group_id": "Int64"})
     hh_df["catalog_hash"] = pd.array([catalog_hash] * len(hh_df), dtype="string")
     hh_df.to_parquet(os.path.join(out_dir, "household_derivation.parquet"))
 
@@ -79,7 +79,7 @@ def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
     logging.info(
         f"[calc ibis] derivation provenance: {len(plan_df)} plan rows over "
         f"{hh_df['schema_group_id'].nunique()} schema groups, "
-        f"{len(hh_df)} households, catalog {catalog_hash}"
+        f"{len(hh_df)} household batches, catalog {catalog_hash}"
     )
 
 
@@ -231,20 +231,20 @@ def add_calculated_columns_to_hh_data_ibis(
     analysis_cols = sorted(effective_cols & (all_rhs_vars | all_perf_cols))
 
     logging.info(
-        f"[calc ibis] Computing per-household availability for "
+        f"[calc ibis] Computing per-household-batch availability for "
         f"{len(analysis_cols)} candidate columns..."
     )
 
     agg_exprs = [tbl[col].notnull().mean().name(col) for col in analysis_cols]
     with checkpoints.phase("availability_scan") as mark:
-        availability_df = tbl.group_by(ids.HOUSEHOLD).agg(agg_exprs).execute()
+        availability_df = tbl.group_by(ids.HOUSEHOLD_BATCH).agg(agg_exprs).execute()
         mark["rows"] = len(availability_df)
         mark["note"] = f"{len(analysis_cols)} candidate columns"
 
-    # Each household's own formula set and bounds, for the gap fill at the end
-    # of the stage. Resolved once for the whole run: households sharing an
-    # ApparaatOntbrekend declaration share both objects, and the presolve is
-    # the expensive half.
+    # Each household batch's own formula set and bounds, for the gap fill at
+    # the end of the stage. Resolved once for the whole run: household batches
+    # sharing an ApparaatOntbrekend declaration share both objects, and the
+    # presolve is the expensive half.
     _rule_sets = None
     from etdtransform.calculated_flags import KEY_COLUMNS as _fill_keys
 
@@ -257,11 +257,12 @@ def add_calculated_columns_to_hh_data_ibis(
         )
     elif _calc_grid_minutes is not None:
         try:
-            from etdtransform.constraints import rule_sets_by_household
+            from etdtransform.constraints import rule_sets_by_household_batch
 
             with checkpoints.phase("household_rule_sets") as mark:
-                _rule_sets = rule_sets_by_household(
-                    availability_df[ids.HOUSEHOLD], catalog_df, _calc_grid_minutes
+                _rule_sets = rule_sets_by_household_batch(
+                    availability_df[ids.HOUSEHOLD_BATCH], catalog_df,
+                    _calc_grid_minutes,
                 )
                 mark["note"] = f"{len(_rule_sets)} apparaat-set(s)"
         except (FileNotFoundError, ValueError) as _rules_error:
@@ -272,10 +273,10 @@ def add_calculated_columns_to_hh_data_ibis(
                 _rules_error,
             )
 
-    # Build schema groups: frozenset(available_cols) -> list[int household id]
+    # Build schema groups: frozenset(available_cols) -> household batch ids
     schema_groups: dict = {}
     for _, row in availability_df.iterrows():
-        household_id = int(row[ids.HOUSEHOLD])
+        batch_id = int(row[ids.HOUSEHOLD_BATCH])
         avail = frozenset(
             col for col in analysis_cols
             # Available means the column holds at least one value. No fraction
@@ -283,11 +284,11 @@ def add_calculated_columns_to_hh_data_ibis(
             # output rather than a silent zero.
             if not pd.isna(row.get(col, float("nan"))) and row[col] > 0
         )
-        schema_groups.setdefault(avail, []).append(household_id)
+        schema_groups.setdefault(avail, []).append(batch_id)
 
     logging.info(
         f"[calc ibis] {len(schema_groups)} unique schema groups "
-        f"across {len(availability_df)} households"
+        f"across {len(availability_df)} household batches"
     )
 
     # Phase 2 + 3: plan and mutate per schema group
@@ -360,7 +361,9 @@ def add_calculated_columns_to_hh_data_ibis(
                     needed_rhs.update(rule_row["rhs_vars"])
             blocked_inputs = sorted((needed_rhs - available_cols) & set(analysis_cols))
             if blocked_inputs:
-                group_avail = availability_df[availability_df[ids.HOUSEHOLD].isin(group_ids)]
+                group_avail = availability_df[
+                    availability_df[ids.HOUSEHOLD_BATCH].isin(group_ids)
+                ]
                 avail_by_col = {
                     col: float(group_avail[col].mean())
                     for col in blocked_inputs
@@ -445,7 +448,7 @@ def add_calculated_columns_to_hh_data_ibis(
                 )
             return scoped
 
-        def _pass2_fill(table, household_ids):
+        def _pass2_fill(table, household_batch_ids):
             """PASS 2: fill the gaps pass 1 could not reach.
 
             Two routes, each recorded separately: cell filling evaluates a
@@ -457,7 +460,8 @@ def add_calculated_columns_to_hh_data_ibis(
             if _rule_sets is None:
                 return table
             filled, report, fill_plan = fill_gaps_in_table(
-                table, household_ids, _rule_sets, checkpoints=checkpoints
+                table, household_batch_ids, _rule_sets,
+                checkpoints=checkpoints,
             )
             if not fill_plan.empty:
                 _fill_plan_frames.append(
@@ -465,8 +469,10 @@ def add_calculated_columns_to_hh_data_ibis(
                 )
             return filled
 
-        for _hid in group_ids:
-            _prov_hh_rows.append({ids.HOUSEHOLD: int(_hid), "schema_group_id": group_idx})
+        for _bid in group_ids:
+            _prov_hh_rows.append(
+                {ids.HOUSEHOLD_BATCH: int(_bid), "schema_group_id": group_idx}
+            )
 
         # ONE SHARD IS THE UNIT OF WORK: one (household, household batch) pair,
         # derived, filled and written on its own, so the amount of data in
@@ -475,13 +481,13 @@ def add_calculated_columns_to_hh_data_ibis(
         # write: scattering every unit in one partitioned COPY costs
         # superlinearly in rows, in time and in peak memory, while writing
         # per unit keeps both flat.
-        _group_id_set = {int(h) for h in group_ids}
+        _group_id_set = {int(b) for b in group_ids}
         _group_units = [
-            unit for unit in _shard_units if unit[0] in _group_id_set
+            unit for unit in _shard_units if unit[1] in _group_id_set
         ]
         if not _group_units:
             raise ValueError(
-                f"schema group {group_idx} has households "
+                f"schema group {group_idx} has household batches "
                 f"{sorted(group_ids)[:5]} with no shard in the "
                 f"source; a unit path cannot be formed."
             )
@@ -494,7 +500,7 @@ def add_calculated_columns_to_hh_data_ibis(
                     record_provenance=(_unit_index == 0),
                 )
                 mark["note"] = f"{len(plan)} formula(s)"
-            _unit_tbl = _pass2_fill(_unit_tbl, [_household_id])
+            _unit_tbl = _pass2_fill(_unit_tbl, [_batch_id])
             with checkpoints.phase(
                 "pass1_derive_and_write_shard",
                 note=f"household {_household_id} batch {_batch_id}",

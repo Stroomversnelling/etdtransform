@@ -584,7 +584,7 @@ BITS_SUFFIX = "__bits"
 KEY_COLUMNS = (ids.HOUSEHOLD_BATCH, "ReadingDate")
 
 
-def fill_gaps_in_table(table, household_ids, rule_sets,
+def fill_gaps_in_table(table, household_batch_ids, rule_sets,
                        key_columns=KEY_COLUMNS, checkpoints=None):
     """Run both fill routes over *table* and return the patched table.
 
@@ -602,9 +602,10 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
     OR-ed, which is idempotent, so a cell already marked by the derivation
     pass keeps that mark and gains the fill's.
 
-    Each household is given its own formula set and bounds via *rule_sets*
-    from :func:`etdtransform.constraints.rule_sets_by_household`, so no row is
-    offered a formula naming a device its declaration says is absent.
+    Each household batch is given its own formula set and bounds via
+    *rule_sets* from
+    :func:`etdtransform.constraints.rule_sets_by_household_batch`, so no row
+    is offered a formula naming a device its declaration says is absent.
 
     Returns ``(table, report, plan)``.
     """
@@ -624,7 +625,10 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
     plans = []
     pieces: dict = {}
     members_by_set = {
-        key: sorted({int(h) for h in household_ids} & set(rule_set.households))
+        key: sorted(
+            {int(b) for b in household_batch_ids}
+            & set(rule_set.household_batches)
+        )
         for key, rule_set in rule_sets.items()
     }
 
@@ -643,7 +647,10 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
             | {c for c in present if c.endswith("_is_imputed")}
             | ({impute_type_column(t) for t in targets} & present)
         )
-        scope = table.filter(table[ids.HOUSEHOLD].isin(members))
+        # *members* are household batches, because that is what a rule set
+        # covers: the declaration it was built from is made per household
+        # batch. Filtering on the household would match no row.
+        scope = table.filter(table[ids.HOUSEHOLD_BATCH].isin(members))
         gap = None
         for target in targets:
             missing = scope[target].isnull()

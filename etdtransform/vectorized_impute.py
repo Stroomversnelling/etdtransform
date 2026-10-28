@@ -248,7 +248,7 @@ def _row_bounds_per_cadence(
     packages,
     imputed=None,
     physical_model_by_project=None,
-    apparaat_sets_by_household=None,
+    apparaat_sets_by_household_batch=None,
 ):
     """Per-row narrowed bounds for *diff_col*, at each row's own cadence,
     physical model and apparaat-set.
@@ -268,11 +268,11 @@ def _row_bounds_per_cadence(
     the column thresholds apply through ``grid_bound``. A project absent from
     *physical_model_by_project* raises: the model decides the rules, so an
     unregistered project is a sync gap, never a default. Likewise a
-    household absent from *apparaat_sets_by_household*, or a set with no
+    household batch absent from *apparaat_sets_by_household_batch*, or a set with no
     compiled table, raises as an unsynced state.
 
     A constraint table WITHOUT the ``apparaat_set`` column (the pre-split
-    artifact) is treated as the empty-set table for every household, with a
+    artifact) is treated as the empty-set table for every household batch, with a
     warning naming the re-sync -- tests and comparison runs on the committed
     artifact keep working until the next apply.
 
@@ -308,26 +308,28 @@ def _row_bounds_per_cadence(
 
     set_keyed = "apparaat_set" in constraints.columns
     if set_keyed:
-        if apparaat_sets_by_household is None:
-            from etdtransform.constraints import apparaat_set_by_household
+        if apparaat_sets_by_household_batch is None:
+            from etdtransform.constraints import apparaat_set_by_household_batch
 
-            apparaat_sets_by_household = apparaat_set_by_household()
-        if ids.HOUSEHOLD in df.columns:
-            set_keys = df[ids.HOUSEHOLD].map(apparaat_sets_by_household)
-            unmapped_households = (
-                df[ids.HOUSEHOLD][set_keys.isna()].dropna().unique()
+            apparaat_sets_by_household_batch = apparaat_set_by_household_batch()
+        if ids.HOUSEHOLD_BATCH in df.columns:
+            set_keys = df[ids.HOUSEHOLD_BATCH].map(
+                apparaat_sets_by_household_batch
             )
-            if len(unmapped_households):
+            unmapped_batches = (
+                df[ids.HOUSEHOLD_BATCH][set_keys.isna()].dropna().unique()
+            )
+            if len(unmapped_batches):
                 raise ValueError(
-                    f"No apparaat-set registered for {ids.HOUSEHOLD} "
-                    f"{sorted(int(h) for h in unmapped_households)}. The "
+                    f"No apparaat-set registered for {ids.HOUSEHOLD_BATCH} "
+                    f"{sorted(int(b) for b in unmapped_batches)}. The "
                     f"declared-absent set selects the specialized constraint "
                     f"table, so it cannot default. Rebuild the BSV metadata "
                     f"(sync_data_model.py / build_bsv_metadata.py)."
                 )
             set_keys = set_keys.astype("string")
         else:
-            # No household column: a caller that scoped its own frame. The
+            # No household batch column: a caller that scoped its own frame. The
             # empty set is the unspecialized table and the only honest pick.
             set_keys = pd.Series("", index=df.index, dtype="string")
         available_sets = set(constraints["apparaat_set"].astype(str))
@@ -337,7 +339,7 @@ def _row_bounds_per_cadence(
             logging.warning(
                 "[narrow] constraints table carries no apparaat_set column "
                 "(pre-specialization artifact): treating it as the empty-set "
-                "table for every household. Re-run the data model sync to "
+                "table for every household batch. Re-run the data model sync to "
                 "write the per-set tables."
             )
         set_keys = pd.Series("", index=df.index, dtype="string")
@@ -1051,7 +1053,7 @@ def impute_and_normalize(
         ``ids.HOUSEHOLD -> apparaat-set key`` selecting the specialized
         constraint table when *constraints* carries the ``apparaat_set``
         column. Defaults to the BSV metadata's declarations
-        (``apparaat_set_by_household``); ignored for a pre-specialization
+        (``apparaat_set_by_household_batch``); ignored for a pre-specialization
         table, which is treated as the empty set with a warning.
     volume_reports : list, optional
         When given, one per-gap volume frame per column is appended, each
@@ -1209,7 +1211,7 @@ def impute_and_normalize(
                 df, diff_col, constraints, _cadence, _packages,
                 imputed=_imputed_so_far,
                 physical_model_by_project=physical_models,
-                apparaat_sets_by_household=apparaat_sets,
+                apparaat_sets_by_household_batch=apparaat_sets,
             )
 
             # Judged before the fill writes into the column: a delivered value

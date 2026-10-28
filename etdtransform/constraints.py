@@ -199,7 +199,7 @@ class RuleSet:
     """The formulas and the bounds that apply to one apparaat-set."""
 
     apparaat_set: str
-    households: list
+    household_batches: list
     formulas: pd.DataFrame
     package: "ConstraintPackage"
 
@@ -261,7 +261,7 @@ def rule_sets_by_household_batch(household_batch_ids, catalog, cadence_minutes,
     return {
         key: RuleSet(
             apparaat_set=key,
-            households=sorted(members),
+            household_batches=sorted(members),
             formulas=specialize_catalog_for_absent(
                 catalog, key.split("|") if key else []
             ),
