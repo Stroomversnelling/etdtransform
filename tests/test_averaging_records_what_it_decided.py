@@ -169,8 +169,8 @@ class TestTheFillIsNotGivenThem:
 
 
 class TestWhatTheAveragingThrewOut:
-    """A5. Per project, beside the coverage it produced: a household-batch-wide total
-    cannot say which project lost readings."""
+    """A5. Per project, beside the coverage it produced: a total over the whole
+    estate cannot say which project lost readings."""
 
     def test_a_reading_over_the_bound_is_counted_against_its_project(self):
         values = [READING] * N

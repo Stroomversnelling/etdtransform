@@ -152,23 +152,27 @@ def add_calculated_columns_adaptive(
     """
     Derive missing columns from available data using the pre-built equation catalog.
 
-    Availability is assessed per household (ids.HOUSEHOLD): a column is considered
-    available for a household only if it holds at least one value for that
-    household.  This correctly handles mixed household batches where different providers
-    supply different column sets.
+    Availability is assessed per household batch (``ids.HOUSEHOLD_BATCH``): a
+    column counts as available for a household batch only if it holds at least
+    one value there. Per household batch rather than per household, because
+    which columns arrive follows the devices, and a later household batch of
+    the same household may hold it renovated -- different devices, so a
+    different plan. It also handles providers that supply different column
+    sets.
 
-    Households with the same column-availability pattern share a cached derivation
-    plan, so the catalog is only traversed once per unique provider schema.
+    Household batches with the same column-availability pattern share a cached
+    derivation plan, so the catalog is only traversed once per unique provider
+    schema.
 
     Parameters
     ----------
     df : pd.DataFrame
-        The mapped dataset with a ids.HOUSEHOLD column.
+        The mapped data, carrying ``ids.HOUSEHOLD_BATCH``.
     catalog_df : pd.DataFrame or None
         Pre-built derivation catalog.  Loaded automatically when None.
     target_columns : set[str] or None
         Columns to derive.  When None, derives all catalog lhs targets that are
-        not already available for each household.
+        not already available for each household batch.
     fillna : bool
         Fill missing values in the right-hand-side columns with 0 before
         computing. Default False: a derived value whose input is unknown is

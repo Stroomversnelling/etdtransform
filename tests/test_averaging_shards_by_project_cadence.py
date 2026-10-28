@@ -433,7 +433,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         assert bool(imputed.iloc[self.GAP].all())
 
     def test_one_shared_grid_publishes_a_third_of_the_interval(self):
-        """What the household-batch-wide grid did to the artifact itself. A consumer
+        """What one grid for the whole estate did to the artifact itself. A consumer
         reading an average of a quarter-hourly project got a third of the
         energy that interval carries."""
         frame = self._frame()

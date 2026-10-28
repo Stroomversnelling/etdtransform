@@ -308,8 +308,8 @@ def _combine_cadence_groups(per_grid, project_id_column, diff_columns) -> dict:
             else _coverage_duty_by_project(avg, col, project_id_column)
         )
         # Recombined from the per-project rows rather than from each pass's own
-        # figure: the rows partition the slots, so summing them gives the
-        # household-batch-wide share exactly, with no weighting to get wrong.
+        # figure: the rows partition the slots, so summing them gives the share
+        # over the whole run exactly, with no weighting to get wrong.
         slots = int(duty_frame["slots"].sum()) if len(duty_frame) else 0
         present = int(duty_frame["present"].sum()) if len(duty_frame) else 0
         consuming = int(duty_frame["consuming"].sum()) if len(duty_frame) else 0
@@ -341,7 +341,7 @@ def calculate_average_diff_ibis(
     The project average of each interval column, per project and reading date.
 
     This is what imputation fills from, and the only implementation: the
-    aggregations run as SQL, so the full household batch never materialises in Python
+    aggregations run as SQL, so the full table never materialises in Python
     memory. Only the small result tables (one row per project, or one row per
     project x date) are executed.
 
@@ -517,7 +517,7 @@ def _average_at_one_cadence(
 
     # Every column's flagged count in one aggregate, so the loop below does not
     # make a round trip per column. Grouped by project, which costs the same
-    # round trip and is the grain the counts are published at -- a household-batch-wide
+    # round trip and is the grain the counts are published at -- a run-wide
     # total cannot say which project lost readings.
     _guard_agg = {}
     for i, c in enumerate(diff_columns):
@@ -1187,7 +1187,7 @@ def prepare_diff_averages_for_impute_ibis(
     min_eligible : int
         Eligible households a window needs before its average is published
         (:func:`etdtransform.presence.window_is_averageable`). Lower it only for
-        a household batch deliberately smaller than a project -- a ten-household sample
+        a sample estate deliberately smaller than a project -- ten households
         is below the floor by construction, and leaving the floor there would
         publish no average at all and send every column down the no-average
         path, which looks like a passing run and tests almost nothing.

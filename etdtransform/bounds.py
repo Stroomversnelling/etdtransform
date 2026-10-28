@@ -117,7 +117,7 @@ def dataset_grid_minutes(mapped_folder_path=None):
 
     An undeclared grid is an error rather than a default. The grid sets the
     spacing every threshold is judged at, so assuming one silently rescales
-    every bound in the household batch.
+    every bound in the project.
 
     Raises
     ------

@@ -243,12 +243,12 @@ def sharded_fixture_mapped(mapped_dataset, _include_updated):
     """The mapped dataset, with its index `Meenemen`-populated.
 
     The mapping writes whichever layout `mapped_output_format` names, which is
-    the sharded one by default, so this is the household batch as generated rather than
-    a copy of it in another layout. Depends on `_include_updated`, which
-    rewrites the index the stages filter on.
+    the sharded one by default, so this is the generated dataset as written
+    rather than a copy of it in another layout. Depends on `_include_updated`,
+    which rewrites the index the stages filter on.
     """
-    # The count the household batch was generated with. The shape is a parameter of
-    # the generator, so a literal here would contradict any other shape.
+    # The count the generated dataset was built with. The shape is a parameter
+    # of the generator, so a literal here would contradict any other shape.
     expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
     found = mapped_household_paths(mapped_dataset)
     assert len(found) == expected, (

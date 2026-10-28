@@ -38,7 +38,7 @@ RULE_SOURCE = "rule bound from known values"
 
 
 def grid_scaled_bounds(column: str, grid_minutes) -> tuple:
-    """The declared threshold for *column*, scaled to the household batch grid.
+    """The declared threshold for *column*, scaled to *grid_minutes*.
 
     A calculated column is judged at the GRID cadence, never at a delivered
     column's own cadence and never at the threshold's declared unit. The
@@ -100,7 +100,7 @@ def scan_calculated_columns(
         The columns this run derived. The caller knows them from the
         derivation plan; deriving them again here would be a second copy.
     grid_minutes : int, float or None
-        The household batch grid. Read from *mapped_folder_path* when None.
+        The grid the rows sit on. Read from *mapped_folder_path* when None.
     package : constraint package or None
         From :func:`etdtransform.constraints.build_constraint_package` at the
         grid cadence. When None the rule-bound flag is skipped and only the

@@ -105,7 +105,11 @@ class DatasetAdapter:
 
     def feasibility_report(self, df: pd.DataFrame, required_targets: set, physical_model=None) -> dict:
         """
-        Determine which required target columns can be derived from this household batch.
+        Determine which required target columns can be derived from *df*.
+
+        Generic over the frame it is given. The caller passes the rows of one
+        household batch, because which columns are available follows the
+        devices that delivered them.
 
         Uses an iterative fixed-point approach: a newly derivable column is added
         to the available set and may unlock further derivations.
