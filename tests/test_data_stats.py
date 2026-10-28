@@ -28,7 +28,7 @@ from etdmap.data_stats import (
     NUMERIC_STATS_SCHEMA,
     compute_numeric_column_stats,
 )
-from etdmap.testing import household_batch_of
+from etdmap.testing import one_to_one_test_household_batch_of
 
 from etdtransform.data_stats import get_data_stats
 
@@ -62,7 +62,7 @@ def _build_fixture_parquet(tmp_dir: str) -> str:
                 ok = False
             rows.append({
                 ids.HOUSEHOLD: hh,
-                ids.HOUSEHOLD_BATCH: household_batch_of(hh),
+                ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(hh),
                 "ReadingDate": ts,
                 "kWh": kwh,
                 "validate_ok": ok,
@@ -135,13 +135,13 @@ class TestValueParityExactPrecision:
             columns=[ids.HOUSEHOLD_BATCH, "kWh"],
             dtype_backend="numpy_nullable",
         )
-        sub = df[df[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]["kWh"].dropna()
+        sub = df[df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1)]["kWh"].dropna()
         sub_nullable = pd.array(sub.tolist(), dtype="Float64")
         kernel = compute_numeric_column_stats(pd.Series(sub_nullable))
 
         out = get_data_stats(fixture_parquet, seasonal=False, precision="exact")
         row = out[
-            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(1))
+            (out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1))
             & (out["column"] == "kWh")
             & (out["season"] == "annual")
         ].iloc[0]
@@ -179,7 +179,7 @@ class TestCrossJoinPadding:
         values -- not a missing row."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
-            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(3))
+            (out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(3))
             & (out["column"] == "kWh")
             & (out["season"] == "annual")
         ]
@@ -198,7 +198,7 @@ class TestCrossJoinPadding:
         # The second household batch has data only in cold months; the warm slice
         # should still emit a row, with count=0.
         warm = out[
-            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(2))
+            (out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2))
             & (out["column"] == "kWh")
             & (out["season"] == "warm")
         ]
@@ -216,7 +216,7 @@ class TestBooleanBranch:
         count/mean/min/max are populated, quantile stats are NA."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
-            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(1))
+            (out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1))
             & (out["column"] == "validate_ok")
             & (out["season"] == "annual")
         ].iloc[0]

@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 from test_constraint_package import _constraints
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -42,7 +42,7 @@ def _frame(columns):
     the builder completes neither half and the stated readings bound the gaps.
     """
     return household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {
             name: list(values) for name, values in columns.items()
         }},
         start="2026-01-01", freq="5min", tz=None,

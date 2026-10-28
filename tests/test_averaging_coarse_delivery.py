@@ -27,8 +27,8 @@ from etdmap import ids
 from etdmap.data_model import thresholds_dict
 from etdmap.testing import (
     PAIRS_EMPTY,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     sidecar_frame,
 )
 
@@ -59,7 +59,7 @@ RISE = 0.6  # consumption delivered in one hour
 
 #: The household every frame below describes. Its household batch -- keyed on
 #: `ids.HOUSEHOLD_BATCH`, which the cadence sidecar and every lookup built from it
-#: are keyed on too -- is ``household_batch_of(HOUSEHOLD)``.
+#: are keyed on too -- is ``one_to_one_test_household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
 #: Where every frame below starts.
@@ -76,7 +76,7 @@ def _coarse_register_cadence():
              "n_readings": N},
             {"column": CUM, "cadence_minutes": GRID * K, "n_readings": N // K},
         ],
-        household_batch_id=household_batch_of(HOUSEHOLD),
+        household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
     )
 
 
@@ -92,7 +92,7 @@ def _coarse_interval_cadence():
             {"column": DIFF, "cadence_minutes": GRID * K,
              "n_readings": N // K},
         ],
-        household_batch_id=household_batch_of(HOUSEHOLD),
+        household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
     )
 
 
@@ -107,7 +107,7 @@ def _coarse_register_frame(n=N, rise=RISE):
         else:
             values.append(pd.NA)
     df = household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {CUM: values}},
         start=START,
         freq=f"{GRID}min",
         tz=None,
@@ -126,7 +126,7 @@ def _coarse_interval_frame(n=N, reading=RISE):
     for row in range(K - 1, n, K):
         values[row] = reading
     return household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {DIFF: values}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {DIFF: values}},
         start=START,
         freq=f"{GRID}min",
         tz=None,
@@ -188,7 +188,7 @@ class TestSpreadingACoarseDeliveredRegister:
         """Cadence is measured on the columns as delivered, so a column derived
         later has no row of its own."""
         assert cadence_minutes_by_household_batch(DIFF, _coarse_register_cadence()) == {
-            household_batch_of(HOUSEHOLD): float(GRID * K)
+            one_to_one_test_household_batch_of(HOUSEHOLD): float(GRID * K)
         }
 
 
@@ -217,7 +217,7 @@ class TestSpreadingACoarseDeliveredInterval:
         it through would report the delivered interval as reporting every slot,
         and the spreading would stop."""
         assert cadence_minutes_by_household_batch(DIFF, _coarse_interval_cadence()) == {
-            household_batch_of(HOUSEHOLD): float(GRID * K)
+            one_to_one_test_household_batch_of(HOUSEHOLD): float(GRID * K)
         }
 
 

@@ -21,7 +21,11 @@ import etdmap
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame, index_frame
+from etdmap.testing import (
+    household_batches_frame,
+    index_frame,
+    one_to_one_test_household_batch_of,
+)
 
 import etdtransform
 from etdtransform.load_data import get_household_table, get_household_tables
@@ -34,7 +38,7 @@ _ROWS_PER_HH = 4
 #: The household batch each household in this folder is read through. ids.HOUSEHOLD_BATCH
 #: is what the index is joined on, so every artifact here carries it.
 _HOUSEHOLD_BATCHES = {
-    household_id: household_batch_of(household_id)
+    household_id: one_to_one_test_household_batch_of(household_id)
     for household_id in _HOUSEHOLDS
 }
 

@@ -1441,30 +1441,33 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
 
 
 def _assert_batch_safe_ibis(tbl) -> None:
-    """Engine-side variant of assert_imputation_input_batch_safe for lazy tables
-    (cheap aggregates; the table is never materialised in full)."""
-    from etdmap.index_helpers import HouseBatchOverlapError
+    """Reject a stage input that carries a timestamp twice in one series.
 
-    if ids.HOUSEHOLD_BATCH in tbl.columns:
-        per_hh = (
-            tbl.group_by(ids.HOUSEHOLD)
-            .aggregate(n_batches=tbl[ids.HOUSEHOLD_BATCH].nunique())
-        )
-        multi = per_hh.filter(per_hh.n_batches > 1)[ids.HOUSEHOLD].execute()
-        if len(multi):
-            raise HouseBatchOverlapError(
-                f"[prepare_diff_averages] Household(s) {sorted(int(h) for h in multi)} span "
-                f"more than one household batch; project averages would mix "
-                f"household batches. "
-                f"Household-batch-aware averaging is not implemented yet."
-            )
+    The engine-side half of :func:`assert_imputation_input_batch_safe`, on the
+    whole stage input rather than one chunk of it: cheap aggregates, and the
+    table is never materialised in full.
+
+    One household batch is one series, so ``ids.HOUSEHOLD_BATCH`` is the key a
+    duplicate is judged on. A household holding several household batches is
+    not a finding here -- each is its own series, in its own project, and
+    nothing a stage computes crosses them.
+
+    Raises
+    ------
+    ValueError
+        Duplicate (ids.HOUSEHOLD_BATCH, ReadingDate) rows. These double-weight
+        the project averages and break the diff and sort order.
+    """
     n_rows = int(tbl.count().execute())
-    n_keys = int(tbl[[ids.HOUSEHOLD, "ReadingDate"]].distinct().count().execute())
+    n_keys = int(
+        tbl[[ids.HOUSEHOLD_BATCH, "ReadingDate"]].distinct().count().execute()
+    )
     if n_rows != n_keys:
         raise ValueError(
-            f"[prepare_diff_averages] {n_rows - n_keys} duplicate ({ids.HOUSEHOLD}, ReadingDate) "
-            f"row(s) -- overlapping household batch periods would double-weight the project "
-            f"averages. Resolve the household batch overlap first."
+            f"[batch safety] {n_rows - n_keys} duplicate "
+            f"({ids.HOUSEHOLD_BATCH}, ReadingDate) row(s) -- a timestamp twice "
+            f"in one series double-weights the project averages and breaks the "
+            f"diff math. Resolve the duplication first."
         )
 
 
@@ -1472,7 +1475,7 @@ def prepare_diff_averages_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cumulative_columns: list = None,
-    household_ids=None,
+    household_batch_ids=None,
     min_eligible: int = MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ):
     """
@@ -1487,14 +1490,19 @@ def prepare_diff_averages_sharded(
     Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
     pipeline's artifact area), keeping legacy artifacts untouched.
 
-    Household-batch safety: refuses multi-household-batch households and overlapping household batch periods
-    (see assert_imputation_input_batch_safe) -- the estimation inputs feed
-    everything downstream.
+    Batch safety: refuses a timestamp twice in one household batch (see
+    _assert_batch_safe_ibis) -- the estimation inputs feed everything
+    downstream. A household delivered as several household batches is ordinary
+    input: each is its own series, in its own project, and an average is taken
+    per project.
     """
     import ibis as _ibis
 
     from etdmap.index_helpers import read_index
-    from etdtransform.load_data import included_household_ids, mapped_household_table
+    from etdtransform.load_data import (
+        included_household_batch_ids,
+        mapped_household_table,
+    )
 
     if mapped_folder_path is None:
         mapped_folder_path = etdtransform.options.mapped_folder_path
@@ -1505,10 +1513,10 @@ def prepare_diff_averages_sharded(
             "area)."
         )
 
-    if household_ids is not None:
-        household_ids = sorted(int(x) for x in household_ids)
+    if household_batch_ids is not None:
+        household_batch_ids = sorted(int(x) for x in household_batch_ids)
     else:
-        household_ids = included_household_ids(mapped_folder_path)
+        household_batch_ids = included_household_batch_ids(mapped_folder_path)
 
     index_df, _ = read_index(mapped_folder_path)
     if ids.HOUSEHOLD_BATCH not in index_df.columns:
@@ -1533,7 +1541,7 @@ def prepare_diff_averages_sharded(
     )
 
     tbl = mapped_household_table(mapped_folder_path)
-    tbl = tbl.filter(tbl[ids.HOUSEHOLD].isin(household_ids))
+    tbl = tbl.filter(tbl[ids.HOUSEHOLD_BATCH].isin(household_batch_ids))
     tbl = tbl.join(project_map, tbl[ids.HOUSEHOLD_BATCH] == project_map[ids.HOUSEHOLD_BATCH])
 
     _assert_batch_safe_ibis(tbl)

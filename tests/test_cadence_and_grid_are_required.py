@@ -14,9 +14,9 @@ from etdmap.mapping_helpers import CADENCE_FILENAME
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    household_batch_of,
     household_batches_frame,
     index_frame,
+    one_to_one_test_household_batch_of,
     sidecar_frame,
 )
 
@@ -27,7 +27,7 @@ pytestmark = pytest.mark.unit
 
 #: The household the artifacts below describe. Its household batch -- the key of the
 #: index, of the cadence sidecar and of every lookup built from them -- is
-#: ``household_batch_of(HOUSEHOLD)``.
+#: ``one_to_one_test_household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
 CUM = "ElektriciteitNetgebruik"
@@ -42,13 +42,13 @@ def _write_cadence(folder):
     cadence_sidecar(
         [CUM],
         minutes=CADENCE,
-        household_batch_id=household_batch_of(HOUSEHOLD),
+        household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
     ).to_parquet(folder / CADENCE_FILENAME, engine="pyarrow")
 
 
 def _write_index(folder, frequency="5min"):
     index_frame(
-        [household_batch_of(HOUSEHOLD)], Gegevensfrequentie=frequency
+        [one_to_one_test_household_batch_of(HOUSEHOLD)], Gegevensfrequentie=frequency
     ).to_parquet(folder / "index.parquet", engine="pyarrow")
 
 
@@ -94,7 +94,7 @@ class TestTheDeclaredGridIsRequired:
     def test_an_index_without_the_field_raises(self, tmp_path):
         # The absent column is the subject, so it is dropped from the index
         # shape rather than the shape being built without it.
-        index_frame([household_batch_of(HOUSEHOLD)]).drop(
+        index_frame([one_to_one_test_household_batch_of(HOUSEHOLD)]).drop(
             columns=["Gegevensfrequentie"]
         ).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         with pytest.raises(ValueError, match="Gegevensfrequentie"):
@@ -113,7 +113,7 @@ class TestTheDeclaredGridIsRequired:
         """An aggregated household batch spans household batches; its rows sit on the finest of
         their grids."""
         index_frame(
-            [household_batch_of(1), household_batch_of(2)],
+            [one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)],
             Gegevensfrequentie=["15min", "5min"],
         ).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         assert dataset_grid_minutes(str(tmp_path)) == 5.0
@@ -140,7 +140,7 @@ class TestTheGridIsNotDefaultedDownstream:
         raises, naming itself, rather than being averaged at some other
         project's spacing."""
         frame = household_batches_frame(
-            {household_batch_of(HOUSEHOLD): {DIFF: [1.0, 1.0]}},
+            {one_to_one_test_household_batch_of(HOUSEHOLD): {DIFF: [1.0, 1.0]}},
             project=4,
             start="2026-01-01",
             tz=None,
@@ -154,7 +154,7 @@ class TestTheGridIsNotDefaultedDownstream:
         cadence = sidecar_frame(
             "cadence",
             [{"column": CUM, "cadence_minutes": 5}],
-            household_batch_id=household_batch_of(HOUSEHOLD),
+            household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
         )
 
         with pytest.raises(ValueError, match=r"Project\(s\) \[4\] resolve no grid"):

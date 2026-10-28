@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -22,13 +22,13 @@ DIFF = "ElektriciteitNetgebruikDiff"
 
 #: The household every frame below describes. Its household batch -- `ids.HOUSEHOLD_BATCH`,
 #: which the cadence table and the per-series fill are keyed on -- is
-#: ``household_batch_of(HOUSEHOLD)``.
+#: ``one_to_one_test_household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
 
 def _frame(cumulative, diffs, averages):
     return household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {
             CUM: cumulative,
             DIFF: diffs,
             f"{DIFF}_avg": averages,
@@ -66,7 +66,7 @@ class TestTheStatsDescribeTheFill:
         assert len(stats) == 1
         row = stats.iloc[0]
         assert row["column"] == DIFF
-        assert int(row[ids.HOUSEHOLD_BATCH]) == household_batch_of(HOUSEHOLD)
+        assert int(row[ids.HOUSEHOLD_BATCH]) == one_to_one_test_household_batch_of(HOUSEHOLD)
         assert int(row[ids.PROJECT]) == 1
 
     def test_diff_total_is_the_filled_column(self, conserved):

@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.impute import calculate_average_diff_ibis
 
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.unit
 
 # Two projects: 20 normal + 1 outlier household per project. Each household's
 # household batch -- the key of its series, its cadence and its contribution to the
-# average -- is `household_batch_of` of its number.
+# average -- is `one_to_one_test_household_batch_of` of its number.
 # Outlier values are ~15-20x larger than the normal range so the
 # 95th-percentile upper-bound logic clearly excludes them.
 _P1_NORMAL = list(range(101, 121))
@@ -75,7 +75,7 @@ def diff_fixture_df() -> pd.DataFrame:
                 else:
                     low_tariff.append(float(rng.uniform(1.0, 10.0)))
                     solar.append(float(rng.uniform(0.5, 5.0)))
-            household_batch = household_batch_of(household_id)
+            household_batch = one_to_one_test_household_batch_of(household_id)
             per_household_batch[household_batch] = {
                 "ElektriciteitNetgebruikLaagDiff": low_tariff,
                 "ZonopwekVerbruikDiff": solar,
@@ -86,7 +86,7 @@ def diff_fixture_df() -> pd.DataFrame:
         for _ in range(SLOTS):
             low_tariff.append(float(rng.uniform(150.0, 300.0)))
             solar.append(float(rng.uniform(150.0, 300.0)))
-        household_batch = household_batch_of(outlier_id)
+        household_batch = one_to_one_test_household_batch_of(outlier_id)
         per_household_batch[household_batch] = {
             "ElektriciteitNetgebruikLaagDiff": low_tariff,
             "ZonopwekVerbruikDiff": solar,
@@ -146,8 +146,8 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
     """
     mini = household_batches_frame(
         {
-            household_batch_of(1): {"ZonopwekVerbruikDiff": [2.0, pd.NA, 4.0]},
-            household_batch_of(2): {"ZonopwekVerbruikDiff": [6.0, 6.0, 6.0]},
+            one_to_one_test_household_batch_of(1): {"ZonopwekVerbruikDiff": [2.0, pd.NA, 4.0]},
+            one_to_one_test_household_batch_of(2): {"ZonopwekVerbruikDiff": [6.0, 6.0, 6.0]},
         },
         start="2024-01-01",
         freq="5min",
@@ -186,13 +186,13 @@ def test_empty_project_edge_cases():
     # Project 1: all zeros. Project 2: normal non-zero values.
     mini = household_batches_frame(
         {
-            household_batch_of(1): {"ZonopwekVerbruikDiff": [0.0, 0.0, 0.0]},
-            household_batch_of(2): {"ZonopwekVerbruikDiff": [3.0, 5.0, 4.0]},
+            one_to_one_test_household_batch_of(1): {"ZonopwekVerbruikDiff": [0.0, 0.0, 0.0]},
+            one_to_one_test_household_batch_of(2): {"ZonopwekVerbruikDiff": [3.0, 5.0, 4.0]},
         },
         start="2024-06-01",
         freq="5min",
         tz=None,
-        project_of={household_batch_of(1): 1, household_batch_of(2): 2},
+        project_of={one_to_one_test_household_batch_of(1): 1, one_to_one_test_household_batch_of(2): 2},
         pairs=False,
     )
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
@@ -249,11 +249,11 @@ def test_flagged_values_excluded_in_both_paths():
     findings = flag_column("ZonopwekVerbruikDiff")
     mini = household_batches_frame(
         {
-            household_batch_of(1): {
+            one_to_one_test_household_batch_of(1): {
                 "ZonopwekVerbruikDiff": [3.0, 3.0, 3.0],
                 findings: [0, 0, 0],
             },
-            household_batch_of(2): {
+            one_to_one_test_household_batch_of(2): {
                 "ZonopwekVerbruikDiff": [9.0, 9.0, 9.0],
                 findings: [MappingFlag.FROZEN_SPAN.value] * 3,
             },
@@ -294,7 +294,7 @@ def test_all_null_diffs_edge_case():
     """
     absent = [pd.NA, pd.NA]
     mini = household_batches_frame(
-        {household_batch_of(1): {"ZonopwekVerbruikDiff": absent}},
+        {one_to_one_test_household_batch_of(1): {"ZonopwekVerbruikDiff": absent}},
         start="2024-06-01",
         freq="5min",
         tz=None,

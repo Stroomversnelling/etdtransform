@@ -11,8 +11,8 @@ from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
 )
 
 from etdtransform.impute import calculate_average_diff_ibis, write_window_presence
@@ -74,7 +74,7 @@ def _counts(timestamps, window_minutes, n_slots, n_delivered):
     frame = pd.concat(
         [
             household_batches_frame(
-                {household_batch_of(position): {
+                {one_to_one_test_household_batch_of(position): {
                     "n_slots": [slots], "n_delivered": [delivered],
                 }},
                 start=stamp,
@@ -109,8 +109,8 @@ class TestTheAveragingReturnsTheFrame:
         # A 15-minute day is 96 slots. Household 1 covers it; household 2
         # delivers 10 slots and is ineligible.
         frame = _frame({
-            household_batch_of(1): [1.0] * 96,
-            household_batch_of(2): [1.0] * 10 + [pd.NA] * 86,
+            one_to_one_test_household_batch_of(1): [1.0] * 96,
+            one_to_one_test_household_batch_of(2): [1.0] * 10 + [pd.NA] * 86,
         })
         presence = self._presence(frame, min_eligible=10)
 
@@ -141,7 +141,7 @@ class TestTheAveragingReturnsTheFrame:
         assert int(presence["n_outage_windows"].sum()) == 0
 
     def test_a_household_spanning_two_windows_gets_a_row_per_window(self):
-        frame = _frame({household_batch_of(1): [1.0] * 192})
+        frame = _frame({one_to_one_test_household_batch_of(1): [1.0] * 192})
         presence = self._presence(frame)
         assert presence["window_start"].tolist() == [
             pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-06"),

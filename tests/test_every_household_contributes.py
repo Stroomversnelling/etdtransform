@@ -26,7 +26,11 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import PAIRS_EMPTY, household_batch_of, household_batches_frame
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -43,7 +47,7 @@ def _household(household, values, project=1):
     takes the household batch's volume from the values stated here.
     """
     return household_batches_frame(
-        {household_batch_of(household): {DIFF: values}},
+        {one_to_one_test_household_batch_of(household): {DIFF: values}},
         start="2026-01-01",
         freq="5min",
         tz=None,

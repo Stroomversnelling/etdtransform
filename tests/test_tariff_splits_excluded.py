@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.impute import (
     concatenate_avg_diff_columns,
@@ -69,7 +69,7 @@ class TestAveragingMicroMixedSupplier:
         for project, household, root_value in (
             (1, 1, 1.0), (1, 2, 3.0), (2, 3, 2.0), (2, 4, 4.0),
         ):
-            household_batch = household_batch_of(household)
+            household_batch = one_to_one_test_household_batch_of(household)
             project_of[household_batch] = project
             # Project 2 also carries its delivered splits (kept as mapped);
             # project 1 delivered the root and no splits.
@@ -131,7 +131,7 @@ class TestFillSkipsSplits:
         split_cum = [0.5, 1.0, pd.NA, pd.NA, 2.0, 2.5, 3.0, 3.5]
         return household_batches_frame(
             {
-                household_batch_of(1): {
+                one_to_one_test_household_batch_of(1): {
                     ROOT: [1.0, 2.0, pd.NA, pd.NA, 5.0, 6.0, 7.0, 8.0],
                     ROOT_DIFF: [1.0, 1.0, pd.NA, pd.NA, pd.NA, 1.0, 1.0, 1.0],
                     f"{ROOT_DIFF}_avg": [1.0] * 8,

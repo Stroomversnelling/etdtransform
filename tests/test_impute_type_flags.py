@@ -39,7 +39,7 @@ ITYPE = f"{DIFF}_impute_type"
 # by the code, so it derives the member set rather than keeping a copy -- a
 # second list would drift.
 from conftest import cadence_table
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 ALL_FLAGS = {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
 CONDITIONS = {m for m in ALL_FLAGS if m & ImputeType.SIGNALS}
@@ -53,7 +53,7 @@ def _frame(cumulative, averages, diffs=None, household=1):
     values are the shape the fill distributes by.
     """
     return household_batches_frame(
-        {household_batch_of(household): {
+        {one_to_one_test_household_batch_of(household): {
             CUM: list(cumulative),
             DIFF: pd.NA if diffs is None else list(diffs),
             AVG: list(averages),

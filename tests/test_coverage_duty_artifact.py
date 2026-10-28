@@ -16,7 +16,11 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import PAIRS_EMPTY, household_batch_of, household_batches_frame
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+)
 
 from etdtransform.impute import (
     _coverage_duty_by_project,
@@ -164,7 +168,7 @@ class TestItAgreesWithTheScalarTheAveragingAlreadyReported:
         # PAIRS_EMPTY: the cumulative counterpart is present and empty, so the
         # averaging takes the household batch's volume from the values stated here.
         frame = household_batches_frame(
-            {household_batch_of(1): {DIFF: [0.0, 0.4, 0.2, 0.1]}},
+            {one_to_one_test_household_batch_of(1): {DIFF: [0.0, 0.4, 0.2, 0.1]}},
             start="2026-01-01",
             freq="5min",
             tz=None,

@@ -16,7 +16,11 @@ import pandas as pd
 import pytest
 from etdmap import ids
 from etdmap.data_model import resolve_bounds, thresholds_dict
-from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
+from etdmap.testing import (
+    cadence_sidecar,
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+)
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
@@ -31,7 +35,7 @@ N = 4
 def _rows(household, minutes, n=N):
     """One household batch's rows, spaced at its own reporting interval."""
     return household_batches_frame(
-        {household_batch_of(household): {
+        {one_to_one_test_household_batch_of(household): {
             DIFF: [0.1] * n,
             # The rule's input, never known, so nothing narrows and the bound
             # is the scaled threshold alone -- which is what this file is
@@ -63,7 +67,7 @@ def _cadence(by_household):
                 [CUM],
                 minutes=minutes,
                 grid_minutes=5,
-                household_batch_id=household_batch_of(household),
+                household_batch_id=one_to_one_test_household_batch_of(household),
             )
             for household, minutes in by_household.items()
         ],

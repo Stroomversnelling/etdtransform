@@ -29,7 +29,7 @@ from etdmap.mapping_helpers import (
     _treat_frozen_spans,
     add_diff_columns,
 )
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -41,7 +41,7 @@ NORMAL = 3.0
 
 #: The household the fixture below describes. Its household batch -- the key the
 #: cadence table and the frozen-span sidecar rows are recorded against -- is
-#: ``household_batch_of(HOUSEHOLD)``.
+#: ``one_to_one_test_household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
 
@@ -74,7 +74,7 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
         values.append(current)
 
     df = household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {CUM: values}},
         start="2026-01-01",
         freq="5min",
         tz=None,
@@ -99,7 +99,7 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
 
 def _treated_and_imputed(df):
     rows = _detect_frozen_spans_for_household_batch(
-        df, household_batch_of(HOUSEHOLD), cadence=cadence_table(df, [CUM])
+        df, one_to_one_test_household_batch_of(HOUSEHOLD), cadence=cadence_table(df, [CUM])
     )
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(

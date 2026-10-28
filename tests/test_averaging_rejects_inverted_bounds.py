@@ -22,8 +22,8 @@ from etdmap.data_model import cumulative_column
 from etdmap.testing import (
     PAIRS_EMPTY,
     declare_synthetic_model,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     synthetic_model,
 )
 
@@ -76,7 +76,7 @@ def _frame(column, households=(1, 2), n=8):
     values[1] = pd.NA
     return household_batches_frame(
         {
-            household_batch_of(household): {
+            one_to_one_test_household_batch_of(household): {
                 column: values[position * n:(position + 1) * n]
             }
             for position, household in enumerate(households)

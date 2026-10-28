@@ -18,8 +18,8 @@ from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     sidecar_frame,
 )
 
@@ -48,7 +48,7 @@ def _cadence(rows):
     """
     return sidecar_frame("cadence", [
         {
-            ids.HOUSEHOLD_BATCH: household_batch_of(household),
+            ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(household),
             "column": column,
             "cadence_minutes": cadence_minutes,
             "n_readings": n_readings,
@@ -63,7 +63,7 @@ def _interval_only_cadence(household=1, reading_minutes=15, grid=GRID):
         {CUM: grid, DIFF: reading_minutes},
         grid_minutes=grid,
         n_readings={"ReadingDate": 1000, CUM: 0, DIFF: 100},
-        household_batch_id=household_batch_of(household),
+        household_batch_id=one_to_one_test_household_batch_of(household),
     )
 
 
@@ -74,7 +74,7 @@ def _frame(values, household=1):
     interval column the volume source where the frame reaches the averaging.
     """
     return household_batches_frame(
-        {household_batch_of(household): {DIFF: list(values)}},
+        {one_to_one_test_household_batch_of(household): {DIFF: list(values)}},
         start="2026-01-01",
         freq="5min",
         tz=None,
@@ -108,7 +108,7 @@ class TestTheSmokeTest:
     def spread(self):
         df = _frame(_ticks(self.N, self.K, missing=(11,)))
         return spread_delivered_interval_to_grid(
-            df, DIFF, {household_batch_of(1): self.K}
+            df, DIFF, {one_to_one_test_household_batch_of(1): self.K}
         )
 
     def test_the_first_windows_are_filled(self, spread):
@@ -144,13 +144,13 @@ class TestTheSmokeTest:
             ignore_index=True,
         )
         spread = spread_delivered_interval_to_grid(
-            df, DIFF, {household_batch_of(1): self.K}
+            df, DIFF, {one_to_one_test_household_batch_of(1): self.K}
         )
         assert spread[
-            df[ids.HOUSEHOLD_BATCH] == household_batch_of(2)
+            df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2)
         ].isna().all()
         assert spread[
-            df[ids.HOUSEHOLD_BATCH] == household_batch_of(1)
+            df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1)
         ].notna().any()
 
 
@@ -161,7 +161,7 @@ class TestTheLeadingPartialWindow:
         not placed."""
         df = _frame(_ticks(24, 3, first=1))
         spread = spread_delivered_interval_to_grid(
-            df, DIFF, {household_batch_of(1): 3}
+            df, DIFF, {one_to_one_test_household_batch_of(1): 3}
         )
         assert _as_list(spread[0:2]) == [pytest.approx(0.2)] * 2
         assert float(spread[0:2].sum()) == pytest.approx(0.4)
@@ -177,13 +177,13 @@ class TestTwoCadencesInOneCall:
             ignore_index=True,
         )
         spread = spread_delivered_interval_to_grid(
-            df, DIFF, {household_batch_of(1): 3, household_batch_of(2): 12}
+            df, DIFF, {one_to_one_test_household_batch_of(1): 3, one_to_one_test_household_batch_of(2): 12}
         )
         first = spread[
-            df[ids.HOUSEHOLD_BATCH] == household_batch_of(1)
+            df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1)
         ].dropna()
         second = spread[
-            df[ids.HOUSEHOLD_BATCH] == household_batch_of(2)
+            df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2)
         ].dropna()
         assert float(first.iloc[0]) == pytest.approx(READING / 3)
         assert float(second.iloc[0]) == pytest.approx(READING / 12)
@@ -204,7 +204,7 @@ class TestAgreementWithTheAveraging:
     def test_the_two_agree_slot_for_slot(self, k, first, missing):
         df = _frame(_ticks(24, k, first=first, missing=missing))
         mine = spread_delivered_interval_to_grid(
-            df, DIFF, {household_batch_of(1): k}
+            df, DIFF, {one_to_one_test_household_batch_of(1): k}
         )
         avg, _, _ = spread_average(
             df, _interval_only_cadence(reading_minutes=GRID * k), DIFF, GRID,
@@ -219,7 +219,7 @@ class TestWhichHouseholdsAreSpread:
         steps = spread_steps_by_household(
             CUM, DIFF, _interval_only_cadence(reading_minutes=60)
         )
-        assert steps == {household_batch_of(1): 12}
+        assert steps == {one_to_one_test_household_batch_of(1): 12}
 
     def test_a_delivered_register_is_never_spread(self):
         """The register is authoritative and the cumulative logic reads it at
@@ -266,7 +266,7 @@ class TestWhichHouseholdsAreSpread:
             (2, DIFF, 60, 100),
         ])
         assert spread_steps_by_household(CUM, DIFF, cadence) == {
-            household_batch_of(1): 12
+            one_to_one_test_household_batch_of(1): 12
         }
 
     def test_each_household_takes_its_own_grid(self):
@@ -281,7 +281,7 @@ class TestWhichHouseholdsAreSpread:
             (2, DIFF, 60, 100),
         ])
         assert spread_steps_by_household(CUM, DIFF, cadence) == {
-            household_batch_of(1): 12, household_batch_of(2): 4,
+            one_to_one_test_household_batch_of(1): 12, one_to_one_test_household_batch_of(2): 4,
         }
 
 
@@ -297,7 +297,7 @@ class TestWhichCadenceEachStageReads:
         it."""
         cadence = _interval_only_cadence(reading_minutes=60)
         assert cadence_minutes_by_household_batch(DIFF, cadence) == {
-            household_batch_of(1): 60.0
+            one_to_one_test_household_batch_of(1): 60.0
         }
 
     def test_the_winner_does_not_depend_on_row_order(self):
@@ -307,7 +307,7 @@ class TestWhichCadenceEachStageReads:
             (1, "ReadingDate", GRID, 1000),
         ])
         assert cadence_minutes_by_household_batch(DIFF, reordered) == {
-            household_batch_of(1): 60.0
+            one_to_one_test_household_batch_of(1): 60.0
         }
 
     def test_a_derived_column_still_inherits_from_its_register(self):
@@ -319,7 +319,7 @@ class TestWhichCadenceEachStageReads:
             (1, CUM, 60, 100),
         ])
         assert cadence_minutes_by_household_batch(DIFF, register_only) == {
-            household_batch_of(1): 60.0
+            one_to_one_test_household_batch_of(1): 60.0
         }
 
     def test_the_averaging_spreads_a_coarse_column_at_its_own_cadence(self):
@@ -339,10 +339,10 @@ class TestTheCadenceAmendment:
     def test_a_spread_column_reads_at_the_grid(self):
         cadence = _interval_only_cadence(reading_minutes=60)
         amended = cadence_with_column_at_grid(
-            cadence, DIFF, [household_batch_of(1)]
+            cadence, DIFF, [one_to_one_test_household_batch_of(1)]
         )
         row = amended[
-            (amended[ids.HOUSEHOLD_BATCH] == household_batch_of(1))
+            (amended[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1))
             & (amended["column"] == DIFF)
         ]
         assert int(row["cadence_minutes"].iloc[0]) == GRID
@@ -356,9 +356,9 @@ class TestTheCadenceAmendment:
             (2, DIFF, 60, 100),
         ])
         amended = cadence_with_column_at_grid(
-            cadence, DIFF, [household_batch_of(1)]
+            cadence, DIFF, [one_to_one_test_household_batch_of(1)]
         )
-        untouched = amended[ids.HOUSEHOLD_BATCH] != household_batch_of(1)
+        untouched = amended[ids.HOUSEHOLD_BATCH] != one_to_one_test_household_batch_of(1)
         pd.testing.assert_frame_equal(
             amended[untouched].reset_index(drop=True),
             cadence[untouched].reset_index(drop=True),
@@ -369,7 +369,7 @@ class TestTheCadenceAmendment:
         pass is not a fact about the mapped data."""
         cadence = _interval_only_cadence(reading_minutes=60)
         before = cadence.copy()
-        cadence_with_column_at_grid(cadence, DIFF, [household_batch_of(1)])
+        cadence_with_column_at_grid(cadence, DIFF, [one_to_one_test_household_batch_of(1)])
         pd.testing.assert_frame_equal(cadence, before)
 
     def test_naming_no_household_changes_nothing(self):

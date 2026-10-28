@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import household_batch_of
+from etdmap.testing import one_to_one_test_household_batch_of
 
 import etdtransform
 from etdtransform.aggregate import (
@@ -253,8 +253,8 @@ class TestProvenanceHelpers:
         # Keyed on the household batch, as the schema groups are: which
         # columns one can derive follows the devices that delivered it.
         hh_rows = [
-            {ids.HOUSEHOLD_BATCH: household_batch_of(1), "schema_group_id": 0},
-            {ids.HOUSEHOLD_BATCH: household_batch_of(2), "schema_group_id": 0},
+            {ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(1), "schema_group_id": 0},
+            {ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(2), "schema_group_id": 0},
         ]
         _write_calc_provenance(out, plan_rows, hh_rows, "cafef00d")
 
@@ -263,6 +263,6 @@ class TestProvenanceHelpers:
         assert list(plan["variable"]) == [_ZP]
         assert (plan["catalog_hash"] == "cafef00d").all()
         assert set(int(x) for x in hh[ids.HOUSEHOLD_BATCH]) == {
-            household_batch_of(1), household_batch_of(2)
+            one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)
         }
         assert (hh["schema_group_id"] == 0).all()

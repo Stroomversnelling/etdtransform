@@ -15,9 +15,9 @@ import pytest
 from etdmap import ids
 from etdmap.testing import (
     cadence_sidecar,
-    household_batch_of,
     household_batches_frame,
     index_frame,
+    one_to_one_test_household_batch_of,
 )
 from pandas.testing import assert_frame_equal
 from test_constraint_package import _constraints
@@ -70,7 +70,7 @@ def _metadata_csv(folder, declarations):
     """
     path = folder / "metadata.csv"
     frame = index_frame(
-        [household_batch_of(household) for household in declarations]
+        [one_to_one_test_household_batch_of(household) for household in declarations]
     )
     frame["ApparaatOntbrekend"] = pd.array(
         list(declarations.values()), dtype="string"
@@ -166,9 +166,9 @@ class TestApparaatSetByHouseholdBatch:
         })
         resolved = apparaat_set_by_household_batch(path)
         assert resolved == {
-            household_batch_of(1):
+            one_to_one_test_household_batch_of(1):
                 "ElektriciteitsgebruikRadiator|ElektriciteitsgebruikWTW",
-            household_batch_of(2): "",
+            one_to_one_test_household_batch_of(2): "",
         }
 
     def test_metadata_without_the_column_raises(self, tmp_path):
@@ -176,7 +176,7 @@ class TestApparaatSetByHouseholdBatch:
         # Metadata with no ApparaatOntbrekend column is the subject. The
         # review-metadata shape cannot carry one: ApparaatOntbrekend is not
         # an index column, so nothing but _metadata_csv adds it.
-        index_frame([household_batch_of(1)], batch_fields=False).to_csv(
+        index_frame([one_to_one_test_household_batch_of(1)], batch_fields=False).to_csv(
             path, index=False
         )
         with pytest.raises(ValueError, match="ApparaatOntbrekend"):
@@ -205,15 +205,15 @@ class TestRuleSetsByHouseholdBatch:
             3: "",
         })
         resolved = rule_sets_by_household_batch(
-            [household_batch_of(n) for n in (1, 2, 3)],
+            [one_to_one_test_household_batch_of(n) for n in (1, 2, 3)],
             self._catalog_with_a_device_term(), 5,
             metadata_path=path,
         )
         assert set(resolved) == {"ElektriciteitsgebruikRadiator", ""}
         assert resolved["ElektriciteitsgebruikRadiator"].household_batches == [
-            household_batch_of(1), household_batch_of(2)
+            one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)
         ]
-        assert resolved[""].household_batches == [household_batch_of(3)]
+        assert resolved[""].household_batches == [one_to_one_test_household_batch_of(3)]
 
     def test_an_absent_device_leaves_the_formula_set(self, tmp_path):
         from etdtransform.constraints import rule_sets_by_household_batch
@@ -222,7 +222,7 @@ class TestRuleSetsByHouseholdBatch:
             1: "ElektriciteitsgebruikRadiator", 2: "",
         })
         resolved = rule_sets_by_household_batch(
-            [household_batch_of(1), household_batch_of(2)],
+            [one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)],
             self._catalog_with_a_device_term(), 5, metadata_path=path,
         )
         # The first household batch has no radiator meter, so the term is
@@ -247,7 +247,7 @@ class TestRuleSetsByHouseholdBatch:
         # widen.
         with pytest.raises(ValueError, match="not in the BSV metadata"):
             rule_sets_by_household_batch(
-                [household_batch_of(1), 99],
+                [one_to_one_test_household_batch_of(1), 99],
                 self._catalog_with_a_device_term(), 5,
                 metadata_path=path,
             )
@@ -257,7 +257,7 @@ class TestRuleSetsByHouseholdBatch:
 
         path = _metadata_csv(tmp_path, {1: ""})
         resolved = rule_sets_by_household_batch(
-            [household_batch_of(1)], self._catalog_with_a_device_term(), 15,
+            [one_to_one_test_household_batch_of(1)], self._catalog_with_a_device_term(), 15,
             metadata_path=path,
         )
         assert resolved[""].package is not None
@@ -287,8 +287,8 @@ def _two_household_frame():
     """
     return household_batches_frame(
         {
-            household_batch_of(1): {CUM: [100.0, pd.NA, pd.NA, 103.0]},
-            household_batch_of(2): {CUM: [100.0, pd.NA, pd.NA, 101.5]},
+            one_to_one_test_household_batch_of(1): {CUM: [100.0, pd.NA, pd.NA, 103.0]},
+            one_to_one_test_household_batch_of(2): {CUM: [100.0, pd.NA, pd.NA, 101.5]},
         },
         start="2026-01-01",
         freq="5min",
@@ -353,12 +353,12 @@ class TestRunTimeSelection:
             _two_household_frame(),
             constraints,
             apparaat_sets={
-                household_batch_of(1): "",
-                household_batch_of(2): RADIATOR_SET,
+                one_to_one_test_household_batch_of(1): "",
+                one_to_one_test_household_batch_of(2): RADIATOR_SET,
             },
         )
-        one = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]
-        two = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(2)]
+        one = out[out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1)]
+        two = out[out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2)]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([0.5] * 3)
 
@@ -369,8 +369,8 @@ class TestRunTimeSelection:
                 _two_household_frame(),
                 constraints,
                 apparaat_sets={
-                household_batch_of(1): "",
-                household_batch_of(2): RADIATOR_SET,
+                one_to_one_test_household_batch_of(1): "",
+                one_to_one_test_household_batch_of(2): RADIATOR_SET,
             },
             )
 
@@ -380,7 +380,7 @@ class TestRunTimeSelection:
             _impute(
                 _two_household_frame(),
                 constraints,
-                apparaat_sets={household_batch_of(1): ""},
+                apparaat_sets={one_to_one_test_household_batch_of(1): ""},
             )
 
     def test_pre_specialization_table_is_the_empty_set_with_a_warning(
@@ -393,7 +393,7 @@ class TestRunTimeSelection:
         # Both households narrow with the one table, exactly as before the
         # split: household 2's bound follows K too, so its jump of 6 cannot
         # be placed inside [1, 1] rows and the values pin at 1 each.
-        one = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]
-        two = out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(2)]
+        one = out[out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(1)]
+        two = out[out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2)]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)

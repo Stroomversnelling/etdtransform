@@ -14,7 +14,7 @@ Fixtures are small synthetic frames; never real data.
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.calculated_flags import (
     grid_scaled_bounds,
@@ -40,7 +40,7 @@ def _frame(values, households=None):
     per_household_batch: dict = {}
     for household, value in zip(per_household, values):
         columns = per_household_batch.setdefault(
-            household_batch_of(household), {COLUMN: []}
+            one_to_one_test_household_batch_of(household), {COLUMN: []}
         )
         columns[COLUMN].append(value)
     return household_batches_frame(per_household_batch, pairs=False)
@@ -109,7 +109,7 @@ class TestThresholdViolation:
             [COLUMN], grid_minutes=5,
         )
         summary = threshold_violation_summary(df, [COLUMN])
-        first, second = household_batch_of(1), household_batch_of(2)
+        first, second = one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)
         assert set(summary[ids.HOUSEHOLD_BATCH]) == {first, second}
         worst = summary.set_index(ids.HOUSEHOLD_BATCH)["worst"]
         assert float(worst.loc[first]) == pytest.approx(-0.5)
@@ -682,12 +682,12 @@ class TestFillCalculatedGaps:
         )
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            household_batches=[household_batch_of(1)],
+            household_batches=[one_to_one_test_household_batch_of(1)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, plan = fill_gaps_in_table(
-            ibis.memtable(frame), [household_batch_of(1)], rule_sets
+            ibis.memtable(frame), [one_to_one_test_household_batch_of(1)], rule_sets
         )
         out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
 
@@ -717,12 +717,12 @@ class TestFillCalculatedGaps:
         )
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            household_batches=[household_batch_of(1)],
+            household_batches=[one_to_one_test_household_batch_of(1)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, _ = fill_gaps_in_table(
-            ibis.memtable(frame), [household_batch_of(1)], rule_sets
+            ibis.memtable(frame), [one_to_one_test_household_batch_of(1)], rule_sets
         )
         out = table.execute().sort_values("ReadingDate").reset_index(drop=True)
         assert report["cells"] == 1
@@ -743,12 +743,12 @@ class TestFillCalculatedGaps:
         # therefore has no formulas and no bounds of its own.
         rule_sets = {"": RuleSet(
             apparaat_set="",
-            household_batches=[household_batch_of(2)],
+            household_batches=[one_to_one_test_household_batch_of(2)],
             formulas=self._catalog(),
             package=TestDeriveFromRuleBound._package(0.4, 0.4),
         )}
         table, report, plan = fill_gaps_in_table(
-            ibis.memtable(frame), [household_batch_of(1)], rule_sets
+            ibis.memtable(frame), [one_to_one_test_household_batch_of(1)], rule_sets
         )
         assert report["cells"] == 0
         assert plan.empty

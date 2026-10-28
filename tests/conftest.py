@@ -33,11 +33,11 @@ from etdmap.testing import (  # noqa: F401  (re-exported for the tests)
     cadence_sidecar,
     generate_mapped_dataset,
     household_batch_frame,
-    household_batch_of,
     household_batches_frame,
-    household_of_batch,
     index_frame,
     installed_fingerprint,
+    one_to_one_test_household_batch_of,
+    one_to_one_test_household_of_household_batch,
     sidecar_frame,
 )
 

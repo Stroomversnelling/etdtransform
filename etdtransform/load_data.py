@@ -736,22 +736,19 @@ def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
     return ibis.read_parquet(pattern, hive_partitioning=True, union_by_name=True)
 
 
-def included_household_ids(mapped_folder_path=None) -> list:
+def included_household_batch_ids(mapped_folder_path=None) -> list:
     """
-    The households whose household batch has `Meenemen` == True, from the index.
+    The household batches whose `Meenemen` is True, from the index.
 
-    A household-level grouping for reading, not a unit of analysis: callers
-    use it to choose which shard directories to open.
-
-    `Meenemen` is defined per household batch (one index row per
-    ``ids.HOUSEHOLD_BATCH``). Collapsing the decision to household ids is valid
-    only while no household holds more than one household batch; this function
-    raises HouseBatchOverlapError otherwise.
+    `Meenemen` is decided per household batch, which is the grain this returns:
+    one index row, one decision. A caller that needs the directories to open
+    resolves them with ``index_helpers.households_of_household_batches``, which
+    is a read-pruning step and not a choice of what to include.
 
     Inclusion is resolved at read time from the index instead of being
     baked into a materialised default file.
     """
-    from etdmap.index_helpers import HouseBatchOverlapError, read_index
+    from etdmap.index_helpers import read_index
 
     if mapped_folder_path is None:
         mapped_folder_path = etdtransform.options.mapped_folder_path
@@ -759,20 +756,11 @@ def included_household_ids(mapped_folder_path=None) -> list:
     if not os.path.exists(index_path):
         raise FileNotFoundError(
             f"No index.parquet at {index_path}; cannot resolve the "
-            f"included households. Map the data first (the index is written "
-            f"by save_index_to_parquet)."
+            f"included household batches. Map the data first (the index is "
+            f"written by save_index_to_parquet)."
         )
     index_df, _ = read_index(mapped_folder_path)
     included = index_df.loc[
-        index_df["Meenemen"] == True, ids.HOUSEHOLD  # noqa: E712
+        index_df["Meenemen"] == True, ids.HOUSEHOLD_BATCH  # noqa: E712
     ].dropna()
-    dup = included.duplicated()
-    if bool(dup.any()):
-        multi = sorted(int(h) for h in included[dup].unique())
-        raise HouseBatchOverlapError(
-            f"{ids.HOUSEHOLD} {multi} hold more than one included household "
-            f"batch in the index; collapsing `Meenemen` to household ids is "
-            f"not valid. A household holding more than one household batch is "
-            f"valid in the data model but not yet supported."
-        )
-    return sorted(int(h) for h in included.unique())
+    return sorted(int(batch_id) for batch_id in included.unique())

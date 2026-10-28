@@ -25,8 +25,8 @@ from etdmap.flags import MappingFlag, flag_column
 from etdmap.testing import (
     PAIRS_EMPTY,
     declare_synthetic_model,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     synthetic_model,
 )
 
@@ -70,7 +70,7 @@ def _frame(per_household, project_of=None, register=None):
     per_household_batch = {}
     project_of_household_batch = {}
     for household, values in per_household.items():
-        household_batch = household_batch_of(household)
+        household_batch = one_to_one_test_household_batch_of(household)
         columns = {DIFF: list(values)}
         readings = (register or {}).get(household)
         if readings is not None:
@@ -261,7 +261,7 @@ class TestWhichSourceFedEachHouseholdBatch:
         presence = _averaged(frame)["window_presence"].set_index(
             ids.HOUSEHOLD_BATCH
         )
-        assert presence.loc[household_batch_of(1), "source"] == "cumulative"
+        assert presence.loc[one_to_one_test_household_batch_of(1), "source"] == "cumulative"
 
     def test_an_interval_only_household_reads_interval(self):
         presence = _averaged(_frame({1: [READING] * N}))["window_presence"]
@@ -275,8 +275,8 @@ class TestWhichSourceFedEachHouseholdBatch:
         presence = _averaged(frame)["window_presence"].set_index(
             ids.HOUSEHOLD_BATCH
         )
-        assert presence.loc[household_batch_of(1), "source"] == "cumulative"
-        assert presence.loc[household_batch_of(2), "source"] == "interval"
+        assert presence.loc[one_to_one_test_household_batch_of(1), "source"] == "cumulative"
+        assert presence.loc[one_to_one_test_household_batch_of(2), "source"] == "interval"
 
     def test_it_is_never_left_unstated(self):
         frame = _frame(

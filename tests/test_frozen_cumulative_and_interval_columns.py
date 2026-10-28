@@ -13,7 +13,11 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
+from etdmap.testing import (
+    cadence_sidecar,
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+)
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -30,7 +34,7 @@ BASE = 1000.0
 
 #: The household the single-household-batch frames below describe. Its household batch -- the
 #: key of the series, of the cadence sidecar and of every per-series
-#: computation -- is ``household_batch_of(HOUSEHOLD)``.
+#: computation -- is ``one_to_one_test_household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
 #: The households of the one project the averaging tests below build. Twenty
@@ -71,7 +75,7 @@ def _series(catchup: float) -> pd.DataFrame:
         values.append(current)
 
     df = household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {CUM: values}},
         start=START,
         freq="5min",
         tz=None,
@@ -205,7 +209,7 @@ def test_interval_only_column_is_imputed():
     n = 20
     gap = [8, 9, 10, 11]  # .loc slices are label-inclusive on both ends
     df = household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {CUM: pd.NA, DIFF: [2.0] * n}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {CUM: pd.NA, DIFF: [2.0] * n}},
         start=START,
         freq="5min",
         tz=None,
@@ -230,7 +234,7 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     spiking = 99  # the household whose dataset carries the one spike
     df = household_batches_frame(
         {
-            household_batch_of(household): {DIFF: [3.0] * n}
+            one_to_one_test_household_batch_of(household): {DIFF: [3.0] * n}
             for household in [*LEVEL_HOUSEHOLDS, spiking]
         },
         start=START,
@@ -243,7 +247,7 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     )
     first_slot = df["ReadingDate"].min()
     df.loc[
-        (df[ids.HOUSEHOLD_BATCH] == household_batch_of(spiking))
+        (df[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(spiking))
         & (df["ReadingDate"] == first_slot),
         DIFF,
     ] = 5000.0
@@ -276,7 +280,7 @@ def test_project_average_rejects_physically_impossible_value():
     n = 6
     df = household_batches_frame(
         {
-            household_batch_of(household): {DIFF: [3.0] * n}
+            one_to_one_test_household_batch_of(household): {DIFF: [3.0] * n}
             for household in LEVEL_HOUSEHOLDS
         },
         start=START,
@@ -317,17 +321,17 @@ class TestWhichThresholdAppliesWhere:
 
     # Two households: one whose cumulative variable reports hourly, the other
     # every five minutes. The frame and the cadence sidecar below are keyed on
-    # their household batches, which are household_batch_of these.
+    # their household batches, which are one_to_one_test_household_batch_of these.
     HOURLY, GRID = 1, 2
 
     def _frame(self):
         return household_batches_frame(
             {
-                household_batch_of(self.HOURLY): {
+                one_to_one_test_household_batch_of(self.HOURLY): {
                     DIFF: [50.0, 50.0],
                     f"{DIFF}_is_imputed": [False, True],
                 },
-                household_batch_of(self.GRID): {
+                one_to_one_test_household_batch_of(self.GRID): {
                     DIFF: [50.0, 50.0],
                     f"{DIFF}_is_imputed": [False, True],
                 },
@@ -351,11 +355,11 @@ class TestWhichThresholdAppliesWhere:
             [
                 cadence_sidecar(
                     [CUM], minutes=60, grid_minutes=5,
-                    household_batch_id=household_batch_of(self.HOURLY),
+                    household_batch_id=one_to_one_test_household_batch_of(self.HOURLY),
                 ),
                 cadence_sidecar(
                     [CUM], minutes=5, grid_minutes=5,
-                    household_batch_id=household_batch_of(self.GRID),
+                    household_batch_id=one_to_one_test_household_batch_of(self.GRID),
                 ),
             ],
             ignore_index=True,

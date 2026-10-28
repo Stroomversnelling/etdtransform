@@ -29,7 +29,7 @@ import pytest
 from conftest import cadence_table
 from etdmap import ids
 from etdmap.flags import MappingFlag
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
@@ -54,7 +54,7 @@ def _household(household_id, n, **columns):
     readings the test puts there.
     """
     return household_batches_frame(
-        {household_batch_of(household_id): {
+        {one_to_one_test_household_batch_of(household_id): {
             name: list(values) for name, values in columns.items()
         }},
         start="2026-01-01", freq="5min", tz=None, n_rows=n,
@@ -138,7 +138,7 @@ class TestNoDeliveredNoFill:
         # A gap belongs to the series it was found in, so the accumulator
         # names the household batch.
         assert set(gaps[ids.HOUSEHOLD_BATCH].astype(int)) == {
-            household_batch_of(1)
+            one_to_one_test_household_batch_of(1)
         }
 
     def test_invented_zeros_do_not_count_as_delivered(self):

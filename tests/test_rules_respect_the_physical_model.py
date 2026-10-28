@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.constraints import CONSTRAINT_COLUMNS, build_constraint_package
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -22,7 +22,7 @@ DIFF = "ElektriciteitNetgebruikDiff"
 ITYPE = f"{DIFF}_impute_type"
 
 #: One household per project, as ``household -> ids.PROJECT``. Each
-#: household's household batch is ``household_batch_of`` of its number.
+#: household's household batch is ``one_to_one_test_household_batch_of`` of its number.
 PROJECT_OF_HOUSEHOLD = {1: 1, 2: 2}
 
 #: The readings every household carries. Identical in both projects, so the
@@ -60,9 +60,9 @@ def _constraints_for_models(*rows):
 def _two_project_frame():
     """One household per project, identical data: only the model differs."""
     return household_batches_frame(
-        {household_batch_of(household): _READINGS
+        {one_to_one_test_household_batch_of(household): _READINGS
          for household in PROJECT_OF_HOUSEHOLD},
-        project_of={household_batch_of(household): project
+        project_of={one_to_one_test_household_batch_of(household): project
                     for household, project in PROJECT_OF_HOUSEHOLD.items()},
         start="2026-01-01",
         freq="5min",
@@ -131,7 +131,7 @@ class TestTheFillJoinsModelPerRow:
         )
         by_household_batch = {
             household: out[
-                out[ids.HOUSEHOLD_BATCH] == household_batch_of(household)
+                out[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(household)
             ].reset_index(drop=True)
             for household in (1, 2)
         }

@@ -18,7 +18,11 @@ import logging
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame, sidecar_frame
+from etdmap.testing import (
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+    sidecar_frame,
+)
 
 from etdtransform.vectorized_impute import (
     ImputeType,
@@ -72,7 +76,7 @@ def _cadence(rows):
         "cadence",
         [
             {
-                ids.HOUSEHOLD_BATCH: household_batch_of(household),
+                ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(household),
                 "column": column,
                 "cadence_minutes": minutes,
                 "n_readings": n_readings,
@@ -103,7 +107,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
         total += rise
         values.append(total)
     df = household_batches_frame(
-        {household_batch_of(household): {CUM: values}},
+        {one_to_one_test_household_batch_of(household): {CUM: values}},
         start="2026-01-01",
         freq="5min",
         tz=None,
@@ -121,7 +125,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
 def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
     """Delivered intervals at the grid, no register, with cells missing."""
     df = household_batches_frame(
-        {household_batch_of(household): {
+        {one_to_one_test_household_batch_of(household): {
             CUM: [pd.NA] * n,
             DIFF: [value] * n,
         }},
@@ -374,7 +378,7 @@ class TestTheGuards:
         cadence = sidecar_frame(
             "cadence",
             [{"column": CUM, "cadence_minutes": GRID}],
-            household_batch_id=household_batch_of(1),
+            household_batch_id=one_to_one_test_household_batch_of(1),
             # A sidecar with no `n_readings` at all is the subject: the
             # routing has no delivery count to read.
             partial=[ids.HOUSEHOLD_BATCH, "column", "cadence_minutes"],
@@ -586,10 +590,10 @@ class TestARegisterCombinedFromTariffRegisters:
 
         cadence = _cadence(self._split_rows(1, hoog=True, laag=False))
         assert delivered_by_household_batch(self.SPLITS[0], cadence) == {
-            household_batch_of(1): True
+            one_to_one_test_household_batch_of(1): True
         }
         assert delivered_by_household_batch(self.SPLITS[1], cadence) == {
-            household_batch_of(1): False
+            one_to_one_test_household_batch_of(1): False
         }
 
     def test_a_delivered_root_does_not_need_the_fallback(self):
@@ -599,7 +603,7 @@ class TestARegisterCombinedFromTariffRegisters:
 
         cadence = _cadence(_form_rows(1, CUM, DIFF, True, False))
         assert delivered_by_household_batch(CUM, cadence) == {
-            household_batch_of(1): True
+            one_to_one_test_household_batch_of(1): True
         }
 
     def test_the_interval_form_is_not_delivered_by_a_split_register(self):

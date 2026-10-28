@@ -24,7 +24,7 @@ import ibis
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.calculated_flags import (
     calculated_flag_expressions,
@@ -54,7 +54,7 @@ def _frame(values, households=None, flags=None):
     per_household_batch: dict = {}
     for row, (household, value) in enumerate(zip(per_household, values)):
         columns = per_household_batch.setdefault(
-            household_batch_of(household), {COLUMN: []}
+            one_to_one_test_household_batch_of(household), {COLUMN: []}
         )
         columns[COLUMN].append(value)
         if flags is not None:

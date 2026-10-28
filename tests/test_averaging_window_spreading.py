@@ -16,7 +16,11 @@ import pandas as pd
 import pytest
 from conftest import spread_average
 from etdmap import ids
-from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
+from etdmap.testing import (
+    cadence_sidecar,
+    household_batches_frame,
+    one_to_one_test_household_batch_of,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -48,7 +52,7 @@ def _frame(per_household):
     per_household_batch = {}
     for household, readings in per_household.items():
         cumulative = pd.Series(pd.array(readings, dtype="Float64"))
-        per_household_batch[household_batch_of(household)] = {
+        per_household_batch[one_to_one_test_household_batch_of(household)] = {
             CUM: cumulative.tolist(),
             IV: cumulative.diff().tolist(),
         }
@@ -74,7 +78,7 @@ def _cadence(minutes_by_household, column=CUM):
             cadence_sidecar(
                 {column: minutes},
                 grid_minutes=GRID,
-                household_batch_id=household_batch_of(household),
+                household_batch_id=one_to_one_test_household_batch_of(household),
             )
             for household, minutes in minutes_by_household.items()
         ],
@@ -172,7 +176,7 @@ class TestWhichFormSuppliesTheVolume:
             2: [pd.NA] * 9,
         })
         frame.loc[
-            frame[ids.HOUSEHOLD_BATCH] == household_batch_of(2), IV
+            frame[ids.HOUSEHOLD_BATCH] == one_to_one_test_household_batch_of(2), IV
         ] = pd.array(
             [pd.NA, pd.NA, 3.0, pd.NA, pd.NA, 6.0, pd.NA, pd.NA, 9.0],
             dtype="Float64",

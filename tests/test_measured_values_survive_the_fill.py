@@ -25,7 +25,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.vectorized_impute import impute_and_normalize
 
@@ -57,7 +57,7 @@ _N = len(_CUM)
 
 def _frame():
     return household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {
             CUM: _CUM,
             DIFF: _DIFF,
             # The project average the scaled fill reads. Well inside the

@@ -404,29 +404,32 @@ def _finalize_impute_outputs(
 
 
 def _chunk_ids_by_project(all_ids, project_of, chunk_size):
-    """The household ids in chunks that never straddle a project.
+    """The household batch ids in chunks that never straddle a project.
 
     A chunk is a grouping for reading, not a unit of analysis -- it decides how
-    many households' shard directories are held at once, not how any of their
-    rows are imputed. But the fill reads a project average and reports per
-    project, so a chunk holding halves of two projects holds two unrelated
-    populations and nothing in the run is grouped the way the numbers are.
+    many shards are held at once, not how any of their rows are imputed. But
+    the fill reads a project average and reports per project, so a chunk
+    holding halves of two projects holds two unrelated populations and nothing
+    in the run is grouped the way the numbers are.
 
     The cap still applies inside each project, so a project larger than
     *chunk_size* still yields several chunks and the memory bound holds. A
-    household whose project is unknown is kept, in a group of its own, rather
-    than dropped.
+    household batch whose project is unknown is kept, in a group of its own,
+    rather than dropped.
     """
     groups: dict = {}
-    for household_id in all_ids:
-        groups.setdefault(project_of.get(household_id), []).append(household_id)
+    for household_batch_id in all_ids:
+        groups.setdefault(project_of.get(household_batch_id), []).append(
+            household_batch_id
+        )
 
     chunks = []
     # None last, so an unknown project never splits a real one's chunks.
     for project in sorted(groups, key=lambda p: (p is None, p)):
-        household_ids = sorted(groups[project])
+        household_batch_ids = sorted(groups[project])
         chunks.extend(
-            household_ids[i:i + chunk_size] for i in range(0, len(household_ids), chunk_size)
+            household_batch_ids[i:i + chunk_size]
+            for i in range(0, len(household_batch_ids), chunk_size)
         )
     return chunks
 
@@ -500,7 +503,7 @@ def impute_mapped_households_sharded(
     mapped_folder_path=None,
     aggregate_folder_path=None,
     cum_cols=None,
-    household_ids=None,
+    household_batch_ids=None,
     chunk_size: int = 50,
     use_constraints: bool = True,
     apparaat_sets: dict | None = None,
@@ -508,11 +511,12 @@ def impute_mapped_households_sharded(
     """
     The imputation stage (stage 3) over the sharded mapped data.
 
-    I/O shell only -- the imputation math is _impute_chunk_core. Chunks are
-    materialised with read_mapped_households (direct per-shard reads -- the
-    measured-fastest strategy for household batches); the project is joined
-    from the index; Meenemen inclusion comes from the index at read time
-    rather than from a materialised default file.
+    I/O shell only -- the imputation math is _impute_chunk_core. The population
+    is a set of household batches, which is the grain `Meenemen` is decided at;
+    chunks are materialised with read_mapped_households (direct per-shard reads
+    -- the measured-fastest strategy for household batches); the project is
+    joined from the index; inclusion comes from the index at read time rather
+    than from a materialised default file.
 
     Input read from ``aggregate_folder_path``: avg_diffs.parquet.
 
@@ -528,7 +532,10 @@ def impute_mapped_households_sharded(
     import pyarrow.parquet as pq
 
     # Function-level import: load_data imports from aggregate at module level.
-    from etdtransform.load_data import included_household_ids, read_mapped_households
+    from etdtransform.load_data import (
+        included_household_batch_ids,
+        read_mapped_households,
+    )
     from etdmap.index_helpers import read_index
 
     if mapped_folder_path is None:
@@ -541,10 +548,10 @@ def impute_mapped_households_sharded(
             "directory before writing)."
         )
 
-    if household_ids is not None:
-        all_ids = sorted(int(x) for x in household_ids)
+    if household_batch_ids is not None:
+        all_ids = sorted(int(x) for x in household_batch_ids)
     else:
-        all_ids = included_household_ids(mapped_folder_path)
+        all_ids = included_household_batch_ids(mapped_folder_path)
 
     index_df, _ = read_index(mapped_folder_path)
     if ids.HOUSEHOLD_BATCH not in index_df.columns:
@@ -566,21 +573,25 @@ def impute_mapped_households_sharded(
         (int(x) for x in household_batch_projects[ids.PROJECT]),
     ))
 
-    # Chunking needs one project per household, and the project is per household batch
-    # (above), so a household with several household batches could sit under
-    # two projects. The smallest
-    # project id is a deterministic representative, and it only picks which
-    # chunk the household's shards are read in -- imputation groups each row on
-    # its own household batch's project either way.
-    household_projects = index_df[[ids.HOUSEHOLD, ids.PROJECT]].dropna()
-    project_of_household = {
-        int(h): int(p)
-        for h, p in household_projects.groupby(ids.HOUSEHOLD)[ids.PROJECT].min().items()
-    }
-    chunks = _chunk_ids_by_project(all_ids, project_of_household, chunk_size)
+    # The household each household batch belongs to, which is the level the
+    # shard path prunes on. From the index already read above, so the lookup
+    # and the selection come from one registry read.
+    batch_households = index_df[[ids.HOUSEHOLD_BATCH, ids.HOUSEHOLD]].dropna()
+    household_of_household_batch = dict(zip(
+        (int(b) for b in batch_households[ids.HOUSEHOLD_BATCH]),
+        (int(h) for h in batch_households[ids.HOUSEHOLD]),
+    ))
+    unplaced = [b for b in all_ids if b not in household_of_household_batch]
+    if unplaced:
+        raise ValueError(
+            f"[sharded impute] the index does not place {ids.HOUSEHOLD_BATCH} "
+            f"{unplaced}, so the shards to read cannot be resolved."
+        )
+
+    chunks = _chunk_ids_by_project(all_ids, project_by_household_batch, chunk_size)
     logging.info(
-        f"[sharded impute] {len(all_ids)} households -> {len(chunks)} chunk(s) "
-        f"(cap {chunk_size}, no chunk straddles a project)"
+        f"[sharded impute] {len(all_ids)} household batches -> {len(chunks)} "
+        f"chunk(s) (cap {chunk_size}, no chunk straddles a project)"
     )
 
     # Estimation inputs from the SHARDED pipeline's artifact area (produced by
@@ -600,9 +611,22 @@ def impute_mapped_households_sharded(
     _chunk_timer = _ChunkTimer(len(chunks), "[sharded impute]")
     total_records: dict = {}
     for i, chunk_ids in enumerate(chunks):
-        logging.info(f"[sharded impute] Chunk {i + 1}/{len(chunks)}: {len(chunk_ids)} households")
+        logging.info(
+            f"[sharded impute] Chunk {i + 1}/{len(chunks)}: "
+            f"{len(chunk_ids)} household batches"
+        )
         _chunk_timer.start()
-        chunk_df = read_mapped_households(chunk_ids, mapped_folder_path=mapped_folder_path)
+        # Prune the directories by household, then select the household batches
+        # exactly: a household batch that is not included is not read even when
+        # another of its household's is.
+        chunk_households = sorted(
+            {household_of_household_batch[b] for b in chunk_ids}
+        )
+        chunk_df = read_mapped_households(
+            chunk_households,
+            mapped_folder_path=mapped_folder_path,
+            household_batch_ids=chunk_ids,
+        )
 
         # Computational safety guard (independent of the index coexistence
         # guard): a household with several household batches, or with
@@ -965,8 +989,8 @@ def resample_hh_data_duckdb(
     _schema_types = source_schema_types(source_path)
     _src_sql = source_sql(source_path)
     if source_is_shards:
-        # Household-batch-safety guard at this compute entry point: a household with
-        # more than one household batch over the same ReadingDate raises.
+        # Batch-safety guard at this compute entry point: a timestamp twice
+        # in one household batch raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(source_table(source_path))
 
@@ -1209,8 +1233,8 @@ def aggregate_project_data_duckdb(
         _schema_types = source_schema_types(source_path)
         _src_sql = source_sql(source_path)
         if source_is_sharded(source_path):
-            # Household-batch-safety guard: a household with more than one household batch over
-            # the same ReadingDate would double-count project sums.
+            # Batch-safety guard: a timestamp twice in one household batch
+            # would double-count project sums.
             from etdtransform.impute import _assert_batch_safe_ibis
             _assert_batch_safe_ibis(source_table(source_path))
         active_config = {col: cfg for col, cfg in config.items() if col in source_schema_names}

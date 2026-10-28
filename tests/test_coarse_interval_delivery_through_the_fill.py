@@ -23,8 +23,8 @@ from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
 from etdmap.testing import (
     PAIRS_EMPTY,
     declare_synthetic_model,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     sidecar_frame,
     synthetic_model,
 )
@@ -73,7 +73,7 @@ def _hourly_frame(reading):
     # shape under test: with a usable register the fill would read its volume
     # from there instead of from the interval column.
     frame = household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {DIFF: [pd.NA] * N}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {DIFF: [pd.NA] * N}},
         start="2026-01-01",
         freq="5min",
         tz=None,

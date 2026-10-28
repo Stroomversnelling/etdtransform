@@ -25,8 +25,8 @@ from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
 from etdmap.testing import (
     PAIRS_EMPTY,
     declare_synthetic_model,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     sidecar_frame,
     synthetic_model,
 )
@@ -78,7 +78,7 @@ def _household(household, project, grid):
     per_reading = DELIVERED_EVERY // grid
     return household_batches_frame(
         {
-            household_batch_of(household): {
+            one_to_one_test_household_batch_of(household): {
                 DIFF: [
                     READING if position % per_reading == 0 else pd.NA
                     for position in range(periods)
@@ -99,7 +99,7 @@ def _household(household, project, grid):
 def _cadence_rows(frame, household, grid):
     """The sidecar rows for *household*'s household batch, measured off its own rows."""
     return cadence_to_rows(
-        household_batch_of(household),
+        one_to_one_test_household_batch_of(household),
         detect_column_cadence(frame, grid_minutes=grid),
     )
 
@@ -298,14 +298,14 @@ class TestAGridThatDividesNothing:
         parts = [
             # Project 1 on a five-minute grid, reporting every ten.
             household_batches_frame(
-                {household_batch_of(1): {DIFF: [pd.NA, pd.NA, value, pd.NA]}},
+                {one_to_one_test_household_batch_of(1): {DIFF: [pd.NA, pd.NA, value, pd.NA]}},
                 project=1, start=START, freq="5min", tz=None,
                 pairs=PAIRS_EMPTY,
             ),
             # Project 3 on a seven-minute grid, reporting every twenty-eight.
             household_batches_frame(
                 {
-                    household_batch_of(2): {
+                    one_to_one_test_household_batch_of(2): {
                         DIFF: [pd.NA, pd.NA, pd.NA, pd.NA, value]
                     }
                 },
@@ -317,9 +317,9 @@ class TestAGridThatDividesNothing:
         cadence = sidecar_frame(
             "cadence",
             [
-                {ids.HOUSEHOLD_BATCH: household_batch_of(1), "column": DIFF,
+                {ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(1), "column": DIFF,
                  "cadence_minutes": 10},
-                {ids.HOUSEHOLD_BATCH: household_batch_of(2), "column": DIFF,
+                {ids.HOUSEHOLD_BATCH: one_to_one_test_household_batch_of(2), "column": DIFF,
                  "cadence_minutes": 28},
             ],
         )
@@ -365,7 +365,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
     def _frame(self, households=10):
         return household_batches_frame(
             {
-                household_batch_of(household): {
+                one_to_one_test_household_batch_of(household): {
                     DIFF: [self.AT_GRID] * self.SLOTS
                 }
                 for household in range(1, households + 1)

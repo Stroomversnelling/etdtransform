@@ -19,8 +19,8 @@ import pytest
 from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
-    household_batch_of,
     household_batches_frame,
+    one_to_one_test_household_batch_of,
     sidecar_columns,
     sidecar_frame,
 )
@@ -59,7 +59,7 @@ def _interval_only_frame(reading=1.2, missing=(), n=N):
     # PAIRS_EMPTY: the register is the one that never arrived, so the pair is
     # present and holds nothing, leaving the interval column the only source.
     return household_batches_frame(
-        {household_batch_of(HOUSEHOLD): {DIFF: values}},
+        {one_to_one_test_household_batch_of(HOUSEHOLD): {DIFF: values}},
         start="2026-01-01",
         freq="5min",
         tz=None,
@@ -76,7 +76,7 @@ def _interval_only_cadence(household=HOUSEHOLD):
             {"column": CUM, "cadence_minutes": GRID, "n_readings": 0},
             {"column": DIFF, "cadence_minutes": GRID * K, "n_readings": N // K},
         ],
-        household_batch_id=household_batch_of(household),
+        household_batch_id=one_to_one_test_household_batch_of(household),
     )
 
 
@@ -185,7 +185,7 @@ class TestOtherDeliveryFormsAreUntouched:
         # pairs=False: both halves are supplied here, the register directly and
         # the interval column by differencing it.
         df = household_batches_frame(
-            {household_batch_of(HOUSEHOLD): {CUM: values}},
+            {one_to_one_test_household_batch_of(HOUSEHOLD): {CUM: values}},
             start="2026-01-01",
             freq="5min",
             tz=None,
@@ -207,7 +207,7 @@ class TestOtherDeliveryFormsAreUntouched:
                 {"column": DIFF, "cadence_minutes": GRID * K,
                  "n_readings": N // K},
             ],
-            household_batch_id=household_batch_of(HOUSEHOLD),
+            household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
         )
 
     def test_a_delivered_register_is_never_spread(self):
@@ -225,7 +225,7 @@ class TestOtherDeliveryFormsAreUntouched:
                 {"column": CUM, "cadence_minutes": GRID, "n_readings": 0},
                 {"column": DIFF, "cadence_minutes": GRID, "n_readings": 0},
             ],
-            household_batch_id=household_batch_of(HOUSEHOLD),
+            household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
         )
         out = _impute(df, cadence)
         assert not any(_has(out, ImputeType.RESAMPLED_TO_GRID))
@@ -242,7 +242,7 @@ class TestOtherDeliveryFormsAreUntouched:
                 {"column": CUM, "cadence_minutes": GRID},
                 {"column": DIFF, "cadence_minutes": GRID * K},
             ],
-            household_batch_id=household_batch_of(HOUSEHOLD),
+            household_batch_id=one_to_one_test_household_batch_of(HOUSEHOLD),
             partial=[
                 name for name in sidecar_columns("cadence")
                 if name != "n_readings"

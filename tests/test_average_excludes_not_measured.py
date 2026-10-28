@@ -30,7 +30,7 @@ from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household_batch,
     _treat_frozen_spans,
 )
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.vectorized_impute import impute_and_normalize
 
@@ -78,7 +78,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
             current += NORMAL
         values.append(current)
 
-    household_batch_id = household_batch_of(hh)
+    household_batch_id = one_to_one_test_household_batch_of(hh)
     df = household_batches_frame(
         {household_batch_id: {CUM: values}},
         start="2026-01-01",
@@ -114,7 +114,7 @@ def _clean_household(hh, n=40):
     """
     return household_batches_frame(
         {
-            household_batch_of(hh): {
+            one_to_one_test_household_batch_of(hh): {
                 DIFF: [0.0] + [NORMAL] * (n - 1),
                 FLAGS: [0] * n,
             }
@@ -220,7 +220,7 @@ class TestNothingChangesWhereThereIsNothingToExclude:
     def test_every_invented_kind_is_kept_out(self, flag):
         df = _project(n_clean=20, with_span=0)
         target = df[ids.HOUSEHOLD_BATCH].isin(
-            [household_batch_of(1), household_batch_of(2)]
+            [one_to_one_test_household_batch_of(1), one_to_one_test_household_batch_of(2)]
         )
         df.loc[target, DIFF] = 99.0
         df.loc[target, FLAGS] = flag.value

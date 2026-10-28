@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 import sympy as sp
 from etdmap import ids
-from etdmap.testing import household_batch_of, household_batches_frame
+from etdmap.testing import household_batches_frame, one_to_one_test_household_batch_of
 
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
@@ -202,7 +202,7 @@ def _make_multi_schema_df():
     """
     return household_batches_frame(
         {
-            household_batch_of(household_id): {
+            one_to_one_test_household_batch_of(household_id): {
                 column: [value] * N for column, value in values.items()
             }
             for household_id, values in _MULTI_SCHEMA_VALUES.items()

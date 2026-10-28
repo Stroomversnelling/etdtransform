@@ -28,20 +28,11 @@ REPO = pathlib.Path(__file__).parent.parent
 TREES = (REPO / "etdtransform", REPO / "tests")
 MODEL = "etdmap/etdmap/data/model.yaml"
 
-#: Files exempt from a check, and why. Every naming count was driven to zero
-#: before this gate landed, so the prose entries are empty and meant to stay
-#: that way. The keying entries are the two places a household IS the right
-#: key, each for a reason the model itself gives.
-ALLOWED: dict[str, dict[str, str]] = {
-    "household_keyed_grouping": {
-        "aggregate.py": (
-            "the read chunker groups shard DIRECTORIES, whose path level is "
-            "the household, to pick one project per chunk; a chunk is a "
-            "grouping for reading and not a unit of analysis, which the code "
-            "says where it does it"
-        ),
-    },
-}
+#: Files exempt from a check, and why. Every count was driven to zero before
+#: this gate landed, so every entry is empty and meant to stay that way: an
+#: exemption here stops the check reporting a whole file, so it is the one
+#: thing that can let a regression back in silently.
+ALLOWED: dict[str, dict[str, str]] = {}
 for _name in list(PROSE_CHECKS) + list(KEY_CHECKS):
     ALLOWED.setdefault(_name, {})
 
