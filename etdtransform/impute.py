@@ -1449,22 +1449,52 @@ def _assert_batch_safe_ibis(tbl) -> None:
 
     One household batch is one series, so ``ids.HOUSEHOLD_BATCH`` is the key a
     duplicate is judged on. A household holding several household batches is
-    not a finding here -- each is its own series, in its own project, and
-    nothing a stage computes crosses them.
+    ordinary input -- each is its own series, in its own project, and nothing a
+    stage computes crosses them.
+
+    What is not ordinary is a household holding several household batches
+    WITHIN one project: a household occurs at most once in a project, so that
+    is the same household counted twice in one population. Checked per project
+    where the input names one, and per household otherwise, since an input
+    without a project column cannot tell the two apart.
 
     Raises
     ------
+    HouseBatchOverlapError
+        A household holds more than one household batch within one project.
     ValueError
         Duplicate (ids.HOUSEHOLD_BATCH, ReadingDate) rows. These double-weight
         the project averages and break the diff and sort order.
     """
+    from etdmap.index_helpers import HouseBatchOverlapError
+
+    if ids.HOUSEHOLD_BATCH in tbl.columns and ids.HOUSEHOLD in tbl.columns:
+        within = (
+            [ids.PROJECT, ids.HOUSEHOLD]
+            if ids.PROJECT in tbl.columns
+            else [ids.HOUSEHOLD]
+        )
+        per_household = tbl.group_by(within).aggregate(
+            n_batches=tbl[ids.HOUSEHOLD_BATCH].nunique()
+        )
+        multi = per_household.filter(per_household.n_batches > 1).execute()
+        if len(multi):
+            scope = " and ".join(within)
+            raise HouseBatchOverlapError(
+                f"[household batch safety] {len(multi)} ({scope}) group(s) "
+                f"hold more than one {ids.HOUSEHOLD_BATCH}: "
+                f"{multi.to_dict('records')}. A household occurs at most once "
+                f"in a project, so this is one household counted twice in one "
+                f"population."
+            )
+
     n_rows = int(tbl.count().execute())
     n_keys = int(
         tbl[[ids.HOUSEHOLD_BATCH, "ReadingDate"]].distinct().count().execute()
     )
     if n_rows != n_keys:
         raise ValueError(
-            f"[batch safety] {n_rows - n_keys} duplicate "
+            f"[household batch safety] {n_rows - n_keys} duplicate "
             f"({ids.HOUSEHOLD_BATCH}, ReadingDate) row(s) -- a timestamp twice "
             f"in one series double-weights the project averages and breaks the "
             f"diff math. Resolve the duplication first."
@@ -1490,7 +1520,7 @@ def prepare_diff_averages_sharded(
     Outputs are written under ``<aggregate_folder_path>/sharded/`` (the sharded
     pipeline's artifact area), keeping legacy artifacts untouched.
 
-    Batch safety: refuses a timestamp twice in one household batch (see
+    Household-batch safety: refuses a timestamp twice in one household batch (see
     _assert_batch_safe_ibis) -- the estimation inputs feed everything
     downstream. A household delivered as several household batches is ordinary
     input: each is its own series, in its own project, and an average is taken

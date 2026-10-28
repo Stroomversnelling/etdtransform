@@ -989,7 +989,7 @@ def resample_hh_data_duckdb(
     _schema_types = source_schema_types(source_path)
     _src_sql = source_sql(source_path)
     if source_is_shards:
-        # Batch-safety guard at this compute entry point: a timestamp twice
+        # Household-batch-safety guard at this compute entry point: a timestamp twice
         # in one household batch raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(source_table(source_path))
@@ -1233,7 +1233,7 @@ def aggregate_project_data_duckdb(
         _schema_types = source_schema_types(source_path)
         _src_sql = source_sql(source_path)
         if source_is_sharded(source_path):
-            # Batch-safety guard: a timestamp twice in one household batch
+            # Household-batch-safety guard: a timestamp twice in one household batch
             # would double-count project sums.
             from etdtransform.impute import _assert_batch_safe_ibis
             _assert_batch_safe_ibis(source_table(source_path))

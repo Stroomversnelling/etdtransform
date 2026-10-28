@@ -199,7 +199,7 @@ def add_calculated_columns_to_hh_data_ibis(
     assert_cumulative_interval_pairs_complete(parquet_col_set)
 
     if source_is_shards:
-        # Batch-safety guard at this compute entry point: a timestamp twice
+        # Household-batch-safety guard at this compute entry point: a timestamp twice
         # in one household batch raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(tbl)

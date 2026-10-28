@@ -11,28 +11,26 @@ The I/O shell is thin on purpose and the math lives in one place:
 `impute_mapped_households_sharded` calls `_impute_chunk_core`, and the
 summaries come from a shared finalizer.
 
-Batch safety, at the compute entry points: a timestamp twice in one household
+Household-batch safety, at the compute entry points: a timestamp twice in one household
 batch double-weights the project averages and breaks the sort/diff math, so it
 is a loud stop. One household batch is one series and nothing a stage computes
 crosses them, so a household holding several household batches is ordinary
 input -- the averaging keeps each in its own project.
 """
 
-import shutil
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from etdmap import ids
 from etdmap.index_helpers import HouseBatchOverlapError
-from etdmap.storage import resolve_source_path
 from etdmap.testing import index_frame, one_to_one_test_household_batch_of
 
 import etdtransform
 from etdtransform.aggregate import impute_mapped_households_sharded
 from etdtransform.impute import prepare_diff_averages_sharded
-from etdtransform.presence import WINDOW_MINUTES
 from etdtransform.load_data import included_household_batch_ids
+from etdtransform.presence import WINDOW_MINUTES
 
 #: The spacing every frame in this file sits on, in minutes. The averaging
 #: resolves a project's grid from the cadence sidecar, so the frames and the
@@ -197,6 +195,7 @@ class TestBatchSafetyGuards:
         )
         with pytest.raises(ValueError):
             assert_imputation_input_batch_safe(pooled)
+
 
 @pytest.mark.integration
 @pytest.mark.pipeline
