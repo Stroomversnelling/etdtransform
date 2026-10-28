@@ -23,7 +23,14 @@ Synthetic frames only -- no pipeline, no fixtures.
 
 import pandas as pd
 import pytest
+from etdmap import ids
 from etdmap.data_model import thresholds_dict
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    household_batch_of,
+    sidecar_frame,
+)
 
 from etdtransform.bounds import (
     cadence_minutes_by_household_batch,
@@ -50,70 +57,48 @@ HOURLY_MAX = DECLARED_MAX * K**0.5
 N = 288 * 2
 RISE = 0.6  # consumption delivered in one hour
 
-#: The household every frame below belongs to.
+#: The household every frame below describes. Its dataset -- keyed on
+#: `HuisBatchIdBSV`, which the cadence sidecar and every lookup built from it
+#: are keyed on too -- is ``household_batch_of(HOUSEHOLD)``.
 HOUSEHOLD = 1
 
-
-def _batch(household):
-    """The dataset id a frame for *household* carries.
-
-    A dataset -- one body of data for a household -- is keyed on
-    `HuisBatchIdBSV`, which the cadence sidecar and every lookup built from it
-    are keyed on too. It is not the household id.
-    """
-    return household + 1000
-
-
-def _cadence(rows):
-    """The cadence sidecar for rows of (household, column, minutes, readings).
-
-    Each row is recorded against that household's own dataset, which is the key
-    the lookups in :mod:`etdtransform.bounds` read and return.
-    """
-    households = [r[0] for r in rows]
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array(households, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array(
-            [_batch(household) for household in households], dtype="Int64"
-        ),
-        "column": pd.array([r[1] for r in rows], dtype="string"),
-        "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
-        "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
-    })
+#: Where every frame below starts.
+START = "2026-01-01"
 
 
 def _coarse_register_cadence():
     """A register delivered hourly. Its interval column is derived later, so the
     sidecar has no row for it and the pairing has to answer."""
-    return _cadence([
-        (HOUSEHOLD, "ReadingDate", GRID, N),
-        (HOUSEHOLD, CUM, GRID * K, N // K),
-    ])
+    return sidecar_frame(
+        "cadence",
+        [
+            {"column": ids.READING_DATE, "cadence_minutes": GRID,
+             "n_readings": N},
+            {"column": CUM, "cadence_minutes": GRID * K, "n_readings": N // K},
+        ],
+        household_batch_id=household_batch_of(HOUSEHOLD),
+    )
 
 
 def _coarse_interval_cadence():
     """Intervals delivered hourly, register never sent -- so the register's row
     records no readings and carries the grid."""
-    return _cadence([
-        (HOUSEHOLD, "ReadingDate", GRID, N),
-        (HOUSEHOLD, CUM, GRID, 0),
-        (HOUSEHOLD, DIFF, GRID * K, N // K),
-    ])
-
-
-def _base(n=N):
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([HOUSEHOLD] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(HOUSEHOLD)] * n, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-    })
+    return sidecar_frame(
+        "cadence",
+        [
+            {"column": ids.READING_DATE, "cadence_minutes": GRID,
+             "n_readings": N},
+            {"column": CUM, "cadence_minutes": GRID, "n_readings": 0},
+            {"column": DIFF, "cadence_minutes": GRID * K,
+             "n_readings": N // K},
+        ],
+        household_batch_id=household_batch_of(HOUSEHOLD),
+    )
 
 
 def _coarse_register_frame(n=N, rise=RISE):
     """A register reading every K rows; the interval column derived from it is
     empty between readings, which is what a sparse register differences to."""
-    df = _base(n)
     total, values = 100.0, []
     for row in range(n):
         if row % K == K - 1:
@@ -121,7 +106,15 @@ def _coarse_register_frame(n=N, rise=RISE):
             values.append(total)
         else:
             values.append(pd.NA)
-    df[CUM] = pd.array(values, dtype="Float64")
+    df = datasets_frame(
+        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        start=START,
+        freq=f"{GRID}min",
+        tz=None,
+        # Both halves of the pair are stated here: the register above, its
+        # differences below.
+        pairs=False,
+    )
     df[DIFF] = df[CUM].diff().round(10)
     df.loc[0, DIFF] = 0
     return df
@@ -129,13 +122,20 @@ def _coarse_register_frame(n=N, rise=RISE):
 
 def _coarse_interval_frame(n=N, reading=RISE):
     """An interval reading every K rows, and no register at all."""
-    df = _base(n)
-    df[CUM] = pd.array([pd.NA] * n, dtype="Float64")
     values = [pd.NA] * n
     for row in range(K - 1, n, K):
         values[row] = reading
-    df[DIFF] = pd.array(values, dtype="Float64")
-    return df
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {DIFF: values}},
+        start=START,
+        freq=f"{GRID}min",
+        tz=None,
+        # The register is present and empty: the stages refuse half a pair, and
+        # the averaging takes a dataset's volume from the register wherever that
+        # column holds any value, which would displace the intervals stated
+        # here.
+        pairs=PAIRS_EMPTY,
+    )
 
 
 def _placed(df, cadence):
@@ -148,7 +148,7 @@ def _placed(df, cadence):
     import ibis
 
     result = calculate_average_diff_ibis(
-        ibis.memtable(df), "ProjectIdBSV", [DIFF],
+        ibis.memtable(df), ids.PROJECT, [DIFF],
         cadence=cadence, grid_minutes=GRID,
         # One household contributes, which is the point of this file and is
         # smaller than a project, so the household floor is lowered rather than
@@ -188,7 +188,7 @@ class TestSpreadingACoarseDeliveredRegister:
         """Cadence is measured on the columns as delivered, so a column derived
         later has no row of its own."""
         assert cadence_minutes_by_household_batch(DIFF, _coarse_register_cadence()) == {
-            _batch(HOUSEHOLD): float(GRID * K)
+            household_batch_of(HOUSEHOLD): float(GRID * K)
         }
 
 
@@ -217,7 +217,7 @@ class TestSpreadingACoarseDeliveredInterval:
         it through would report the delivered interval as reporting every slot,
         and the spreading would stop."""
         assert cadence_minutes_by_household_batch(DIFF, _coarse_interval_cadence()) == {
-            _batch(HOUSEHOLD): float(GRID * K)
+            household_batch_of(HOUSEHOLD): float(GRID * K)
         }
 
 

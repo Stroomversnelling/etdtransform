@@ -16,12 +16,13 @@ from etdmap.index_helpers import read_index
 
 import etdtransform
 from etdtransform.calculated_columns import _catalog_hash
-# Re-exported so existing callers keep importing the calculated stage
-# from here. The stage itself now lives in calculated_stage.py.
+# Re-exported so callers can import the calculated stage from here; the
+# stage itself lives in calculated_stage.py.
 from etdtransform.calculated_stage import (  # noqa: F401
     add_calculated_columns_to_hh_data_ibis,
 )
 from etdtransform.impute import read_diffs
+from etdmap import ids
 
 """
 Aggregating the data for a given time interval
@@ -34,7 +35,7 @@ Example intervals:
 
 def read_hh_data(interval="default", metadata_columns=None):
     """
-    Read household data from a parquet file and optionally add index columns to.
+    Read household data from a parquet file and optionally add index columns.
 
     Parameters
     ----------
@@ -79,14 +80,18 @@ def add_index_columns(df: pd.DataFrame, columns: Optional[list] = None) -> pd.Da
 
     Notes
     -----
-    This function merges the input DataFrame with an index DataFrame based on 'HuisIdBSV' and 'ProjectIdBSV'.
+    Merges the input DataFrame with the index on ``ids.HOUSEHOLD_BATCH``, the
+    index's own key. A household occurs at most once in a project, so joining
+    on the household together with its project reaches the same single row --
+    the same key written in two columns, leaning on an invariant it does not
+    state.
     """
     if columns:
         index_df, index_path = read_index()
-        columns_to_select = ["HuisIdBSV", "ProjectIdBSV", *columns]
+        columns_to_select = [ids.HOUSEHOLD_BATCH, *columns]
         columns_to_select = list(set(columns_to_select))
         index_df = index_df[columns_to_select]
-        df = df.merge(index_df, on=["HuisIdBSV", "ProjectIdBSV"], how="left")
+        df = df.merge(index_df, on=ids.HOUSEHOLD_BATCH, how="left")
         return df
     else:
         return df
@@ -111,18 +116,18 @@ def reconstruct_cumulative_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame
     and only differences across it mean anything. "Check" is a difference either
     way, so it remains the drift imputation introduced.
 
-    Data must be sorted by HuisBatchIdBSV then ReadingDate before calling this.
-    Mutates df in-place and returns it.
+    Data must be sorted by household dataset then ReadingDate before calling
+    this. Mutates df in-place and returns it.
     """
     for col in cols:
         df[col + "Original"] = df[col]
         df[col] = (
-            df.groupby("HuisBatchIdBSV", sort=False)[interval_column(col)]
+            df.groupby(ids.HOUSEHOLD_BATCH, sort=False)[interval_column(col)]
             .cumsum()
         )
         df[col + "Check"] = (
             (df[col] - df[col + "Original"])
-            .groupby(df["HuisBatchIdBSV"]).diff()
+            .groupby(df[ids.HOUSEHOLD_BATCH]).diff()
         )
     return df
 
@@ -142,10 +147,10 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
         tbl.to_parquet(imputed_path)   # overwrites with reconstructed data
     """
     win_cum = ibis.window(
-        group_by="HuisBatchIdBSV", order_by="ReadingDate",
+        group_by=ids.HOUSEHOLD_BATCH, order_by="ReadingDate",
         preceding=None, following=0,
     )
-    win_lag = ibis.window(group_by="HuisBatchIdBSV", order_by="ReadingDate")
+    win_lag = ibis.window(group_by=ids.HOUSEHOLD_BATCH, order_by="ReadingDate")
 
     # Pass 1: all orig_col saves + cumsum rewrites in one mutate().
     # Batching avoids building a 2*len(cols)-deep nested subquery chain --
@@ -175,7 +180,7 @@ def reconstruct_cumulative_columns_ibis(tbl: "ibis.Table", cols: list) -> "ibis.
 #: diff_col_total, pre-reconstruction cum_col_min_max_diff), the factor
 #: decision record and total_records. The counts half is derived and
 #: rejoined by etdworkflow/postprocess_reports.py.
-_SLIM_SUMMARY_KEYS = ("ProjectIdBSV", "HuisIdBSV", "column")
+_SLIM_SUMMARY_KEYS = (ids.PROJECT, ids.HOUSEHOLD_BATCH, "column")
 _SLIM_SUMMARY_STATS = ("diff_col_total", "cum_col_min_max_diff")
 _SLIM_SUMMARY_FACTORS = (
     "house_impute_factor", "house_factor_is_fallback", "house_diff_median",
@@ -213,16 +218,14 @@ _VOLUME_COUNTS = (
 
 
 
-#: Per-chunk wall-time budget for the imputation shells, in seconds. The
-#: documented pre-phase-1 baseline is ~8 minutes per 50-household chunk
-#: (docs/performance/full-estate-pipeline-timing-2026-09-29.md in the
-#: workflow repository); a chunk beyond this budget is announced loudly so a
-#: regression is visible on the FIRST chunk of a run, not after it.
+#: Per-chunk wall-time budget for the imputation shell, in seconds. A chunk
+#: beyond this budget is announced loudly so a regression is visible on the
+#: FIRST chunk of a run, not after it.
 CHUNK_BUDGET_SECONDS = 720.0
 
 
 class _ChunkTimer:
-    """Times each chunk of an imputation shell and projects the whole run.
+    """Times each chunk of the imputation shell and projects the whole run.
 
     Logs every chunk's wall time with a running projection, and warns --
     once, loudly -- as soon as the average chunk exceeds the budget, naming
@@ -261,10 +264,9 @@ class _ChunkTimer:
             self._warned = True
             logging.warning(
                 f"{self.log_prefix} Chunk time {average:.0f}s exceeds the "
-                f"{self.budget:.0f}s budget (documented baseline ~480s per "
-                f"50-household chunk). Projected total {projected / 60:.0f}m "
-                f"-- investigate before letting the run finish; see "
-                f"docs/performance/full-estate-pipeline-timing-2026-09-29.md."
+                f"{self.budget:.0f}s budget. Projected total "
+                f"{projected / 60:.0f}m -- investigate before letting the run "
+                f"finish."
             )
 
 
@@ -318,22 +320,19 @@ def _finalize_impute_outputs(
     volume_reports=None,
 ) -> None:
     """
-    Shared step-4+5 finalizer for both imputation shells: combine gap stats
-    and write the slim household summary plus the per-gap volume artifact.
+    Step-4+5 finalizer for the imputation shell: combine gap stats and write
+    the slim household summary plus the per-gap volume artifact.
 
     The project summary, the counts half of the household summary and
     household_aggregated_diff are derived by the end-of-pipeline
     post-processing step (etdworkflow/postprocess_reports.py) from the
     persisted outputs. ``imputed_read_sql`` and ``imputed_schema_names``
-    stay in the signature for the shells that pass them; nothing here reads
-    the finished output any more.
+    stay in the signature for the caller that passes them; nothing here reads
+    the finished output.
 
-    The combined gap stats stay in memory. They were also written as
-    impute_gap_stats.parquet, which duplicated impute_summary_household.parquet
-    at the same grain and on every shared column.
-
-    Extracted from the legacy chunked shell so the two paths produce
-    identical artifacts (protected by test_total_imputation_workflow).
+    The combined gap stats stay in memory. Writing them separately would
+    duplicate impute_summary_household.parquet at the same grain and on every
+    shared column.
     """
     from etdtransform.vectorized_impute import methods_to_bitwise
 
@@ -353,7 +352,10 @@ def _finalize_impute_outputs(
     _write_volume_reports(volume_reports, output_folder, log_prefix)
 
     total_records_df = pd.DataFrame(
-        [{"HuisIdBSV": k, "total_records": v} for k, v in total_records.items()]
+        [
+            {ids.HOUSEHOLD_BATCH: k, "total_records": v}
+            for k, v in total_records.items()
+        ]
     )
     # The household factor and its inputs travel with the summary: a factor that
     # scaled a fill has to be readable in the data it produced.
@@ -368,11 +370,11 @@ def _finalize_impute_outputs(
     ]
     summary_house = (
         imputation_gap_stats_df[[
-            "ProjectIdBSV", "HuisIdBSV", "column", "diff_col_total",
+            ids.PROJECT, ids.HOUSEHOLD_BATCH, "column", "diff_col_total",
             "cum_col_min_max_diff", "missing", "imputed", "imputed_na",
             "methods", "bitwise_methods",
         ] + _factor_columns]
-        .merge(total_records_df, on="HuisIdBSV")
+        .merge(total_records_df, on=ids.HOUSEHOLD_BATCH)
     )
     summary_house["percentage_imputed"] = (
         summary_house["imputed"] / summary_house["total_records"] * 100
@@ -386,29 +388,29 @@ def _finalize_impute_outputs(
         engine="pyarrow",
     )
 
-    # The >40% warning keeps its behaviour from the in-memory counts; only
-    # the file slimmed.
+    # The >40% warning reads the in-memory counts, which the written file
+    # does not carry.
     over_40 = summary_house[summary_house["percentage_imputed"] > 40]
     for _, row in over_40.iterrows():
         logging.warning(
-            f"House {int(row['HuisIdBSV'])}, Column {row['column']} has "
+            f"House {int(row[ids.HOUSEHOLD])}, Column {row['column']} has "
             f"{row['percentage_imputed']:.2f}% imputed values."
         )
 
     # household_aggregated_diff is a pure post-fill aggregation of the
     # finished output and is written by the end-of-pipeline post-processing
-    # step (etdworkflow/postprocess_reports.py), not here -- removing a full
-    # pass over the output from the run.
+    # step (etdworkflow/postprocess_reports.py), not here, so the run makes no
+    # extra pass over its own output.
 
 
 def _chunk_ids_by_project(all_ids, project_of, chunk_size):
-    """Household ids in chunks that never straddle a project.
+    """The household ids in chunks that never straddle a project.
 
-    A chunk is only a memory window -- it decides how many households are held
-    at once, not how any of them are imputed. But the fill reads a project
-    average and reports per project, so a chunk holding halves of two projects
-    holds two unrelated populations and nothing in the run is grouped the way
-    the numbers are.
+    A chunk is a grouping for reading, not a unit of analysis -- it decides how
+    many households' shard directories are held at once, not how any of their
+    rows are imputed. But the fill reads a project average and reports per
+    project, so a chunk holding halves of two projects holds two unrelated
+    populations and nothing in the run is grouped the way the numbers are.
 
     The cap still applies inside each project, so a project larger than
     *chunk_size* still yields several chunks and the memory bound holds. A
@@ -422,9 +424,9 @@ def _chunk_ids_by_project(all_ids, project_of, chunk_size):
     chunks = []
     # None last, so an unknown project never splits a real one's chunks.
     for project in sorted(groups, key=lambda p: (p is None, p)):
-        ids = sorted(groups[project])
+        household_ids = sorted(groups[project])
         chunks.extend(
-            ids[i:i + chunk_size] for i in range(0, len(ids), chunk_size)
+            household_ids[i:i + chunk_size] for i in range(0, len(household_ids), chunk_size)
         )
     return chunks
 
@@ -434,13 +436,11 @@ def _impute_chunk_core(
     constraints=None, coverage_duty=None, apparaat_sets=None,
 ):
     """
-    Shared per-chunk imputation core: sort -> merge project diffs ->
+    Per-chunk imputation core: sort -> merge project diffs ->
     impute_and_normalize -> reconstruct cumulative columns.
 
-    IDENTICAL math for both shells -- the legacy single-file shell
-    (impute_hh_data_5min_chunked) and the sharded version
-    (impute_mapped_households_sharded). A future imputation rewrite lands HERE
-    once so the two paths cannot drift.
+    The imputation math lives here and only here, so the shell around it stays
+    I/O and no second copy of the math can drift from this one.
 
     Returns (imputed_chunk_df, gap_stats_chunk).
     """
@@ -450,18 +450,18 @@ def _impute_chunk_core(
         without_tariff_splits,
     )
 
-    chunk_df = sort_for_impute(chunk_df, "ProjectIdBSV")
-    chunk_df = chunk_df.merge(diffs, on=["ProjectIdBSV", "ReadingDate"], how="left")
+    chunk_df = sort_for_impute(chunk_df, ids.PROJECT)
+    chunk_df = chunk_df.merge(diffs, on=[ids.PROJECT, "ReadingDate"], how="left")
 
     chunk_df, gap_stats_chunk, _ = impute_and_normalize(
-        chunk_df, list(cum_cols), "ProjectIdBSV",
+        chunk_df, list(cum_cols), ids.PROJECT,
         volume_reports=volume_reports,
         constraints=constraints,
         coverage_duty=coverage_duty,
         apparaat_sets=apparaat_sets,
     )
 
-    # Rebuild cumulative columns from imputed Diff columns per household.
+    # Rebuild cumulative columns from imputed Diff columns per dataset.
     # chunk_df is already sorted by sort_for_impute, so cumsum is correct.
     # Tariff splits are not processed by the fill, so their delivered
     # cumulative registers must not be overwritten by a rebuilt cumsum.
@@ -475,7 +475,7 @@ def _impute_chunk_core(
 
 
 def _read_coverage_duty(folder):
-    """The fill-order table beside avg_diffs, or None where a run predates it."""
+    """The fill-order table beside avg_diffs, or None when *folder* has none."""
     path = os.path.join(str(folder), "avg_coverage_duty.parquet")
     if os.path.exists(path):
         return pd.read_parquet(path, dtype_backend="numpy_nullable")
@@ -506,23 +506,20 @@ def impute_mapped_households_sharded(
     apparaat_sets: dict | None = None,
 ) -> None:
     """
-    Sharded version of impute_hh_data_5min_chunked (stage 3).
+    The imputation stage (stage 3) over the sharded mapped data.
 
-    I/O shell only -- the imputation math is the shared _impute_chunk_core.
-    Chunks are materialised with read_mapped_households (direct per-shard
-    reads -- the measured-fastest strategy for household batches);
-    ProjectIdBSV is joined from the index; Meenemen inclusion comes
-    from the index at read time (the stage-2 filter's sharded replacement).
+    I/O shell only -- the imputation math is _impute_chunk_core. Chunks are
+    materialised with read_mapped_households (direct per-shard reads -- the
+    measured-fastest strategy for household datasets); the project is joined
+    from the index; Meenemen inclusion comes from the index at read time
+    rather than from a materialised default file.
 
-    Input read from ``aggregate_folder_path``: avg_diffs.parquet (the same
-    artifact the legacy shell uses -- identical inputs keep the two paths
-    comparable).
+    Input read from ``aggregate_folder_path``: avg_diffs.parquet.
 
     Output: hive shards under
     ``<aggregate_folder_path>/sharded/household_imputed/HuisIdBSV=<n>/HuisBatchIdBSV=<p>/part.parquet``
-    (ids in the path, not the files). The writer owns and clears its output
-    directory -- re-runs are idempotent. The legacy summary derivations stay
-    with the legacy shell for now (tracked).
+    (the partition ids live in the path, not in the files). The writer owns and
+    clears its output directory -- re-runs are idempotent.
     """
     import glob as glob_mod
     import shutil
@@ -550,33 +547,35 @@ def impute_mapped_households_sharded(
         all_ids = included_household_ids(mapped_folder_path)
 
     index_df, _ = read_index(mapped_folder_path)
-    if "HuisBatchIdBSV" not in index_df.columns:
+    if ids.HOUSEHOLD_BATCH not in index_df.columns:
         raise ValueError(
-            "index.parquet has no HuisBatchIdBSV column; "
+            "index.parquet has no household-batch column; "
             "re-run the index save to add the household-batch columns."
         )
-    # Keyed on the household batch, NOT the household: a household's project assignment is
-    # constant WITHIN a batch but may differ BETWEEN batches (project
-    # definitions change over time; the household does not). So
-    # HuisIdBSV -> ProjectIdBSV is not a function over time, while
-    # HuisBatchIdBSV -> ProjectIdBSV is. HuisBatchIdBSV is also the primary key
-    # of index.parquet (one row per household batch), so keying on HuisIdBSV
-    # would additionally keep whichever batch row happened to come last.
-    household_batch_projects = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
+    # Keyed on the household dataset, NOT the household: a household's project
+    # assignment is constant WITHIN a household batch but may differ BETWEEN
+    # them (project definitions change over time; the household does not). So
+    # household -> project is not a function over time, while
+    # dataset -> project is. The dataset is also the primary key of
+    # index.parquet (one row per household dataset), so keying on the
+    # household would additionally keep whichever of its rows happened to come
+    # last.
+    household_batch_projects = index_df[[ids.HOUSEHOLD_BATCH, ids.PROJECT]].dropna()
     project_by_household_batch = dict(zip(
-        (int(x) for x in household_batch_projects["HuisBatchIdBSV"]),
-        (int(x) for x in household_batch_projects["ProjectIdBSV"]),
+        (int(x) for x in household_batch_projects[ids.HOUSEHOLD_BATCH]),
+        (int(x) for x in household_batch_projects[ids.PROJECT]),
     ))
 
-    # Chunking needs one project per household, and the project is per batch
-    # (above), so a multi-batch household could sit under two. The smallest
-    # project id is a deterministic representative, and it only picks the
-    # household's memory window -- imputation groups each row on its batch's
-    # own project either way.
-    household_projects = index_df[["HuisIdBSV", "ProjectIdBSV"]].dropna()
+    # Chunking needs one project per household, and the project is per dataset
+    # (above), so a household with several household batches could sit under
+    # two projects. The smallest
+    # project id is a deterministic representative, and it only picks which
+    # chunk the household's shards are read in -- imputation groups each row on
+    # its own dataset's project either way.
+    household_projects = index_df[[ids.HOUSEHOLD, ids.PROJECT]].dropna()
     project_of_household = {
         int(h): int(p)
-        for h, p in household_projects.groupby("HuisIdBSV")["ProjectIdBSV"].min().items()
+        for h, p in household_projects.groupby(ids.HOUSEHOLD)[ids.PROJECT].min().items()
     }
     chunks = _chunk_ids_by_project(all_ids, project_of_household, chunk_size)
     logging.info(
@@ -605,14 +604,15 @@ def impute_mapped_households_sharded(
         _chunk_timer.start()
         chunk_df = read_mapped_households(chunk_ids, mapped_folder_path=mapped_folder_path)
 
-        # Computational batch-safety guard (independent of the index
-        # coexistence guard): multi-batch households / overlapping periods
-        # cannot be imputed correctly yet -- loud stop, never silent blending.
+        # Computational safety guard (independent of the index coexistence
+        # guard): a household with several household batches, or with
+        # overlapping periods, cannot be imputed correctly yet -- loud stop,
+        # never silent blending.
         from etdtransform.impute import assert_imputation_input_batch_safe
         assert_imputation_input_batch_safe(chunk_df)
 
-        chunk_df["ProjectIdBSV"] = pd.array(
-            [project_by_household_batch.get(int(b)) for b in chunk_df["HuisBatchIdBSV"]],
+        chunk_df[ids.PROJECT] = pd.array(
+            [project_by_household_batch.get(int(b)) for b in chunk_df[ids.HOUSEHOLD_BATCH]],
             dtype="Int64",
         )
 
@@ -622,11 +622,14 @@ def impute_mapped_households_sharded(
             apparaat_sets=apparaat_sets,
         )
         all_gap_stats.append(gap_stats_chunk)
-        for household_id, count in chunk_df.groupby("HuisIdBSV").size().items():
-            total_records[int(household_id)] = int(count)
+        # Per dataset: the summary's percentage_imputed divides a dataset's
+        # imputed count by this, so a household's two datasets must not share
+        # one total.
+        for batch_id, count in chunk_df.groupby(ids.HOUSEHOLD_BATCH).size().items():
+            total_records[int(batch_id)] = int(count)
 
         for (household_id, household_batch_id), g in chunk_df.groupby(
-            ["HuisIdBSV", "HuisBatchIdBSV"], sort=True
+            [ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH], sort=True
         ):
             part_dir = os.path.join(
                 out_root,
@@ -634,8 +637,8 @@ def impute_mapped_households_sharded(
                 f"HuisBatchIdBSV={int(household_batch_id)}",
             )
             os.makedirs(part_dir, exist_ok=True)
-            # Hive convention: partition ids live in the path, not the file.
-            g = g.drop(columns=["HuisIdBSV", "HuisBatchIdBSV"])
+            # Hive convention: the partition ids live in the path, not the file.
+            g = g.drop(columns=[ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH])
             pq.write_table(
                 pa.Table.from_pandas(g, preserve_index=False),
                 os.path.join(part_dir, "part.parquet"),
@@ -908,8 +911,8 @@ def resample_hh_data_duckdb(
 
     For 5min: column selection only -- no aggregation.
     For 15min / 60min: TIME_BUCKET groupby for Diff/total columns, then window
-    cumsum over HuisIdBSV + ProjectIdBSV to reconstruct cumulative counterparts
-    for every Diff column in the config.
+    cumsum over the household dataset and its project to reconstruct cumulative
+    counterparts for every Diff column in the config.
 
     Type validation: every aggregation column must be float, int, or boolean
     (boolean is cast to 0.0/1.0 in SUM/AVG SQL). Any other type triggers a
@@ -962,16 +965,16 @@ def resample_hh_data_duckdb(
     _schema_types = source_schema_types(source_path)
     _src_sql = source_sql(source_path)
     if source_is_shards:
-        # Batch-safety guard at this compute entry point: duplicate
-        # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
+        # Batch-safety guard at this compute entry point: a household with
+        # more than one dataset over the same ReadingDate raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(source_table(source_path))
 
-    if "HuisBatchIdBSV" not in source_schema_names:
+    if ids.HOUSEHOLD_BATCH not in source_schema_names:
         raise ValueError(
             "resample_hh_data_duckdb: the output partitions on HuisBatchIdBSV "
             "and the source has no such column. A household artifact always "
-            "carries the batch it was mapped in."
+            "carries the household batch it was mapped in."
         )
 
     active_config = {
@@ -1028,9 +1031,9 @@ def resample_hh_data_duckdb(
     # The household batch id rides along in the grouping: it is a partition key
     # of the output, so it has to survive the GROUP BY. It does not change the
     # grain, which is already per household batch.
-    _batch_id = ["HuisBatchIdBSV"]
-    id_cols = ["HuisIdBSV"] + _batch_id + ["ProjectIdBSV", "ReadingDate"]
-    _group_ids_sql = ", ".join(["HuisIdBSV"] + _batch_id + ["ProjectIdBSV"])
+    _batch_id = [ids.HOUSEHOLD_BATCH]
+    id_cols = [ids.HOUSEHOLD] + _batch_id + [ids.PROJECT, "ReadingDate"]
+    _group_ids_sql = ", ".join([ids.HOUSEHOLD] + _batch_id + [ids.PROJECT])
 
     for interval in intervals:
         out_target = os.path.join(output_dir, f"household_{interval}")
@@ -1074,7 +1077,7 @@ def resample_hh_data_duckdb(
 
             cumsum_exprs = [
                 f'SUM("{diff_col}") OVER ('
-                f"PARTITION BY HuisIdBSV, ProjectIdBSV "
+                f"PARTITION BY HuisBatchIdBSV, ProjectIdBSV "
                 f"ORDER BY ReadingDate "
                 f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
                 f') AS "{base_col}"'
@@ -1142,7 +1145,7 @@ def aggregate_project_data_duckdb(
     etdtransform.options.aggregate_folder_path.
 
     Cumulative counterparts of Diff columns are rebuilt via window cumsum
-    (PARTITION BY ProjectIdBSV ORDER BY ReadingDate) after the GROUP BY step,
+    (partitioned by project, ordered by ReadingDate) after the GROUP BY step,
     matching the convention in resample_hh_data_duckdb.
 
     Type validation: every aggregation column must be float, int, or boolean
@@ -1206,8 +1209,8 @@ def aggregate_project_data_duckdb(
         _schema_types = source_schema_types(source_path)
         _src_sql = source_sql(source_path)
         if source_is_sharded(source_path):
-            # Batch-safety guard: duplicate (HuisIdBSV, ReadingDate) rows in
-            # the household input would double-count project sums.
+            # Batch-safety guard: a household with more than one dataset over
+            # the same ReadingDate would double-count project sums.
             from etdtransform.impute import _assert_batch_safe_ibis
             _assert_batch_safe_ibis(source_table(source_path))
         active_config = {col: cfg for col, cfg in config.items() if col in source_schema_names}
@@ -1292,11 +1295,10 @@ def aggregate_project_data_duckdb(
         with duckdb.connect() as con:
             con.execute(sql)
 
-        # Recompute derive columns (ratios) from their cross-household
-        # aggregated components. Unlike the household resample, this applies at
-        # EVERY interval (incl. 5min): a fleet ratio must be
-        # sum(numerator)/sum(denominator) over households, never the mean of the
-        # per-household ratios.
+        # Recompute derive columns (ratios) from their aggregated components.
+        # Unlike the household resample, this applies at EVERY interval (incl.
+        # 5min): a project ratio must be sum(numerator)/sum(denominator) over
+        # the project's datasets, never the mean of their individual ratios.
         if derive_cols:
             _rows = _derive_columns_in_parquet(out_path, derive_cols, catalog_df)
             _derive_prov.extend(

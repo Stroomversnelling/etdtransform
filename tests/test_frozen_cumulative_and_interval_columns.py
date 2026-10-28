@@ -11,9 +11,11 @@ import logging
 
 import pandas as pd
 import pytest
+from conftest import cadence_table, project_averages
+from etdmap import ids
+from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
-from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -26,6 +28,18 @@ FREEZE_FIRST, FREEZE_LAST = 10, 29  # stale repeats; catch-up at FREEZE_LAST + 1
 NORMAL = 3.0  # litres per 5-min interval
 BASE = 1000.0
 
+#: The household the single-dataset frames below describe. Its dataset -- the
+#: key of the series, of the cadence sidecar and of every per-series
+#: computation -- is ``household_batch_of(HOUSEHOLD)``.
+HOUSEHOLD = 1
+
+#: The households of the one project the averaging tests below build. Twenty
+#: of them, so the distribution of household maxima has a shape.
+LEVEL_HOUSEHOLDS = range(1, 21)
+
+#: Where every frame below starts.
+START = "2026-01-01"
+
 
 @pytest.fixture(autouse=True)
 def _quiet_logs():
@@ -36,8 +50,9 @@ def _quiet_logs():
 
 def _series(catchup: float) -> pd.DataFrame:
     """
-    One household on a 5-min grid: the cumulative variable rises by NORMAL per interval,
-    holds flat across FREEZE_FIRST..FREEZE_LAST, then jumps by `catchup`.
+    One household dataset on a 5-min grid: the cumulative variable rises by
+    NORMAL per interval, holds flat across FREEZE_FIRST..FREEZE_LAST, then jumps
+    by `catchup`.
 
     The flat run spans FREEZE_FIRST-1..FREEZE_LAST. FREEZE_FIRST-1 holds the
     last genuine value; FREEZE_FIRST..FREEZE_LAST repeat it.
@@ -55,14 +70,14 @@ def _series(catchup: float) -> pd.DataFrame:
             current += NORMAL
         values.append(current)
 
-    df = pd.DataFrame(
-        {
-            "HuisIdBSV": pd.array([1] * N, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * N], dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=N, freq="5min"),
-            CUM: pd.array(values, dtype="Float64"),
-        }
+    df = datasets_frame(
+        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        start=START,
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the cumulative readings
+        # above, their differences below.
+        pairs=False,
     )
     df[DIFF] = df[CUM].diff().round(10)
     df.loc[0, DIFF] = 0
@@ -73,7 +88,7 @@ def _series(catchup: float) -> pd.DataFrame:
 
 def _impute(df: pd.DataFrame) -> pd.DataFrame:
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], ids.PROJECT, cadence=cadence_table(df, [CUM])
     )
     return out
 
@@ -189,15 +204,14 @@ def test_interval_only_column_is_imputed():
     """
     n = 20
     gap = [8, 9, 10, 11]  # .loc slices are label-inclusive on both ends
-    df = pd.DataFrame(
-        {
-            "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-            CUM: pd.array([None] * n, dtype="Float64"),
-            DIFF: pd.array([2.0] * n, dtype="Float64"),
-        }
+    df = datasets_frame(
+        {household_batch_of(HOUSEHOLD): {CUM: pd.NA, DIFF: [2.0] * n}},
+        start=START,
+        freq="5min",
+        tz=None,
+        # Both halves are stated: the cumulative column is present and empty,
+        # which is what a variable delivered as intervals only leaves.
+        pairs=False,
     )
     df.loc[gap, DIFF] = pd.NA
     df[f"{DIFF}_avg"] = pd.array([2.0] * n, dtype="Float64")
@@ -213,23 +227,33 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     of household maxima is excluded from the project average.
     """
     n = 6
-    dates = pd.date_range("2026-01-01", periods=n, freq="5min")
-    rows = [
-        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
-        for hh in range(1, 21)
-        for d in dates
-    ]
-    rows += [{"HuisIdBSV": 99, "HuisBatchIdBSV": 99 + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0} for d in dates]
-    df = pd.DataFrame(rows)
-    df.loc[(df.HuisIdBSV == 99) & (df.ReadingDate == dates[0]), DIFF] = 5000.0
-    df[DIFF] = df[DIFF].astype("Float64")
+    spiking = 99  # the household whose dataset carries the one spike
+    df = datasets_frame(
+        {
+            household_batch_of(household): {DIFF: [3.0] * n}
+            for household in [*LEVEL_HOUSEHOLDS, spiking]
+        },
+        start=START,
+        freq="5min",
+        tz=None,
+        # The interval column is the only source the average may take: a
+        # cumulative counterpart holding any value would supply the volume in
+        # its place.
+        pairs=False,
+    )
+    first_slot = df["ReadingDate"].min()
+    df.loc[
+        (df[ids.HOUSEHOLD_BATCH] == household_batch_of(spiking))
+        & (df["ReadingDate"] == first_slot),
+        DIFF,
+    ] = 5000.0
 
     result = project_averages(
-        df, "ProjectIdBSV", [DIFF],
+        df, ids.PROJECT, [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )
     avg = result[DIFF]["avg_diff"]
-    first = float(avg.loc[avg.ReadingDate == dates[0], f"{DIFF}_avg"].iloc[0])
+    first = float(avg.loc[avg.ReadingDate == first_slot, f"{DIFF}_avg"].iloc[0])
     assert first == pytest.approx(3.0, abs=1e-9)
 
 
@@ -250,29 +274,35 @@ def test_project_average_rejects_physically_impossible_value():
     an affected slot is 94 of ~99.
     """
     n = 6
-    dates = pd.date_range("2026-01-01", periods=n, freq="5min")
-    rows = [
-        {"HuisIdBSV": hh, "HuisBatchIdBSV": hh + 1000, "ProjectIdBSV": 1, "ReadingDate": d, DIFF: 3.0}
-        for hh in range(1, 21)
-        for d in dates
-    ]
-    df = pd.DataFrame(rows)
-    df.loc[df.ReadingDate == dates[0], DIFF] = 5000.0
-    df[DIFF] = df[DIFF].astype("Float64")
+    df = datasets_frame(
+        {
+            household_batch_of(household): {DIFF: [3.0] * n}
+            for household in LEVEL_HOUSEHOLDS
+        },
+        start=START,
+        freq="5min",
+        tz=None,
+        # The interval column is the only source the average may take: a
+        # cumulative counterpart holding any value would supply the volume in
+        # its place.
+        pairs=False,
+    )
+    first_slot = df["ReadingDate"].min()
+    df.loc[df["ReadingDate"] == first_slot, DIFF] = 5000.0
 
     result = project_averages(
-        df, "ProjectIdBSV", [DIFF],
+        df, ids.PROJECT, [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )
     avg = result[DIFF]["avg_diff"]
-    first = avg.loc[avg.ReadingDate == dates[0], f"{DIFF}_avg"].iloc[0]
+    first = avg.loc[avg.ReadingDate == first_slot, f"{DIFF}_avg"].iloc[0]
 
     assert pd.isna(first) or first <= MAX_PER_5MIN
     assert result[DIFF]["n_discarded"] == 20, "one per household, all discarded"
 
     # The remaining timestamps are untouched: discarding is per value, so a
     # household keeps contributing the readings that are fine.
-    rest = avg.loc[avg.ReadingDate != dates[0], f"{DIFF}_avg"]
+    rest = avg.loc[avg.ReadingDate != first_slot, f"{DIFF}_avg"]
     assert (rest == 3.0).all()
 
 
@@ -285,26 +315,51 @@ class TestWhichThresholdAppliesWhere:
       consumption into one five-minute slot.
     """
 
-    HOURLY, GRID = 1, 2  # household ids: reports hourly, reports every 5 min
+    # Two households: one whose cumulative variable reports hourly, the other
+    # every five minutes. The frame and the cadence sidecar below are keyed on
+    # their datasets, which are household_batch_of these.
+    HOURLY, GRID = 1, 2
 
     def _frame(self):
-        return pd.DataFrame({
-            "HuisIdBSV": pd.array(
-                [self.HOURLY, self.HOURLY, self.GRID, self.GRID], dtype="Int64"
-            ),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [self.HOURLY, self.HOURLY, self.GRID, self.GRID]], dtype="Int64"
-            ),
-            DIFF: pd.array([50.0] * 4, dtype="Float64"),
-            f"{DIFF}_is_imputed": pd.array([False, True, False, True], dtype="boolean"),
-        })
+        return datasets_frame(
+            {
+                household_batch_of(self.HOURLY): {
+                    DIFF: [50.0, 50.0],
+                    f"{DIFF}_is_imputed": [False, True],
+                },
+                household_batch_of(self.GRID): {
+                    DIFF: [50.0, 50.0],
+                    f"{DIFF}_is_imputed": [False, True],
+                },
+            },
+            start=START,
+            freq="5min",
+            tz=None,
+            dtypes={f"{DIFF}_is_imputed": "boolean"},
+            # The bound is read from the cadence and the fill marker alone, so
+            # no counterpart is completed for the interval column.
+            pairs=False,
+        )
 
     def _cadence(self):
-        return pd.DataFrame({
-            "HuisIdBSV": pd.array([self.HOURLY, self.GRID], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [self.HOURLY, self.GRID]], dtype="Int64"),
-            "column": pd.array([CUM, CUM], dtype="string"),
-            "cadence_minutes": pd.array([60, 5], dtype="Int64"),
-        })
+        """The per-column cadence sidecar for the two datasets.
+
+        Both sit on the five-minute grid; what differs is the interval each
+        one's readings of the cumulative variable cover.
+        """
+        return pd.concat(
+            [
+                cadence_sidecar(
+                    [CUM], minutes=60, grid_minutes=5,
+                    household_batch_id=household_batch_of(self.HOURLY),
+                ),
+                cadence_sidecar(
+                    [CUM], minutes=5, grid_minutes=5,
+                    household_batch_id=household_batch_of(self.GRID),
+                ),
+            ],
+            ignore_index=True,
+        )
 
     def test_the_grid_threshold_is_the_declared_bound(self):
         from etdtransform.bounds import grid_bound
@@ -312,6 +367,7 @@ class TestWhichThresholdAppliesWhere:
 
     def test_the_column_threshold_scales_with_how_often_the_column_reports(self):
         from etdmap.data_model import scale_upper_bound
+
         from etdtransform.bounds import column_bound
         bound = column_bound(self._frame(), DIFF, self._cadence())
         # Hourly: twelve five-minute intervals arrive in one reading, so the

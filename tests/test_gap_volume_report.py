@@ -17,6 +17,7 @@ from conftest import cadence_table
 from test_constraint_package import _constraints
 from test_row_bounds_in_the_fill import CUM, DIFF, FOLLOWS_K, _frame
 
+from etdmap import ids
 from etdtransform.vectorized_impute import (
     ImputeType,
     _bits_or_by_group,
@@ -31,7 +32,7 @@ def _impute_with_report(frame, constraints=None):
     out, _, _ = impute_and_normalize(
         frame,
         [CUM],
-        "ProjectIdBSV",
+        ids.PROJECT,
         cadence=cadence_table(frame, [CUM]),
         constraints=constraints,
         volume_reports=reports,

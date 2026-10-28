@@ -1,39 +1,50 @@
 """The gap statistics `impute_and_normalize` returns alongside the filled data.
 
-One row per (project, household, column), reporting what the fill did and
-whether it conserved the volume the cumulative variable accounts for.
+One row per (project, household batch dataset, column), reporting what the
+fill did and whether it conserved the volume the cumulative variable accounts
+for.
 `deviation` is the quantity that matters: the filled interval total minus the
 cumulative variable's own range over the same rows.
 """
 
 import pandas as pd
 import pytest
+from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
-from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
 CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
 
+#: The household every frame below describes. Its dataset -- `HuisBatchIdBSV`,
+#: which the cadence table and the per-series fill are keyed on -- is
+#: ``household_batch_of(HOUSEHOLD)``.
+HOUSEHOLD = 1
+
 
 def _frame(cumulative, diffs, averages):
-    n = len(cumulative)
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(cumulative, dtype="Float64"),
-        DIFF: pd.array(diffs, dtype="Float64"),
-        f"{DIFF}_avg": pd.array(averages, dtype="Float64"),
-    })
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {
+            CUM: cumulative,
+            DIFF: diffs,
+            f"{DIFF}_avg": averages,
+        }},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here, so there is nothing to
+        # complete.
+        pairs=False,
+    )
 
 
 def _impute(frame):
     filled, gap_stats, _ = impute_and_normalize(
-        frame, [CUM], "ProjectIdBSV",
+        frame, [CUM], ids.PROJECT,
         cadence=cadence_table(frame, [CUM]),
     )
     return filled, gap_stats
@@ -50,13 +61,13 @@ def conserved():
 
 
 class TestTheStatsDescribeTheFill:
-    def test_one_row_per_household_and_column(self, conserved):
+    def test_one_row_per_dataset_and_column(self, conserved):
         _, stats = conserved
         assert len(stats) == 1
         row = stats.iloc[0]
         assert row["column"] == DIFF
-        assert int(row["HuisIdBSV"]) == 1
-        assert int(row["ProjectIdBSV"]) == 1
+        assert int(row[ids.HOUSEHOLD_BATCH]) == household_batch_of(HOUSEHOLD)
+        assert int(row[ids.PROJECT]) == 1
 
     def test_diff_total_is_the_filled_column(self, conserved):
         filled, stats = conserved

@@ -27,6 +27,7 @@ from contextlib import contextmanager
 import pandas as pd
 
 from etdtransform.flags import ImputeType
+from etdmap import ids
 
 #: Bound sources, and the flag each one raises. The thresholds table gives one
 #: bound per column, scaled to the grid. The rules narrow a row using the other
@@ -43,8 +44,8 @@ def grid_scaled_bounds(column: str, grid_minutes) -> tuple:
     column's own cadence and never at the threshold's declared unit. The
     derivation runs after imputation, by which point every variable it reads
     sits on the grid, so one grid interval is what a calculated cell covers --
-    for every household, which is why there is one bound and not one per
-    household. The cadence table does not enter into it: it records the
+    for every dataset, which is why there is one bound and not one per
+    dataset. The cadence table does not enter into it: it records the
     interval a column's READINGS arrived at, which the fill has already
     resolved away.
     """
@@ -227,7 +228,7 @@ def calculated_flag_expressions(table, derived_columns, grid_minutes, undefined=
     ``{impute_type_column: expression}`` for the caller to pass to ``mutate``,
     OR-ed onto an existing impute-type column where one is present.
 
-    One bound per column serves every household, because a calculated column
+    One bound per column serves every dataset, because a calculated column
     is judged at the grid and the grid is the same for all of them.
 
     ``CALCULATED_OUTSIDE_RULE_BOUND`` is NOT written here: the rule bound is a
@@ -306,11 +307,11 @@ def threshold_violation_summary(df: pd.DataFrame, derived_columns) -> pd.DataFra
             for label, mask in parts:
                 if not bool(mask.any()):
                     continue
-                frame = df.loc[mask, ["HuisIdBSV", column]]
-                for household, group in frame.groupby("HuisIdBSV"):
+                frame = df.loc[mask, [ids.HOUSEHOLD_BATCH, column]]
+                for batch_id, group in frame.groupby(ids.HOUSEHOLD_BATCH):
                     rows.append({
                         "column": column,
-                        "HuisIdBSV": household,
+                        ids.HOUSEHOLD_BATCH: batch_id,
                         "cells": len(group),
                         "worst": group[column].min(),
                         "highest": group[column].max(),
@@ -353,9 +354,7 @@ def derive_from_rule_bound(df: pd.DataFrame, targets, package,
     For a pd.NA cell, ``narrow_bounds_by_row`` can return a bound whose ends
     meet: the other values in that row determine the column exactly. Writing
     that value is a derivation, not a guess, and it reaches cells no catalog
-    formula does -- measured on the estate, 452,631 cells of
-    ``ElektriciteitsgebruikTotaalBruto`` against 431,173 from the formula
-    route, on the same population and at a quarter of the cost.
+    formula does, at a fraction of the formula route's cost.
 
     Only cells that are pd.NA are touched; a delivered or already-derived
     value is never overwritten. Each filled cell is flagged
@@ -578,7 +577,11 @@ def fill_from_formula(df: pd.DataFrame, targets, catalog, package,
 #: table is written, so they never reach an output schema.
 FILL_SUFFIX = "__fill"
 BITS_SUFFIX = "__bits"
-KEY_COLUMNS = ("HuisIdBSV", "ReadingDate")
+#: Row identity for the patch join. The dataset id is what makes the pair
+#: unique: a household can hold several household batches covering the same
+#: ReadingDate, and keying on the household would fan the join out and write a
+#: value filled in one dataset onto another dataset's row.
+KEY_COLUMNS = (ids.HOUSEHOLD_BATCH, "ReadingDate")
 
 
 def fill_gaps_in_table(table, household_ids, rule_sets,
@@ -600,8 +603,8 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
     pass keeps that mark and gains the fill's.
 
     Each household is given its own formula set and bounds via *rule_sets*
-    from :func:`etdtransform.constraints.rule_sets_by_household`: a household
-    never sees a formula naming a device it does not have.
+    from :func:`etdtransform.constraints.rule_sets_by_household`, so no row is
+    offered a formula naming a device its declaration says is absent.
 
     Returns ``(table, report, plan)``.
     """
@@ -640,7 +643,7 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
             | {c for c in present if c.endswith("_is_imputed")}
             | ({impute_type_column(t) for t in targets} & present)
         )
-        scope = table.filter(table["HuisIdBSV"].isin(members))
+        scope = table.filter(table[ids.HOUSEHOLD].isin(members))
         gap = None
         for target in targets:
             missing = scope[target].isnull()
@@ -683,10 +686,9 @@ def fill_gaps_in_table(table, household_ids, rule_sets,
         logging.info("[calc flags] gap fill wrote nothing in this unit")
         return table, report, pd.DataFrame()
 
-    # Recorded because it sat between the two fill routes and was therefore
-    # invisible: assembling the patch and building the join is neither of the
-    # two passes, and on an estate run the unrecorded remainder was a quarter
-    # of the stage.
+    # Recorded as its own phase: assembling the patch and building the join is
+    # neither of the two fill routes, and it is a substantial share of the
+    # stage, so without this it would not appear in the checkpoints at all.
     with _maybe_phase(checkpoints, "pass2_patch_and_join") as mark:
         patch = None
         for target in sorted(pieces):

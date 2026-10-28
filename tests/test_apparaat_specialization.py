@@ -12,7 +12,13 @@ next sync apply.
 
 import pandas as pd
 import pytest
-from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import (
+    cadence_sidecar,
+    datasets_frame,
+    household_batch_of,
+    index_frame,
+)
 from pandas.testing import assert_frame_equal
 from test_constraint_package import _constraints
 
@@ -28,9 +34,13 @@ pytestmark = pytest.mark.unit
 CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
 AVG = f"{DIFF}_avg"
+#: The spacing every frame below is built at.
+GRID = 5
 
 
 def _catalog(rows):
+    """The compiler's catalog table. Its rows are what the specialization
+    rewrites, so their shape is the subject here and no shared builder has it."""
     return pd.DataFrame(
         rows,
         columns=["lhs", "rhs_text", "rhs_vars", "rhs_var_count", "physical_models"],
@@ -38,6 +48,7 @@ def _catalog(rows):
 
 
 def _row(lhs, rhs_text, rhs_vars):
+    """One catalog rule: a target, its expression, and the variables it names."""
     return {
         "lhs": lhs,
         "rhs_text": rhs_text,
@@ -45,6 +56,25 @@ def _row(lhs, rhs_text, rhs_vars):
         "rhs_var_count": len(rhs_vars),
         "physical_models": ["Universeel"],
     }
+
+
+def _metadata_csv(folder, declarations):
+    """The BSV metadata the selection reads, written inside *folder*.
+
+    *declarations* maps a household to its ApparaatOntbrekend text. The row
+    shape is the review-metadata one the index maps describe; the declaration
+    column is added on top of it, since no index map carries one.
+    """
+    path = folder / "metadata.csv"
+    frame = index_frame(
+        [household_batch_of(household) for household in declarations],
+        batch_fields=False,
+    )
+    frame["ApparaatOntbrekend"] = pd.array(
+        list(declarations.values()), dtype="string"
+    )
+    frame.to_csv(path, index=False)
+    return path
 
 
 class TestApparaatSetKey:
@@ -128,17 +158,10 @@ class TestSpecializeCatalogForAbsent:
 
 class TestApparaatSetByHousehold:
     def test_resolves_each_household_to_its_canonical_key(self, tmp_path):
-        path = tmp_path / "metadata.csv"
-        pd.DataFrame(
-            {
-                "HuisIdBSV": [1, 2],
-                "HuisBatchIdBSV": [1001, 1002],
-                "ApparaatOntbrekend": [
-                    "ElektriciteitsgebruikWTW, ElektriciteitsgebruikRadiator",
-                    "",
-                ],
-            }
-        ).to_csv(path, index=False)
+        path = _metadata_csv(tmp_path, {
+            1: "ElektriciteitsgebruikWTW, ElektriciteitsgebruikRadiator",
+            2: "",
+        })
         resolved = apparaat_set_by_household(path)
         assert resolved == {
             1: "ElektriciteitsgebruikRadiator|ElektriciteitsgebruikWTW",
@@ -147,7 +170,12 @@ class TestApparaatSetByHousehold:
 
     def test_metadata_without_the_column_raises(self, tmp_path):
         path = tmp_path / "stale.csv"
-        pd.DataFrame({"HuisIdBSV": [1]}).to_csv(path, index=False)
+        # Metadata with no ApparaatOntbrekend column is the subject. The
+        # review-metadata shape cannot carry one: ApparaatOntbrekend is not
+        # an index column, so nothing but _metadata_csv adds it.
+        index_frame([household_batch_of(1)], batch_fields=False).to_csv(
+            path, index=False
+        )
         with pytest.raises(ValueError, match="ApparaatOntbrekend"):
             apparaat_set_by_household(path)
 
@@ -155,15 +183,6 @@ class TestApparaatSetByHousehold:
 class TestRuleSetsByHousehold:
     """What a household may derive, resolved from its declarations. One
     composition in the library, so no caller repeats the two steps."""
-
-    @staticmethod
-    def _metadata(tmp_path, declarations):
-        path = tmp_path / "metadata.csv"
-        pd.DataFrame({
-            "HuisIdBSV": list(declarations),
-            "ApparaatOntbrekend": list(declarations.values()),
-        }).to_csv(path, index=False)
-        return path
 
     def _catalog_with_a_device_term(self):
         return _catalog([
@@ -177,8 +196,10 @@ class TestRuleSetsByHousehold:
     def test_households_are_grouped_by_their_declaration(self, tmp_path):
         from etdtransform.constraints import rule_sets_by_household
 
-        path = self._metadata(tmp_path, {
-            1: "ElektriciteitsgebruikRadiator", 2: "ElektriciteitsgebruikRadiator", 3: "",
+        path = _metadata_csv(tmp_path, {
+            1: "ElektriciteitsgebruikRadiator",
+            2: "ElektriciteitsgebruikRadiator",
+            3: "",
         })
         resolved = rule_sets_by_household(
             [1, 2, 3], self._catalog_with_a_device_term(), 5,
@@ -191,7 +212,7 @@ class TestRuleSetsByHousehold:
     def test_an_absent_device_leaves_the_formula_set(self, tmp_path):
         from etdtransform.constraints import rule_sets_by_household
 
-        path = self._metadata(tmp_path, {
+        path = _metadata_csv(tmp_path, {
             1: "ElektriciteitsgebruikRadiator", 2: "",
         })
         resolved = rule_sets_by_household(
@@ -212,7 +233,7 @@ class TestRuleSetsByHousehold:
     def test_a_household_the_metadata_does_not_mention_raises(self, tmp_path):
         from etdtransform.constraints import rule_sets_by_household
 
-        path = self._metadata(tmp_path, {1: ""})
+        path = _metadata_csv(tmp_path, {1: ""})
         # Defaulting to the full model would narrow HARDER on a household
         # whose devices are unknown, and absence may only widen.
         with pytest.raises(ValueError, match="not in the BSV metadata"):
@@ -224,7 +245,7 @@ class TestRuleSetsByHousehold:
     def test_each_set_gets_a_package_at_the_grid_cadence(self, tmp_path):
         from etdtransform.constraints import rule_sets_by_household
 
-        path = self._metadata(tmp_path, {1: ""})
+        path = _metadata_csv(tmp_path, {1: ""})
         resolved = rule_sets_by_household(
             [1], self._catalog_with_a_device_term(), 15, metadata_path=path,
         )
@@ -233,7 +254,10 @@ class TestRuleSetsByHousehold:
 
 
 def _set_keyed(tables):
-    """Concatenate (set_key, constraints_frame) pairs under the key column."""
+    """Concatenate (set_key, constraints_frame) pairs under the key column.
+
+    The key column is what the run-time selection reads, so this layout is the
+    subject and no shared builder produces it."""
     frames = []
     for set_key, table in tables:
         keyed = table.copy()
@@ -250,38 +274,56 @@ def _two_household_frame():
     intersect to an empty bound and withhold the fill, which is a different
     behaviour than the selection this file tests.
     """
-
-    def rows(household, start, end):
-        return pd.DataFrame(
-            {
-                "HuisIdBSV": pd.array([household] * 4, dtype="Int64"),
-                "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * 4], dtype="Int64"),
-                "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
-                "ReadingDate": pd.date_range(
-                    "2026-01-01", periods=4, freq="5min"
-                ),
-                CUM: pd.array([start, pd.NA, pd.NA, end], dtype="Float64"),
-                DIFF: pd.array([pd.NA] * 4, dtype="Float64"),
-                AVG: pd.array([pd.NA, 0.5, 1.0, 1.5], dtype="Float64"),
-                "K": pd.array([pd.NA, 1.0, 1.0, 1.0], dtype="Float64"),
-                "K2": pd.array([pd.NA, 0.5, 0.5, 0.5], dtype="Float64"),
-            }
-        )
-
-    return pd.concat(
-        [rows(1, 100.0, 103.0), rows(2, 100.0, 101.5)], ignore_index=True
+    return datasets_frame(
+        {
+            household_batch_of(1): {CUM: [100.0, pd.NA, pd.NA, 103.0]},
+            household_batch_of(2): {CUM: [100.0, pd.NA, pd.NA, 101.5]},
+        },
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the anchored register, and
+        # the empty interval column the fill writes into.
+        pairs=False,
+        **{
+            DIFF: [pd.NA] * 4,
+            AVG: [pd.NA, 0.5, 1.0, 1.5],
+            "K": [pd.NA, 1.0, 1.0, 1.0],
+            "K2": [pd.NA, 0.5, 0.5, 0.5],
+        },
     )
 
 
 RADIATOR_SET = "ElektriciteitsgebruikRadiator"
 
 
+def _cadence(frame):
+    """The cadence sidecar for every dataset in *frame*, over its full schema.
+
+    The register's reading count is stated because the fill routes on it: a
+    table that records none sends every row down the nothing-delivered path and
+    nothing is narrowed, which is not the shape this file is about.
+    """
+    return pd.concat(
+        [
+            cadence_sidecar(
+                [CUM],
+                minutes=GRID,
+                n_readings=int(rows[CUM].notna().sum()),
+                household_batch_id=int(household_batch_id),
+            )
+            for household_batch_id, rows in frame.groupby(ids.HOUSEHOLD_BATCH)
+        ],
+        ignore_index=True,
+    )
+
+
 def _impute(frame, constraints, apparaat_sets=None):
     out, _, _ = impute_and_normalize(
         frame,
         [CUM],
-        "ProjectIdBSV",
-        cadence=cadence_table(frame, [CUM]),
+        ids.PROJECT,
+        cadence=_cadence(frame),
         constraints=constraints,
         apparaat_sets=apparaat_sets,
     )
@@ -301,8 +343,8 @@ class TestRunTimeSelection:
             constraints,
             apparaat_sets={1: "", 2: RADIATOR_SET},
         )
-        one = out[out["HuisIdBSV"] == 1]
-        two = out[out["HuisIdBSV"] == 2]
+        one = out[out[ids.HOUSEHOLD] == 1]
+        two = out[out[ids.HOUSEHOLD] == 2]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([0.5] * 3)
 
@@ -334,7 +376,7 @@ class TestRunTimeSelection:
         # Both households narrow with the one table, exactly as before the
         # split: household 2's bound follows K too, so its jump of 6 cannot
         # be placed inside [1, 1] rows and the values pin at 1 each.
-        one = out[out["HuisIdBSV"] == 1]
-        two = out[out["HuisIdBSV"] == 2]
+        one = out[out[ids.HOUSEHOLD] == 1]
+        two = out[out[ids.HOUSEHOLD] == 2]
         assert one[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)
         assert two[DIFF].iloc[1:].astype(float).tolist() == pytest.approx([1.0] * 3)

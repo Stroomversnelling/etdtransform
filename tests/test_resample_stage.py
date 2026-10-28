@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from etdtransform.aggregate import resample_hh_data_duckdb
+from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -54,11 +55,11 @@ class TestResamplingIsPerHouseholdAndInterval:
     def resampled(self, tmp_path):
         from unittest.mock import patch
 
-        from conftest import household_frame, write_shard_tree
+        from conftest import dataset_frame, write_shard_tree
         from etdmap.storage import read_source_frame
 
         src = write_shard_tree(tmp_path / "calculated_shards", {
-            hid: household_frame(n_rows=_SLOTS, **{_SUM_COL: value})
+            hid: dataset_frame(n_rows=_SLOTS, **{_SUM_COL: value})
             for hid, value in _PER_HOUSEHOLD_VALUE.items()
         })
         out = tmp_path / "out"
@@ -72,17 +73,17 @@ class TestResamplingIsPerHouseholdAndInterval:
         # Three 5-minute rows per 15-minute window, so the window total is
         # three times that household's value and nothing else.
         for hid, value in _PER_HOUSEHOLD_VALUE.items():
-            rows = resampled[resampled["HuisIdBSV"] == hid]
+            rows = resampled[resampled[ids.HOUSEHOLD] == hid]
             assert rows[_SUM_COL].astype(float).tolist() == [value * _PER_WINDOW] * 2
 
     def test_the_windows_are_not_summed_together(self, resampled):
         # Two windows per household, each its own total -- not one row of six
         # readings, and not a running total across windows.
         for hid in _PER_HOUSEHOLD_VALUE:
-            assert len(resampled[resampled["HuisIdBSV"] == hid]) == 2
+            assert len(resampled[resampled[ids.HOUSEHOLD] == hid]) == 2
 
     def test_every_household_survives_the_resample(self, resampled):
-        assert sorted(resampled["HuisIdBSV"].unique().tolist()) == sorted(
+        assert sorted(resampled[ids.HOUSEHOLD].unique().tolist()) == sorted(
             _PER_HOUSEHOLD_VALUE
         )
 
@@ -123,11 +124,11 @@ class TestSourceGuards:
     def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
         # As in test_calculated_stage: a source with no batch id to file the rows
         # under is a caller error, stated with a frame that has none.
-        from conftest import household_frame
+        from conftest import dataset_frame
 
         source = tmp_path / "no_batch_id.parquet"
-        household_frame(**{_SUM_COL: 1.0}).to_parquet(source, index=False)
-        with pytest.raises(ValueError, match="HuisBatchIdBSV"):
+        dataset_frame(**{_SUM_COL: 1.0}).to_parquet(source, index=False)
+        with pytest.raises(ValueError, match=ids.HOUSEHOLD_BATCH):
             resample_hh_data_duckdb(
                 str(source), str(tmp_path / "out"), intervals=("60min",),
             )

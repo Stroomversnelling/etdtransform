@@ -27,8 +27,10 @@ import pytest
 
 from conftest import project_averages
 from etdtransform.impute import calculate_average_diff_ibis
+from etdmap import ids
+from etdmap.testing import cadence_sidecar, datasets_frame
 from etdtransform.presence import (
-    MIN_ELIGIBLE_HOUSEHOLDS,
+    MIN_ELIGIBLE_DATASETS,
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
@@ -47,30 +49,17 @@ GRID = 5
 SLOTS_PER_DAY = 288
 
 
-#: The dataset a household's rows belong to. Distinct from the household id,
-#: so a lookup built on the wrong one reaches no rows.
-def _batch(household):
-    return household + 1000
+def _frame(per_dataset, start="2026-01-01", freq="5min", project=1):
+    """One frame from ``{dataset: [values]}``, all on the same slots.
 
-
-def _frame(per_household, start="2026-01-01", freq="5min", project=1):
-    """One frame from ``{household: [values]}``, all on the same slots."""
-    rows = []
-    for household, values in per_household.items():
-        dates = pd.date_range(start, periods=len(values), freq=freq)
-        for date, value in zip(dates, values):
-            rows.append({
-                "HuisIdBSV": household,
-                "HuisBatchIdBSV": _batch(household),
-                "ProjectIdBSV": project,
-                "ReadingDate": date,
-                COL: value,
-            })
-    frame = pd.DataFrame(rows)
-    frame["HuisIdBSV"] = frame["HuisIdBSV"].astype("Int64")
-    frame["ProjectIdBSV"] = frame["ProjectIdBSV"].astype("Int64")
-    frame[COL] = frame[COL].astype("Float64")
-    return frame
+    The gates are judged on the interval column standing alone, so the
+    cumulative counterpart is left off: present, it would supply the values in
+    the interval column's place.
+    """
+    return datasets_frame(
+        {dataset: {COL: values} for dataset, values in per_dataset.items()},
+        start=start, freq=freq, project=project, tz=None, pairs=False,
+    )
 
 
 def _day(value=1.0, missing=0):
@@ -78,24 +67,27 @@ def _day(value=1.0, missing=0):
     return [pd.NA] * missing + [value] * (SLOTS_PER_DAY - missing)
 
 
+def _cumulative(values):
+    """The cumulative readings *values* difference back to."""
+    return list(pd.Series(values, dtype="Float64").fillna(0).cumsum())
+
+
 def _cadence_for(frame, minutes=GRID):
-    """A cadence table for *frame*'s households.
+    """A cadence table for *frame*'s datasets, over the sidecar's full schema.
 
     Recorded under the cumulative name, which is where cadence is recorded and
     where the interval column resolves it from, plus the ``ReadingDate`` row
     carrying the grid.
     """
-    households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
-    rows = [
-        {"HuisBatchIdBSV": _batch(household), "column": column,
-         "cadence_minutes": minutes}
-        for household in households
-        for column in (CUM, "ReadingDate")
-    ]
-    return pd.DataFrame(rows).astype({
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-    })
+    return pd.concat(
+        [
+            cadence_sidecar(
+                [CUM], minutes=minutes, household_batch_id=int(dataset)
+            )
+            for dataset in sorted(frame[ids.HOUSEHOLD_BATCH].unique())
+        ],
+        ignore_index=True,
+    )
 
 
 def _averaged(frame, **kwargs):
@@ -107,27 +99,27 @@ def _averaged(frame, **kwargs):
     """
     kwargs.setdefault("min_eligible", 1)
     return calculate_average_diff_ibis(
-        ibis.memtable(frame), "ProjectIdBSV", [COL],
+        ibis.memtable(frame), ids.PROJECT, [COL],
         cadence=_cadence_for(frame), grid_minutes=GRID, **kwargs
     )[COL]
 
 
 def _presence_of(frame, **kwargs):
-    """The per (household, window) counts and judgements the gates made."""
+    """The per (dataset, window) counts and judgements the gates made."""
     return _averaged(frame, **kwargs)["window_presence"]
 
 
 def _published(frame, **kwargs):
     """The average per slot, as published: pd.NA where a gate removed it."""
     avg = _averaged(frame, **kwargs)["avg_diff"]
-    return avg.sort_values(["ProjectIdBSV", "ReadingDate"]).reset_index(
+    return avg.sort_values([ids.PROJECT, "ReadingDate"]).reset_index(
         drop=True
     )
 
 
-def _by_household(frame, **kwargs):
-    """The presence row per household, indexed by HuisIdBSV."""
-    return _presence_of(frame, **kwargs).set_index("HuisIdBSV")
+def _by_dataset(frame, **kwargs):
+    """The presence rows indexed by the dataset they were measured on."""
+    return _presence_of(frame, **kwargs).set_index(ids.HOUSEHOLD_BATCH)
 
 
 class TestTheWindowIsACalendarDay:
@@ -192,14 +184,16 @@ class TestCoverageIsMeasuredOverWhatTheWindowHeld:
     """
 
     def test_a_full_window_is_delivered_for_every_slot_it_held(self):
-        row = _by_household(_frame({1: _day()})).loc[1]
+        row = _by_dataset(_frame({1001: _day()})).loc[1001]
         assert int(row["n_slots"]) == SLOTS_PER_DAY
         assert int(row["n_delivered"]) == SLOTS_PER_DAY
         assert bool(row["eligible"])
 
     def test_a_half_empty_window_is_delivered_for_half_and_fails(self):
         half = SLOTS_PER_DAY // 2
-        row = _by_household(_frame({1: _day(missing=half)})).loc[1]
+        row = _by_dataset(
+            _frame({1001: _day(missing=half)})
+        ).loc[1001]
         assert int(row["n_slots"]) == SLOTS_PER_DAY
         assert int(row["n_delivered"]) == SLOTS_PER_DAY - half
         assert not bool(row["eligible"])
@@ -208,30 +202,32 @@ class TestCoverageIsMeasuredOverWhatTheWindowHeld:
         """A window clipped by the start of the dataset is not counted short for
         sitting at the edge: a household present for every slot it has covered
         that window. So the denominator is the twelve slots it held, not a day."""
-        row = _by_household(
-            _frame({1: [1.0] * 12}, start="2026-01-01 23:00")
-        ).loc[1]
+        row = _by_dataset(
+            _frame({1001: [1.0] * 12}, start="2026-01-01 23:00")
+        ).loc[1001]
         assert int(row["n_slots"]) == 12
         assert int(row["n_delivered"]) == 12
         assert bool(row["eligible"])
 
     def test_the_measurement_is_per_household(self):
-        rows = _by_household(
-            _frame({1: _day(), 2: _day(missing=SLOTS_PER_DAY // 2)})
+        rows = _by_dataset(
+            _frame({1001: _day(), 1002: _day(missing=SLOTS_PER_DAY // 2)})
         )
-        assert int(rows.loc[1, "n_delivered"]) == SLOTS_PER_DAY
-        assert int(rows.loc[2, "n_delivered"]) == SLOTS_PER_DAY // 2
-        assert bool(rows.loc[1, "eligible"])
-        assert not bool(rows.loc[2, "eligible"])
+        covering = 1001
+        thin = 1002
+        assert int(rows.loc[covering, "n_delivered"]) == SLOTS_PER_DAY
+        assert int(rows.loc[thin, "n_delivered"]) == SLOTS_PER_DAY // 2
+        assert bool(rows.loc[covering, "eligible"])
+        assert not bool(rows.loc[thin, "eligible"])
 
 
 class TestEligibilityIsAllOrNothingPerWindow:
     def test_a_household_covering_the_window_is_eligible(self):
-        assert bool(_presence_of(_frame({1: _day()}))["eligible"].all())
+        assert bool(_presence_of(_frame({1001: _day()}))["eligible"].all())
 
     def test_a_household_just_below_the_minimum_is_not(self):
         missing = int(SLOTS_PER_DAY * (1 - MIN_WINDOW_COVERAGE)) + 1
-        presence = _presence_of(_frame({1: _day(missing=missing)}))
+        presence = _presence_of(_frame({1001: _day(missing=missing)}))
         assert not bool(presence["eligible"].any())
 
     def test_the_readings_it_did_deliver_are_excluded_too(self):
@@ -240,13 +236,13 @@ class TestEligibilityIsAllOrNothingPerWindow:
         a day says nothing about that day. So the hour it did deliver shapes
         no average either.
         """
-        frame = _frame({1: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
+        frame = _frame({1001: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
         assert not bool(_presence_of(frame)["eligible"].any())
         assert _published(frame)[f"{COL}_avg"].isna().all()
 
     def test_eligibility_is_decided_per_window_not_per_household(self):
         """A household that covers Monday and not Tuesday contributes to Monday."""
-        frame = _frame({1: _day() + _day(missing=SLOTS_PER_DAY // 2)})
+        frame = _frame({1001: _day() + _day(missing=SLOTS_PER_DAY // 2)})
         by_window = (
             _presence_of(frame).sort_values("window_start")["eligible"].tolist()
         )
@@ -300,23 +296,24 @@ class TestTheGatesRemoveRatherThanSubstitute:
     def _thin_household(self):
         """Three households covering the day, one covering only an hour."""
         return _frame({
-            1: _day(), 2: _day(), 3: _day(),
-            4: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
+            1001: _day(), 1002: _day(), 1003: _day(),
+            1004: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
         })
 
     def test_a_project_where_everyone_covers_the_day_is_averaged(self):
-        frame = _frame({h: _day() for h in range(1, 5)})
+        frame = _frame({dataset: _day() for dataset in range(1001, 1005)})
         presence = _presence_of(frame)
         assert bool(presence["eligible"].all())
         assert int(presence["n_eligible"].max()) == 4
         assert _published(frame)[self.AVG].notna().all()
 
     def test_a_household_that_did_not_cover_the_day_is_dropped(self):
-        presence = _presence_of(self._thin_household()).set_index("HuisIdBSV")
-        assert not bool(presence.loc[4, "eligible"])
+        presence = _by_dataset(self._thin_household())
+        thin = 1004
+        assert not bool(presence.loc[thin, "eligible"])
         # It delivered twelve slots and none of them count.
-        assert int(presence.loc[4, "n_delivered"]) == 12
-        assert int(presence.loc[1, "n_eligible"]) == 3
+        assert int(presence.loc[thin, "n_delivered"]) == 12
+        assert int(presence.loc[1001, "n_eligible"]) == 3
 
     def test_the_others_still_have_their_average(self):
         """Dropping a household removes its contribution, not the slot."""
@@ -328,7 +325,7 @@ class TestTheGatesRemoveRatherThanSubstitute:
         thin = _day()
         thin[100] = pd.NA
         frame = _frame({
-            1: _day(), 2: list(thin), 3: list(thin), 4: list(thin),
+            1001: _day(), 1002: list(thin), 1003: list(thin), 1004: list(thin),
         })
         published = _published(frame)
         at_slot = published["ReadingDate"] == published["ReadingDate"].iloc[100]
@@ -343,7 +340,7 @@ class TestTheGatesRemoveRatherThanSubstitute:
         thin = _day()
         thin[100] = pd.NA
         frame = _frame({
-            1: _day(), 2: list(thin), 3: list(thin), 4: list(thin),
+            1001: _day(), 1002: list(thin), 1003: list(thin), 1004: list(thin),
         })
         published = _published(frame)
         empty = published[self.AVG].isna()
@@ -357,7 +354,7 @@ class TestTheGatesRemoveRatherThanSubstitute:
         pd.testing.assert_series_equal(frame[COL], before)
 
     def test_the_published_average_is_a_nullable_float(self):
-        assert _published(_frame({1: _day()}))[self.AVG].dtype == "Float64"
+        assert _published(_frame({1001: _day()}))[self.AVG].dtype == "Float64"
 
     def test_the_counts_account_for_every_slot_the_window_held(self):
         """The artifact has to be readable as an account of the window, so the
@@ -368,7 +365,7 @@ class TestTheGatesRemoveRatherThanSubstitute:
         assert int(presence["n_slots"].min()) == SLOTS_PER_DAY
 
     def test_the_counts_report_the_window_they_were_judged_over(self):
-        presence = _presence_of(_frame({1: _day() + _day()}))
+        presence = _presence_of(_frame({1001: _day() + _day()}))
         assert presence["window_minutes"].unique().tolist() == [
             float(WINDOW_MINUTES)
         ]
@@ -376,7 +373,7 @@ class TestTheGatesRemoveRatherThanSubstitute:
 
     def test_the_counts_report_how_many_household_windows_qualified(self):
         frame = _frame({
-            1: _day(), 2: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
+            1001: _day(), 1002: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
         })
         presence = _presence_of(frame)
         assert len(presence) == 2
@@ -385,10 +382,12 @@ class TestTheGatesRemoveRatherThanSubstitute:
 
 class TestProjectsAreJudgedSeparately:
     def test_one_projects_absence_does_not_disqualify_anothers_slot(self):
-        one = _frame({h: _day() for h in range(1, 5)}, project=1)
+        one = _frame({dataset: _day() for dataset in range(1001, 1005)}, project=1)
         thin = _day()
         thin[50] = pd.NA
-        two = _frame({5: thin, 6: thin, 7: thin, 8: thin}, project=2)
+        two = _frame(
+            {1005: thin, 1006: thin, 1007: thin, 1008: thin}, project=2
+        )
         frame = pd.concat([one, two], ignore_index=True)
 
         published = _published(frame)
@@ -396,7 +395,7 @@ class TestProjectsAreJudgedSeparately:
         at_slot = published["ReadingDate"] == sorted(
             published["ReadingDate"].unique()
         )[50]
-        first = published["ProjectIdBSV"] == 1
+        first = published[ids.PROJECT] == 1
         assert published.loc[at_slot & first, avg].notna().all()
         assert published.loc[at_slot & ~first, avg].isna().all()
 
@@ -409,9 +408,9 @@ class TestAThinProjectLosesItsAverage:
         cannot say so -- it demands one of one, which that household always
         meets -- so this is the household floor's job, and until it existed one
         household's own readings were published as its project's average."""
-        frame = _frame({1: _day()})
-        published = _published(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
-        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
+        frame = _frame({1001: _day()})
+        published = _published(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
+        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
 
         assert published[self.AVG].isna().all()
         assert not bool(presence["averageable"].any())
@@ -423,10 +422,10 @@ class TestAThinProjectLosesItsAverage:
     def test_it_keeps_the_slots_it_delivered_when_the_floor_is_lowered(self):
         """The same frame with the floor lowered, so the removal above is
         attributable to the floor and not to the other two gates."""
-        assert _published(_frame({1: _day()}))[self.AVG].notna().all()
+        assert _published(_frame({1001: _day()}))[self.AVG].notna().all()
 
     def test_a_single_household_project_that_stops_reporting_loses_the_day(self):
-        frame = _frame({1: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
+        frame = _frame({1001: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)})
         assert _published(frame)[self.AVG].isna().all()
 
 
@@ -436,7 +435,7 @@ class TestTheHouseholdFloor:
     exercised."""
 
     def test_the_floor_is_ten(self):
-        assert MIN_ELIGIBLE_HOUSEHOLDS == 10
+        assert MIN_ELIGIBLE_DATASETS == 10
 
     @pytest.mark.parametrize("n", [0, 1, 2, 9])
     def test_below_the_floor_is_not_averageable(self, n):
@@ -455,20 +454,20 @@ class TestTheHouseholdFloor:
     def test_the_floor_carries_a_contributor_minimum_of_five(self):
         """No second constant is needed: ten eligible households already
         demand five contributors through the fraction."""
-        assert slot_minimum(MIN_ELIGIBLE_HOUSEHOLDS) == 5
+        assert slot_minimum(MIN_ELIGIBLE_DATASETS) == 5
 
     def test_a_project_of_nine_loses_its_average(self):
-        frame = _frame({h: _day() for h in range(1, 10)})
-        published = _published(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
-        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
+        frame = _frame({dataset: _day() for dataset in range(1001, 1010)})
+        published = _published(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
+        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
         assert published[f"{COL}_avg"].isna().all()
         assert not bool(presence["averageable"].any())
         assert int(presence["n_eligible"].max()) == 9
 
     def test_a_project_of_ten_keeps_it(self):
-        frame = _frame({h: _day() for h in range(1, 11)})
-        published = _published(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
-        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
+        frame = _frame({dataset: _day() for dataset in range(1001, 1011)})
+        published = _published(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
+        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
         assert published[f"{COL}_avg"].notna().all()
         assert bool(presence["averageable"].all())
         assert int(presence["n_eligible"].max()) == 10
@@ -479,54 +478,34 @@ class TestTheHouseholdFloor:
         The floor is a statement about who was reporting, not about who exists
         in the frame."""
         absent = [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12)
-        per_household = {h: _day() for h in range(1, 10)}
-        per_household[10] = list(absent)
-        per_household[11] = list(absent)
+        per_dataset = {dataset: _day() for dataset in range(1001, 1010)}
+        per_dataset[1010] = list(absent)
+        per_dataset[1011] = list(absent)
 
-        frame = _frame(per_household)
-        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS)
+        frame = _frame(per_dataset)
+        presence = _presence_of(frame, min_eligible=MIN_ELIGIBLE_DATASETS)
         assert len(presence) == 11, "every household has a row"
         assert int(presence["eligible"].sum()) == 9
         assert int(presence["n_eligible"].max()) == 9
         assert _published(
-            frame, min_eligible=MIN_ELIGIBLE_HOUSEHOLDS
+            frame, min_eligible=MIN_ELIGIBLE_DATASETS
         )[f"{COL}_avg"].isna().all()
 
     def test_the_averaging_applies_the_floor_too(self):
         """The engine the pipeline runs applies the floor, not only the
         per-row helper that computes it."""
-        cum = "ElektriciteitNetgebruik"
-        parts = []
-        for household in range(1, 10):
-            values = _day()
-            part = pd.DataFrame({
-                "HuisIdBSV": pd.array(
-                    [household] * len(values), dtype="Int64"
-                ),
-                "HuisBatchIdBSV": pd.array(
-                    [_batch(household)] * len(values), dtype="Int64"
-                ),
-                "ProjectIdBSV": pd.array([1] * len(values), dtype="Int64"),
-                "ReadingDate": pd.date_range(
-                    "2026-01-01", periods=len(values), freq="5min"
-                ),
-                COL: pd.array(values, dtype="Float64"),
-            })
-            part[cum] = part[COL].fillna(0).cumsum().astype("Float64")
-            parts.append(part)
-        frame = pd.concat(parts, ignore_index=True)
-        households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
-        cadence = pd.DataFrame({
-            "HuisBatchIdBSV": pd.array(
-                [_batch(h) for h in households], dtype="Int64"
-            ),
-            "column": pd.array([cum] * len(households), dtype="string"),
-            "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
-        })
+        values = _day()
+        frame = datasets_frame(
+            {
+                dataset: {COL: values, CUM: _cumulative(values)}
+                for dataset in range(1001, 1010)
+            },
+            start="2026-01-01", freq="5min", project=1, tz=None,
+        )
 
         avg = calculate_average_diff_ibis(
-            ibis.memtable(frame), "ProjectIdBSV", [COL],
-            cadence=cadence, grid_minutes=5,
+            ibis.memtable(frame), ids.PROJECT, [COL],
+            cadence=_cadence_for(frame), grid_minutes=GRID,
         )[COL]["avg_diff"]
         assert avg[f"{COL}_avg"].isna().all(), "nine households is not a project"
 
@@ -537,40 +516,20 @@ class TestTheAveragingAppliesTheGates:
 
     CUM = "ElektriciteitNetgebruik"
 
-    def _frame(self, per_household, project=1):
-        """Cumulative readings that difference to *per_household*'s values."""
-        parts = []
-        for household, values in per_household.items():
-            frame = pd.DataFrame({
-                "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
-                "HuisBatchIdBSV": pd.array(
-                    [_batch(household)] * len(values), dtype="Int64"
-                ),
-                "ProjectIdBSV": pd.array([project] * len(values), dtype="Int64"),
-                "ReadingDate": pd.date_range(
-                    "2026-01-01", periods=len(values), freq="5min"
-                ),
-                COL: pd.array(values, dtype="Float64"),
-            })
-            frame[self.CUM] = frame[COL].fillna(0).cumsum().astype("Float64")
-            parts.append(frame)
-        return pd.concat(parts, ignore_index=True)
-
-    def _cadence(self, frame):
-        households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
-        return pd.DataFrame({
-            "HuisIdBSV": pd.array(households, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array(
-                [_batch(h) for h in households], dtype="Int64"
-            ),
-            "column": pd.array([self.CUM] * len(households), dtype="string"),
-            "cadence_minutes": pd.array([5] * len(households), dtype="Int64"),
-        })
+    def _frame(self, per_dataset, project=1):
+        """Cumulative readings that difference to *per_dataset*'s values."""
+        return datasets_frame(
+            {
+                dataset: {COL: values, self.CUM: _cumulative(values)}
+                for dataset, values in per_dataset.items()
+            },
+            start="2026-01-01", freq="5min", project=project, tz=None,
+        )
 
     def _averaged(self, frame):
         return project_averages(
-            frame, "ProjectIdBSV", [COL],
-            cadence=self._cadence(frame), grid_minutes=5,
+            frame, ids.PROJECT, [COL],
+            cadence=_cadence_for(frame), grid_minutes=GRID,
             # The two per-slot gates are what this class compares across the
             # paths; the floor is compared in TestTheHouseholdFloor.
             min_eligible=1,
@@ -580,7 +539,7 @@ class TestTheAveragingAppliesTheGates:
         """Slot 0 has no average: an interval series has no reading before its
         first, so there is nothing for that slot to average."""
         avg = self._averaged(
-            self._frame({h: _day() for h in range(1, 5)})
+            self._frame({dataset: _day() for dataset in range(1001, 1005)})
         ).sort_values("ReadingDate")
         assert len(avg) == SLOTS_PER_DAY
         assert pd.isna(avg[f"{COL}_avg"].iloc[0])
@@ -591,8 +550,8 @@ class TestTheAveragingAppliesTheGates:
         rest of the day rather than removing it: the three that did cover it
         still have an average."""
         frame = self._frame({
-            1: _day(), 2: _day(), 3: _day(),
-            4: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
+            1001: _day(), 1002: _day(), 1003: _day(),
+            1004: [1.0] * 12 + [pd.NA] * (SLOTS_PER_DAY - 12),
         })
         avg = self._averaged(frame).sort_values("ReadingDate")
         covered = avg[f"{COL}_avg"].notna()

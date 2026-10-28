@@ -20,9 +20,16 @@ households, which is below the production household floor, so they pass
 import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
-
+from etdmap import ids
 from etdmap.flags import MappingFlag, flag_column
-from etdmap.testing import declare_synthetic_model, synthetic_model
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    declare_synthetic_model,
+    household_batch_of,
+    synthetic_model,
+)
+
 from etdtransform.impute import read_diffs, write_diffs
 
 pytestmark = pytest.mark.unit
@@ -51,37 +58,39 @@ def _declared_model():
 
 
 def _frame(per_household, project_of=None, register=None):
-    """``{household: [interval values]}`` on one five-minute grid.
+    """``{household: [interval values]}`` on one tz-naive five-minute grid,
+    one dataset per household.
 
     *project_of* maps a household to its project, defaulting to project 1.
     *register* maps a household to its cumulative readings, which is what makes
     the averaging take its volume from the register rather than the interval.
+    ``PAIRS_EMPTY`` is what leaves a household without one on the interval
+    values: the cumulative column is present and empty, not absent.
     """
-    parts = []
+    per_dataset = {}
+    project_of_dataset = {}
     for household, values in per_household.items():
-        stamps = pd.date_range("2026-01-01", periods=len(values), freq=f"{GRID}min")
-        part = pd.DataFrame({
-            "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * len(values)], dtype="Int64"),
-            "ProjectIdBSV": pd.array(
-                [(project_of or {}).get(household, 1)] * len(values),
-                dtype="Int64",
-            ),
-            "ReadingDate": stamps,
-            DIFF: pd.array(values, dtype="Float64"),
-        })
-        part[CUM] = pd.array(
-            (register or {}).get(household, [pd.NA] * len(values)),
-            dtype="Float64",
-        )
-        parts.append(part)
-    return pd.concat(parts, ignore_index=True)
+        dataset = household_batch_of(household)
+        columns = {DIFF: list(values)}
+        readings = (register or {}).get(household)
+        if readings is not None:
+            columns[CUM] = list(readings)
+        per_dataset[dataset] = columns
+        project_of_dataset[dataset] = (project_of or {}).get(household, 1)
+    return datasets_frame(
+        per_dataset,
+        project_of=project_of_dataset,
+        start="2026-01-01",
+        freq=f"{GRID}min",
+        tz=None,
+        pairs=PAIRS_EMPTY,
+    )
 
 
 def _averaged(frame, **kwargs):
     kwargs.setdefault("min_eligible", 1)
     return project_averages(
-        frame, "ProjectIdBSV", [DIFF],
+        frame, ids.PROJECT, [DIFF],
         cadence=cadence_table(frame, [CUM], minutes=GRID),
         grid_minutes=GRID, **kwargs,
     )[DIFF]
@@ -146,7 +155,7 @@ class TestTheFillIsNotGivenThem:
         # after the stored ones, and the column order of this frame is not
         # something anything depends on.
         assert set(plain.columns) == {
-            "ProjectIdBSV", "ReadingDate", f"{DIFF}_avg",
+            ids.PROJECT, "ReadingDate", f"{DIFF}_avg",
         }
 
     def test_they_can_be_asked_for(self, tmp_path):
@@ -170,7 +179,7 @@ class TestWhatTheAveragingThrewOut:
         frame = _frame(
             {1: values, 2: spiking}, project_of={1: 1, 2: 2},
         )
-        duty = _averaged(frame)["coverage_duty"].set_index("ProjectIdBSV")
+        duty = _averaged(frame)["coverage_duty"].set_index(ids.PROJECT)
 
         assert int(duty.loc[1, "n_discarded"]) == 0
         assert int(duty.loc[2, "n_discarded"]) == 1
@@ -181,7 +190,7 @@ class TestWhatTheAveragingThrewOut:
         frame[findings] = pd.array([0] * N, dtype="Int64")
         frame.loc[2, findings] = int(MappingFlag.FILLED_DOWN)
 
-        duty = _averaged(frame)["coverage_duty"].set_index("ProjectIdBSV")
+        duty = _averaged(frame)["coverage_duty"].set_index(ids.PROJECT)
         assert int(duty.loc[3, "n_flagged"]) == 1
 
     def test_the_counts_add_up_to_the_totals_the_caller_reports(self):
@@ -240,15 +249,19 @@ class TestWindowsSkippedAsOutages:
         assert int(presence["n_outage_windows"].sum()) == 0
 
 
-class TestWhichSourceFedEachHousehold:
-    """A7. Decided per household per column, used, and until now forgotten."""
+class TestWhichSourceFedEachDataset:
+    """The source is decided per dataset per column, and recorded rather than
+    used and discarded: without it a reader cannot tell whether a dataset's
+    volume came from its cumulative readings or its delivered intervals."""
 
     def test_a_register_household_reads_cumulative(self):
         frame = _frame(
             {1: [READING] * N}, register={1: [0.0, 1.0, 2.0, 3.0]},
         )
-        presence = _averaged(frame)["window_presence"].set_index("HuisIdBSV")
-        assert presence.loc[1, "source"] == "cumulative"
+        presence = _averaged(frame)["window_presence"].set_index(
+            ids.HOUSEHOLD_BATCH
+        )
+        assert presence.loc[household_batch_of(1), "source"] == "cumulative"
 
     def test_an_interval_only_household_reads_interval(self):
         presence = _averaged(_frame({1: [READING] * N}))["window_presence"]
@@ -259,9 +272,11 @@ class TestWhichSourceFedEachHousehold:
             {1: [READING] * N, 2: [READING] * N},
             register={1: [0.0, 1.0, 2.0, 3.0]},
         )
-        presence = _averaged(frame)["window_presence"].set_index("HuisIdBSV")
-        assert presence.loc[1, "source"] == "cumulative"
-        assert presence.loc[2, "source"] == "interval"
+        presence = _averaged(frame)["window_presence"].set_index(
+            ids.HOUSEHOLD_BATCH
+        )
+        assert presence.loc[household_batch_of(1), "source"] == "cumulative"
+        assert presence.loc[household_batch_of(2), "source"] == "interval"
 
     def test_it_is_never_left_unstated(self):
         frame = _frame(

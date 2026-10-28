@@ -30,6 +30,8 @@ from etdmap.data_stats import (
 )
 
 from etdtransform.data_stats import get_data_stats
+from etdmap import ids
+from etdmap.testing import household_batch_of
 
 pytestmark = pytest.mark.integration
 
@@ -60,8 +62,8 @@ def _build_fixture_parquet(tmp_dir: str) -> str:
                 kwh = None
                 ok = False
             rows.append({
-                "HuisIdBSV": hh,
-                "HuisBatchIdBSV": hh + 1000,
+                ids.HOUSEHOLD: hh,
+                ids.HOUSEHOLD_BATCH: household_batch_of(hh),
                 "ReadingDate": ts,
                 "kWh": kwh,
                 "validate_ok": ok,
@@ -85,14 +87,15 @@ class TestSchemaContract:
 
     def test_output_columns_are_superset_of_stats_dtypes(self, fixture_parquet):
         """Every key in etdmap._STATS_DTYPES is present in the output,
-        plus the wide-stage extras (Identifier, HuisIdBSV, source_file,
-        quantile_mode)."""
+        plus the wide-stage extras (Identifier, the household batch dataset,
+        source_file, quantile_mode)."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         missing = set(_STATS_DTYPES) - set(out.columns)
         assert not missing, (
             f"get_data_stats missing schema columns: {sorted(missing)}"
         )
-        for extra in ("Identifier", "HuisIdBSV", "source_file", "quantile_mode"):
+        for extra in ("Identifier", ids.HOUSEHOLD_BATCH, "source_file",
+                      "quantile_mode"):
             assert extra in out.columns, (
                 f"wide-stage extra column '{extra}' missing from output"
             )
@@ -123,17 +126,23 @@ class TestValueParityExactPrecision:
     compute_numeric_column_stats. This is the byte-equal contract
     that cross-stage drift reports rely on."""
 
-    def test_exact_quantile_matches_kernel_for_single_hh(self, fixture_parquet):
-        """For HH=1, column=kWh, annual: get_data_stats(exact) row
+    def test_exact_quantile_matches_kernel_for_a_single_dataset(
+        self, fixture_parquet
+    ):
+        """For one dataset, column=kWh, annual: get_data_stats(exact) row
         values match compute_numeric_column_stats on the same series."""
-        df = pd.read_parquet(fixture_parquet, columns=["HuisIdBSV", "kWh"], dtype_backend="numpy_nullable")
-        sub = df[df["HuisIdBSV"] == 1]["kWh"].dropna()
+        df = pd.read_parquet(
+            fixture_parquet,
+            columns=[ids.HOUSEHOLD_BATCH, "kWh"],
+            dtype_backend="numpy_nullable",
+        )
+        sub = df[df[ids.HOUSEHOLD_BATCH] == household_batch_of(1)]["kWh"].dropna()
         sub_nullable = pd.array(sub.tolist(), dtype="Float64")
         kernel = compute_numeric_column_stats(pd.Series(sub_nullable))
 
         out = get_data_stats(fixture_parquet, seasonal=False, precision="exact")
         row = out[
-            (out["HuisIdBSV"] == 1)
+            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(1))
             & (out["column"] == "kWh")
             & (out["season"] == "annual")
         ].iloc[0]
@@ -159,21 +168,23 @@ class TestValueParityExactPrecision:
 
 
 class TestCrossJoinPadding:
-    """The cross-product (HH x col x season) is reinstated after the
+    """The cross-product (dataset x col x season) is reinstated after the
     ibis aggregation -- the mapped-mode kernel emits a count=0 row
     for an all-NA column, and the wide-stage path must too."""
 
-    def test_zero_count_row_for_hh_with_no_column_data(self, fixture_parquet):
-        """HH=3 has no kWh data. Output must contain a row for
-        (HH=3, kWh, annual) with count=0, missing>0, and NA stat
+    def test_zero_count_row_for_a_dataset_with_no_column_data(
+        self, fixture_parquet
+    ):
+        """The third dataset has no kWh data. Output must contain a row for
+        (that dataset, kWh, annual) with count=0, missing>0, and NA stat
         values -- not a missing row."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
-            (out["HuisIdBSV"] == 3)
+            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(3))
             & (out["column"] == "kWh")
             & (out["season"] == "annual")
         ]
-        assert len(sub) == 1, "expected exactly one row for HH=3, kWh, annual"
+        assert len(sub) == 1, "expected exactly one row for that dataset, kWh, annual"
         row = sub.iloc[0]
         assert int(row["count"]) == 0
         assert int(row["missing"]) > 0
@@ -181,14 +192,14 @@ class TestCrossJoinPadding:
             assert pd.isna(row[stat]), f"{stat} should be NA when count=0"
 
     def test_seasonal_padding_covers_all_seasons(self, fixture_parquet):
-        """With seasonal=True every (HH, col) combo gets a row per
-        season slice -- annual, cold, warm -- even when the HH has no
+        """With seasonal=True every (dataset, col) combo gets a row per
+        season slice -- annual, cold, warm -- even when the dataset has no
         data for that slice."""
         out = get_data_stats(fixture_parquet, seasonal=True)
-        # HH=2 has data only in cold months; warm slice should still
-        # emit a row but with count=0.
+        # The second dataset has data only in cold months; the warm slice
+        # should still emit a row, with count=0.
         warm = out[
-            (out["HuisIdBSV"] == 2)
+            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(2))
             & (out["column"] == "kWh")
             & (out["season"] == "warm")
         ]
@@ -202,16 +213,16 @@ class TestBooleanBranch:
     stay NA. This mirrors the mapped-mode kernel's boolean branch."""
 
     def test_boolean_emits_only_cheap_stats(self, fixture_parquet):
-        """For HH=1, column=validate_ok, annual: count/mean/min/max
-        are populated, quantile stats are NA."""
+        """For the first dataset, column=validate_ok, annual:
+        count/mean/min/max are populated, quantile stats are NA."""
         out = get_data_stats(fixture_parquet, seasonal=False)
         sub = out[
-            (out["HuisIdBSV"] == 1)
+            (out[ids.HOUSEHOLD_BATCH] == household_batch_of(1))
             & (out["column"] == "validate_ok")
             & (out["season"] == "annual")
         ].iloc[0]
         assert int(sub["count"]) == 12
-        # All True for HH=1 -> mean / min / max all 1.0
+        # All True for that dataset -> mean / min / max all 1.0
         assert float(sub["mean"]) == pytest.approx(1.0)
         assert float(sub["min"]) == pytest.approx(1.0)
         assert float(sub["max"]) == pytest.approx(1.0)

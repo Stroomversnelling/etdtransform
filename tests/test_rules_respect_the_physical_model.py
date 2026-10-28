@@ -9,6 +9,8 @@ cannot default.
 import pandas as pd
 import pytest
 from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.constraints import CONSTRAINT_COLUMNS, build_constraint_package
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -19,9 +21,26 @@ CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
 ITYPE = f"{DIFF}_impute_type"
 
+#: One household per project, as ``household -> ProjectIdBSV``. Each
+#: household's dataset is ``household_batch_of`` of its number.
+PROJECT_OF_HOUSEHOLD = {1: 1, 2: 2}
+
+#: The readings every household carries. Identical in both projects, so the
+#: physical model is the only thing that differs between them.
+_READINGS = {
+    CUM: [100.0, 100.5, pd.NA, 102.0],
+    DIFF: [pd.NA, 1.2, pd.NA, pd.NA],
+    f"{DIFF}_avg": [pd.NA, 1.0, 1.0, 1.0],
+    "K": [pd.NA, 0.5, pd.NA, pd.NA],
+}
+
 
 def _constraints_for_models(*rows):
-    """A compiler-shaped table; each row is (lhs, rhs, {var: sign}, models)."""
+    """A compiler-shaped table; each row is (lhs, rhs, {var: sign}, models).
+
+    Local because the rule rows and their physical_models lists are what this
+    file is about, and no shared builder owns a compiled constraint table.
+    """
     records = []
     for lhs, rhs_text, signs, models in rows:
         for variable, sign in signs.items():
@@ -40,20 +59,18 @@ def _constraints_for_models(*rows):
 
 def _two_project_frame():
     """One household per project, identical data: only the model differs."""
-    frames = []
-    for household, project in ((1, 1), (2, 2)):
-        n = 4
-        frames.append(pd.DataFrame({
-            "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * n], dtype="Int64"),
-            "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-            CUM: pd.array([100.0, 100.5, pd.NA, 102.0], dtype="Float64"),
-            DIFF: pd.array([pd.NA, 1.2, pd.NA, pd.NA], dtype="Float64"),
-            f"{DIFF}_avg": pd.array([pd.NA, 1.0, 1.0, 1.0], dtype="Float64"),
-            "K": pd.array([pd.NA, 0.5, pd.NA, pd.NA], dtype="Float64"),
-        }))
-    return pd.concat(frames, ignore_index=True)
+    return datasets_frame(
+        {household_batch_of(household): _READINGS
+         for household in PROJECT_OF_HOUSEHOLD},
+        project_of={household_batch_of(household): project
+                    for household, project in PROJECT_OF_HOUSEHOLD.items()},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here, so there is nothing to
+        # complete.
+        pairs=False,
+    )
 
 
 class TestThePackageSelectsByModel:
@@ -105,20 +122,22 @@ class TestTheFillJoinsModelPerRow:
         out, _, _ = impute_and_normalize(
             frame,
             [CUM],
-            "ProjectIdBSV",
+            ids.PROJECT,
             cadence=cadence_table(frame, [CUM]),
             constraints=_constraints_for_models(
                 ((DIFF), "K", {"K": 1}, ["All-Electric"]),
             ),
             physical_models={1: "All-Electric", 2: "Hybride"},
         )
-        by_household = {
-            int(h): out[out["HuisIdBSV"] == h].reset_index(drop=True)
-            for h in (1, 2)
+        by_dataset = {
+            household: out[
+                out[ids.HOUSEHOLD_BATCH] == household_batch_of(household)
+            ].reset_index(drop=True)
+            for household in (1, 2)
         }
-        flagged = int(by_household[1].loc[1, ITYPE])
+        flagged = int(by_dataset[1].loc[1, ITYPE])
         assert flagged & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
-        other = by_household[2].loc[1, ITYPE]
+        other = by_dataset[2].loc[1, ITYPE]
         assert pd.isna(other) or not (
             int(other) & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
         )
@@ -129,7 +148,7 @@ class TestTheFillJoinsModelPerRow:
             impute_and_normalize(
                 frame,
                 [CUM],
-                "ProjectIdBSV",
+                ids.PROJECT,
                 cadence=cadence_table(frame, [CUM]),
                 constraints=_constraints_for_models(
                     ((DIFF), "K", {"K": 1}, ["All-Electric"]),

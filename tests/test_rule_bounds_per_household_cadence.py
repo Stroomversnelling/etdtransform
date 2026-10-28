@@ -14,10 +14,12 @@ minutes and 3.464x at sixty, which is what
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.data_model import resolve_bounds, thresholds_dict
+from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
-from etdmap.data_model import resolve_bounds, thresholds_dict
 
 pytestmark = pytest.mark.unit
 
@@ -27,34 +29,46 @@ N = 4
 
 
 def _rows(household, minutes, n=N):
-    """One household's rows, spaced at its own reporting interval."""
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range(
-            "2026-01-01", periods=n, freq=f"{minutes}min"
-        ),
-        DIFF: pd.array([0.1] * n, dtype="Float64"),
-        # The rule's input, never known, so nothing narrows and the bound is
-        # the scaled threshold alone -- which is what this file is about.
-        "K": pd.array([pd.NA] * n, dtype="Float64"),
-    })
+    """One dataset's rows, spaced at its own reporting interval."""
+    return datasets_frame(
+        {household_batch_of(household): {
+            DIFF: [0.1] * n,
+            # The rule's input, never known, so nothing narrows and the bound
+            # is the scaled threshold alone -- which is what this file is
+            # about.
+            "K": [pd.NA] * n,
+        }},
+        start="2026-01-01",
+        freq=f"{minutes}min",
+        tz=None,
+        # The bound is read from the project, the two ids and the rule's own
+        # variables, so no cumulative counterpart is completed: a usable
+        # cumulative column here would be a reading the rule never looks at.
+        pairs=False,
+    )
 
 
 def _cadence(by_household):
-    """A cadence table recording a different interval per household.
+    """A cadence table recording a different interval per dataset.
 
     Under the cumulative name, which is where cadence is recorded -- the
-    interval column resolves through it.
+    interval column resolves through it. Every dataset sits on the five-minute
+    grid and reports the column at its own interval, so the column is as coarse
+    as or coarser than the grid and the ratio the bound scales by is the
+    column's own.
     """
-    return pd.DataFrame([
-        {"HuisBatchIdBSV": household + 1000, "column": CUM, "cadence_minutes": minutes}
-        for household, minutes in by_household.items()
-    ]).astype({
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-    })
+    return pd.concat(
+        [
+            cadence_sidecar(
+                [CUM],
+                minutes=minutes,
+                grid_minutes=5,
+                household_batch_id=household_batch_of(household),
+            )
+            for household, minutes in by_household.items()
+        ],
+        ignore_index=True,
+    )
 
 
 def _bounds(frame, by_household):
@@ -77,8 +91,8 @@ class TestEachHouseholdTakesItsOwnCadence:
         frame = pd.concat([_rows(1, 5), _rows(2, 60)], ignore_index=True)
         _lo, hi, _imputed = _bounds(frame, {1: 5, 2: 60})
 
-        fine = hi[frame["HuisIdBSV"] == 1]
-        coarse = hi[frame["HuisIdBSV"] == 2]
+        fine = hi[frame[ids.HOUSEHOLD] == 1]
+        coarse = hi[frame[ids.HOUSEHOLD] == 2]
         assert fine.nunique() == 1 and coarse.nunique() == 1
         assert float(coarse.iloc[0]) > float(fine.iloc[0])
 
@@ -88,8 +102,8 @@ class TestEachHouseholdTakesItsOwnCadence:
         frame = pd.concat([_rows(1, 5), _rows(2, 60)], ignore_index=True)
         _lo, hi, _imputed = _bounds(frame, {1: 5, 2: 60})
 
-        fine = float(hi[frame["HuisIdBSV"] == 1].iloc[0])
-        coarse = float(hi[frame["HuisIdBSV"] == 2].iloc[0])
+        fine = float(hi[frame[ids.HOUSEHOLD] == 1].iloc[0])
+        coarse = float(hi[frame[ids.HOUSEHOLD] == 2].iloc[0])
         assert coarse / fine == pytest.approx(12**0.5, rel=1e-9)
         assert coarse / fine == pytest.approx(3.464, abs=1e-3)
 
@@ -110,7 +124,7 @@ class TestEachHouseholdTakesItsOwnCadence:
         _lo, hi, _imputed = _bounds(frame, {1: 5, 2: 15, 3: 60})
 
         for household, minutes in ((1, 5), (2, 15), (3, 60)):
-            own = hi[frame["HuisIdBSV"] == household]
+            own = hi[frame[ids.HOUSEHOLD] == household]
             assert float(own.iloc[0]) == pytest.approx(
                 _declared_at(minutes)
             ), household
@@ -125,7 +139,7 @@ class TestEachHouseholdTakesItsOwnCadence:
         together = pd.concat([_rows(1, 5), _rows(2, 60)], ignore_index=True)
         _lo, hi_together, _i = _bounds(together, {1: 5, 2: 60})
 
-        assert float(hi_together[together["HuisIdBSV"] == 1].iloc[0]) == (
+        assert float(hi_together[together[ids.HOUSEHOLD] == 1].iloc[0]) == (
             pytest.approx(float(hi_alone.iloc[0]))
         )
 
@@ -144,7 +158,7 @@ class TestAHouseholdTheTableDoesNotMention:
         frame = pd.concat([_rows(1, 5), _rows(2, 60)], ignore_index=True)
         _lo, hi, _imputed = _bounds(frame, {1: 5})
 
-        unmentioned = hi[frame["HuisIdBSV"] == 2]
+        unmentioned = hi[frame[ids.HOUSEHOLD] == 2]
         assert float(unmentioned.iloc[0]) == pytest.approx(
             float(thresholds_dict[DIFF]["Max"])
         )

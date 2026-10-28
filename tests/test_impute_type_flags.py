@@ -39,22 +39,27 @@ ITYPE = f"{DIFF}_impute_type"
 # by the code, so it derives the member set rather than keeping a copy -- a
 # second list would drift.
 from conftest import cadence_table
+from etdmap.testing import datasets_frame, household_batch_of
 
 ALL_FLAGS = {m for m in ImputeType if m.name and bin(m.value).count("1") == 1}
 CONDITIONS = {m for m in ALL_FLAGS if m & ImputeType.SIGNALS}
 
 
 def _frame(cumulative, averages, diffs=None, household=1):
-    n = len(cumulative)
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(cumulative, dtype="Float64"),
-        DIFF: pd.array([pd.NA] * n if diffs is None else diffs, dtype="Float64"),
-        AVG: pd.array(averages, dtype="Float64"),
-    })
+    """One dataset of *household*, tz-naive, at the 5-minute grid.
+
+    Both halves of the cumulative/interval pair are stated, so the builder
+    completes neither: the cumulative readings bound the gaps and the interval
+    values are the shape the fill distributes by.
+    """
+    return datasets_frame(
+        {household_batch_of(household): {
+            CUM: list(cumulative),
+            DIFF: pd.NA if diffs is None else list(diffs),
+            AVG: list(averages),
+        }},
+        start="2026-01-01", freq="5min", tz=None,
+    )
 
 
 def _impute(frame):

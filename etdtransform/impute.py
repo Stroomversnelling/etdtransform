@@ -20,7 +20,7 @@ from etdmap.data_model import (
 from etdmap.flags import MappingFlag, flag_column
 
 from etdtransform.presence import (
-    MIN_ELIGIBLE_HOUSEHOLDS,
+    MIN_ELIGIBLE_DATASETS,
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
@@ -39,6 +39,7 @@ from etdtransform.bounds import (
 
 import etdtransform
 from etdtransform.vectorized_impute import impute_and_normalize, without_tariff_splits
+from etdmap import ids
 
 #: Findings that disqualify a value from shaping a project average: it was
 #: written by the pipeline rather than measured, or it was measured over a
@@ -334,7 +335,7 @@ def calculate_average_diff_ibis(
     bounds: dict | None = None,
     cadence: pd.DataFrame | None = None,
     grid_minutes: float | None = None,
-    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible: int = MIN_ELIGIBLE_DATASETS,
 ) -> dict:
     """
     The project average of each interval column, per project and reading date.
@@ -390,7 +391,7 @@ def calculate_average_diff_ibis(
         - ``coverage`` -- the share of slots the average has a value for
         - ``duty`` -- of those, the share carrying consumption
         - ``coverage_duty`` -- the same two per project
-        - ``window_presence`` -- which households covered which window
+        - ``window_presence`` -- which datasets covered which window
 
     Warnings
     --------
@@ -410,19 +411,19 @@ def calculate_average_diff_ibis(
     if cadence is None:
         cadence = load_column_cadence()
 
-    # Which project each household is in, in one round trip. The grid is
+    # Which project each household batch is in, in one round trip. The grid is
     # resolved per project and the projects grouped by it, so there is one pass
     # per distinct grid rather than one per project: a per-project pass would
     # rebuild every presence aggregate once per project per column, and the
     # number of distinct grids is bounded by the declarations while the number
     # of projects is not (PROFILING_GUIDANCE.md).
     membership = (
-        tbl.select("HuisBatchIdBSV", project_id_column).distinct().execute()
+        tbl.select(ids.HOUSEHOLD_BATCH, project_id_column).distinct().execute()
     )
     project_by_household_batch = {}
     unassigned = []
     for household_batch, project in zip(
-        membership["HuisBatchIdBSV"], membership[project_id_column]
+        membership[ids.HOUSEHOLD_BATCH], membership[project_id_column]
     ):
         if pd.isna(project):
             unassigned.append(int(household_batch))
@@ -484,21 +485,21 @@ def _average_at_one_cadence(
     cadence: pd.DataFrame | None,
     grid_minutes: float,
     included_ids: list[int],
-    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible: int = MIN_ELIGIBLE_DATASETS,
 ) -> dict:
     """
-    One pass of the averaging, over the households that share one grid.
+    One pass of the averaging, over the household batches that share one grid.
 
     Split out from :func:`calculate_average_diff_ibis` so the spreading
     denominator and the step-back can take a literal: within a pass there is one
     grid, and ``_resample_average_ibis`` needs the slot spacing as a number.
 
-    *included_ids* is the pass's household batches, resolved by the caller from the
-    (household, project) membership it already read, so this costs no round trip
-    of its own.
+    *included_ids* is the pass's household batches, resolved by the caller from
+    the (household batch, project) membership it already read, so this costs no
+    round trip of its own.
     """
     tbl = (
-        tbl.filter(tbl["HuisBatchIdBSV"].isin(included_ids))
+        tbl.filter(tbl[ids.HOUSEHOLD_BATCH].isin(included_ids))
         if included_ids else tbl
     )
 
@@ -575,8 +576,8 @@ def _average_at_one_cadence(
 
             # The interval each dataset's readings cover. A dataset absent
             # from the cadence table reports at the grid cadence.
-            minutes = _per_household(
-                included["HuisBatchIdBSV"],
+            minutes = _per_dataset(
+                included[ids.HOUSEHOLD_BATCH],
                 cadence_minutes_by_household_batch(col, cadence),
                 grid_minutes,
             )
@@ -611,8 +612,8 @@ def _average_at_one_cadence(
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
                 assert_bounds_not_inverted(col, cadence)
-                scaled_bound = _per_household(
-                    included["HuisBatchIdBSV"],
+                scaled_bound = _per_dataset(
+                    included[ids.HOUSEHOLD_BATCH],
                     column_bound_by_household_batch(col, cadence),
                     bound,
                 )
@@ -645,8 +646,8 @@ def _average_at_one_cadence(
                 value = over.ifelse(ibis.null().cast("float64"), value)
 
             # The cumulative variable supplies the volume wherever it holds
-            # usable readings. Decided per household, so one column is behind
-            # every window.
+            # usable readings. Decided per dataset, so one column is behind
+            # every reading of that dataset.
             cumulative = cumulative_column(col)
             cum_value = None
             on_cumulative_ids = []
@@ -660,14 +661,14 @@ def _average_at_one_cadence(
                     ).ifelse(ibis.null().cast("float64"), cum_value)
                 on_cumulative_ids = (
                     included.filter(cum_value.notnull())
-                    .select("HuisIdBSV")
+                    .select(ids.HOUSEHOLD_BATCH)
                     .distinct()
-                    .execute()["HuisIdBSV"]
+                    .execute()[ids.HOUSEHOLD_BATCH]
                     .tolist()
                 )
 
             if on_cumulative_ids:
-                on_cumulative = included["HuisIdBSV"].isin(on_cumulative_ids)
+                on_cumulative = included[ids.HOUSEHOLD_BATCH].isin(on_cumulative_ids)
                 source = on_cumulative.ifelse(cum_value, value)
             else:
                 on_cumulative = ibis.literal(False)
@@ -717,23 +718,23 @@ def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.Da
     return df
 
 
-def _per_household(household_column, by_household, default):
+def _per_dataset(dataset_column, by_dataset, default):
     """
-    A per-household number as an ibis expression, defaulting where unknown.
+    A per-dataset number as an ibis expression, defaulting where unknown.
 
-    An empty mapping means nothing is known per household, which is the state
+    An empty mapping means nothing is known per dataset, which is the state
     when no cadence sidecar exists, so every row takes *default*.
     """
     import ibis
 
     known = {
-        int(household): float(value)
-        for household, value in by_household.items()
+        int(dataset): float(value)
+        for dataset, value in by_dataset.items()
         if pd.notna(value)
     }
     if not known:
         return ibis.literal(float(default)).cast("float64")
-    return household_column.substitute(known, else_=float(default)).cast("float64")
+    return dataset_column.substitute(known, else_=float(default)).cast("float64")
 
 def _match_reading_date_dtype(frame):
     """Give ReadingDate the resolution pandas produces, preserving any timezone.
@@ -757,14 +758,14 @@ def _match_reading_date_dtype(frame):
 def _resample_average_ibis(
     prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots,
     window_minutes=WINDOW_MINUTES,
-    min_eligible=MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible=MIN_ELIGIBLE_DATASETS,
 ):
     """
     The project average of *diff_col*, computed in SQL by resampling.
 
-    The spreading step, followed by a
-    plain mean. Two consecutive usable readings bound a window; its volume is
-    spread evenly over the grid slots between them, ending at the later reading.
+    The spreading step, followed by a plain mean. Two consecutive usable
+    readings of one dataset bound a window; its volume is spread evenly over
+    the grid slots between them, ending at the later reading.
 
     ``_value`` arrives with every disqualified value already NULL, so a usable
     reading is simply a non-NULL one. The row number is taken over the full
@@ -780,7 +781,7 @@ def _resample_average_ibis(
     ----------
     prepared : ibis.Table
         Carrying ``_value`` (the value after exclusions) and ``_minutes`` (the
-        interval each household's reading covers).
+        interval each dataset's readings cover).
     diff_col : str
         Interval column being averaged.
     project_id_column : str
@@ -805,7 +806,7 @@ def _resample_average_ibis(
     import ibis.selectors as s_selectors
     from ibis import _
 
-    order = ibis.window(group_by="HuisIdBSV", order_by="ReadingDate")
+    order = ibis.window(group_by=ids.HOUSEHOLD_BATCH, order_by="ReadingDate")
     slots = prepared["_minutes"] / float(grid_minutes)
 
     positioned = prepared.mutate(
@@ -887,18 +888,20 @@ def _resample_average_ibis(
     # window clipped by the edge of the dataset is judged on what it held.
     #
     # Which source fed the household rides out of the same aggregate. It is
-    # decided per household per column and then used and forgotten, so without
+    # decided per dataset per column and then used and forgotten, so without
     # this a reader cannot tell whether a household's volume came from its
-    # register or from its delivered intervals.
+    # cumulative readings or from its delivered intervals.
     grid = prepared.mutate(
         _window=(prepared["ReadingDate"].epoch_seconds() // 60) // window
     )
-    held = grid.group_by([project_id_column, "HuisIdBSV", "_window"]).aggregate(
+    held = grid.group_by(
+        [project_id_column, ids.HOUSEHOLD_BATCH, "_window"]
+    ).aggregate(
         _held=_.count(),
         _from_cumulative=_._on_cumulative.max(),
     )
     delivered = placed.group_by(
-        [project_id_column, "HuisIdBSV", "_window"]
+        [project_id_column, ids.HOUSEHOLD_BATCH, "_window"]
     ).aggregate(_delivered=_._per_slot.count())
 
     # The windows the outage term above removed, attributed to the window the
@@ -908,16 +911,16 @@ def _resample_average_ibis(
     outages = (
         marked.filter(_._outage)
         .mutate(_window=(_.ReadingDate.epoch_seconds() // 60) // window)
-        .group_by([project_id_column, "HuisIdBSV", "_window"])
+        .group_by([project_id_column, ids.HOUSEHOLD_BATCH, "_window"])
         .aggregate(
             _n_outage_windows=_.count(),
             _n_outage_slots=_._length.sum(),
         )
     )
 
-    coverage_keys = [project_id_column, "HuisIdBSV", "_window"]
+    coverage_keys = [project_id_column, ids.HOUSEHOLD_BATCH, "_window"]
 
-    # The counts the eligibility gate below judges, exported per household and
+    # The counts the eligibility gate below judges, exported per dataset and
     # window. One small execute per column: (household, window) rows, not data
     # rows. The judgements themselves are derived in window_presence_frame so
     # both averaging implementations share one definition.
@@ -1115,15 +1118,15 @@ def sort_for_impute(df: pd.DataFrame, project_id_column: str):
 
     Notes
     -----
-    The sorting order is: project, household, household batch
-    (HuisBatchIdBSV, which identifies the dataset) and ReadingDate. Each
+    The sorting order is: project, household batch dataset, ReadingDate. Each
     dataset's rows then form one contiguous run in date order, which the
-    imputation reads positionally.
+    imputation reads positionally. The household is not in the key: the
+    dataset determines it, so naming it sorts on the same thing twice.
 
     """
     logging.info("Sorting to prepare for imputation.")
     return df.sort_values(
-        by=[project_id_column, "HuisIdBSV", "HuisBatchIdBSV", "ReadingDate"]
+        by=[project_id_column, ids.HOUSEHOLD_BATCH, "ReadingDate"]
     )
 
 
@@ -1164,7 +1167,7 @@ def prepare_diff_averages_for_impute_ibis(
     tbl,
     project_id_column: str,
     cumulative_columns: list,
-    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible: int = MIN_ELIGIBLE_DATASETS,
 ):
     """
     Compute the project averages and save the artefacts imputation reads.
@@ -1213,7 +1216,7 @@ def prepare_diff_averages_for_impute_ibis(
 
 
 def write_diffs(
-    diffs, project_id_column="ProjectIdBSV", aggregate_folder_path=None
+    diffs, project_id_column=ids.PROJECT, aggregate_folder_path=None
 ) -> str:
     """Write the averages, partitioned on project and cadence.
 
@@ -1414,8 +1417,8 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
     """
     from etdmap.index_helpers import HouseBatchOverlapError
 
-    if "HuisBatchIdBSV" in df.columns:
-        counts = df.groupby("HuisIdBSV")["HuisBatchIdBSV"].nunique()
+    if ids.HOUSEHOLD_BATCH in df.columns:
+        counts = df.groupby(ids.HOUSEHOLD)[ids.HOUSEHOLD_BATCH].nunique()
         multi = sorted(int(h) for h, n in counts.items() if n > 1)
         if multi:
             raise HouseBatchOverlapError(
@@ -1424,13 +1427,16 @@ def assert_imputation_input_batch_safe(df: pd.DataFrame) -> None:
                 f"between-batch gap (real non-delivery). Batch-aware imputation "
                 f"is not implemented yet; impute per batch or exclude."
             )
-    dup_mask = df.duplicated(subset=["HuisIdBSV", "ReadingDate"])
+    dup_mask = df.duplicated(subset=[ids.HOUSEHOLD_BATCH, "ReadingDate"])
     if bool(dup_mask.any()):
-        bad = sorted(int(h) for h in df.loc[dup_mask, "HuisIdBSV"].dropna().unique())
+        bad = sorted(
+            int(b) for b in df.loc[dup_mask, ids.HOUSEHOLD_BATCH].dropna().unique()
+        )
         raise ValueError(
-            f"[imputation] Duplicate (HuisIdBSV, ReadingDate) rows for household(s) "
-            f"{bad} -- overlapping batch periods double-weight project averages and "
-            f"break the diff math. Resolve the batch overlap first."
+            f"[imputation] Duplicate ({ids.HOUSEHOLD_BATCH}, ReadingDate) rows "
+            f"for dataset(s) {bad} -- a timestamp twice in one series "
+            f"double-weights the project averages and breaks the diff math. "
+            f"Resolve the duplication first."
         )
 
 
@@ -1439,12 +1445,12 @@ def _assert_batch_safe_ibis(tbl) -> None:
     (cheap aggregates; the table is never materialised in full)."""
     from etdmap.index_helpers import HouseBatchOverlapError
 
-    if "HuisBatchIdBSV" in tbl.columns:
+    if ids.HOUSEHOLD_BATCH in tbl.columns:
         per_hh = (
-            tbl.group_by("HuisIdBSV")
-            .aggregate(n_batches=tbl["HuisBatchIdBSV"].nunique())
+            tbl.group_by(ids.HOUSEHOLD)
+            .aggregate(n_batches=tbl[ids.HOUSEHOLD_BATCH].nunique())
         )
-        multi = per_hh.filter(per_hh.n_batches > 1)["HuisIdBSV"].execute()
+        multi = per_hh.filter(per_hh.n_batches > 1)[ids.HOUSEHOLD].execute()
         if len(multi):
             raise HouseBatchOverlapError(
                 f"[prepare_diff_averages] Household(s) {sorted(int(h) for h in multi)} span "
@@ -1452,7 +1458,7 @@ def _assert_batch_safe_ibis(tbl) -> None:
                 f"Batch-aware averaging is not implemented yet."
             )
     n_rows = int(tbl.count().execute())
-    n_keys = int(tbl[["HuisIdBSV", "ReadingDate"]].distinct().count().execute())
+    n_keys = int(tbl[[ids.HOUSEHOLD, "ReadingDate"]].distinct().count().execute())
     if n_rows != n_keys:
         raise ValueError(
             f"[prepare_diff_averages] {n_rows - n_keys} duplicate (HuisIdBSV, ReadingDate) "
@@ -1466,7 +1472,7 @@ def prepare_diff_averages_sharded(
     aggregate_folder_path=None,
     cumulative_columns: list = None,
     household_ids=None,
-    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible: int = MIN_ELIGIBLE_DATASETS,
 ):
     """
     Sharded version of the avg-diffs stage: compute the imputation estimation
@@ -1499,12 +1505,12 @@ def prepare_diff_averages_sharded(
         )
 
     if household_ids is not None:
-        ids = sorted(int(x) for x in household_ids)
+        household_ids = sorted(int(x) for x in household_ids)
     else:
-        ids = included_household_ids(mapped_folder_path)
+        household_ids = included_household_ids(mapped_folder_path)
 
     index_df, _ = read_index(mapped_folder_path)
-    if "HuisBatchIdBSV" not in index_df.columns:
+    if ids.HOUSEHOLD_BATCH not in index_df.columns:
         raise ValueError(
             "index.parquet has no HuisBatchIdBSV column; "
             "re-run the index save to add the household-batch columns."
@@ -1517,17 +1523,17 @@ def prepare_diff_averages_sharded(
     # of index.parquet (one row per household batch), so keying on HuisIdBSV
     # would additionally keep whichever batch row happened to come last.
 
-    household_batch_projects = index_df[["HuisBatchIdBSV", "ProjectIdBSV"]].dropna()
+    household_batch_projects = index_df[[ids.HOUSEHOLD_BATCH, ids.PROJECT]].dropna()
     project_map = _ibis.memtable(
         pd.DataFrame({
-            "HuisBatchIdBSV": household_batch_projects["HuisBatchIdBSV"].astype("int64"),
-            "ProjectIdBSV": household_batch_projects["ProjectIdBSV"].astype("int64"),
+            ids.HOUSEHOLD_BATCH: household_batch_projects[ids.HOUSEHOLD_BATCH].astype("int64"),
+            ids.PROJECT: household_batch_projects[ids.PROJECT].astype("int64"),
         })
     )
 
     tbl = mapped_household_table(mapped_folder_path)
-    tbl = tbl.filter(tbl["HuisIdBSV"].isin(ids))
-    tbl = tbl.join(project_map, tbl["HuisBatchIdBSV"] == project_map["HuisBatchIdBSV"])
+    tbl = tbl.filter(tbl[ids.HOUSEHOLD].isin(household_ids))
+    tbl = tbl.join(project_map, tbl[ids.HOUSEHOLD_BATCH] == project_map[ids.HOUSEHOLD_BATCH])
 
     _assert_batch_safe_ibis(tbl)
 
@@ -1541,7 +1547,7 @@ def prepare_diff_averages_sharded(
     try:
         return prepare_diff_averages_for_impute_ibis(
             tbl,
-            project_id_column="ProjectIdBSV",
+            project_id_column=ids.PROJECT,
             cumulative_columns=cumulative_columns,
             min_eligible=min_eligible,
         )

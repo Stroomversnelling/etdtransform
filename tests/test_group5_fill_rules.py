@@ -27,7 +27,9 @@ import logging
 import pandas as pd
 import pytest
 from conftest import cadence_table
+from etdmap import ids
 from etdmap.flags import MappingFlag
+from etdmap.testing import datasets_frame, household_batch_of
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
@@ -44,18 +46,22 @@ DIFF = "ElektriciteitNetgebruikDiff"
 
 
 def _household(household_id, n, **columns):
-    data = {
-        "HuisIdBSV": pd.array([household_id] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [household_id] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-    }
-    for name, values in columns.items():
-        if name.endswith("_flags"):
-            data[name] = pd.array(values, dtype="Int64")
-        else:
-            data[name] = pd.array(values, dtype="Float64")
-    return pd.DataFrame(data)
+    """One dataset of *household_id* over *n* rows, tz-naive at the 5-minute
+    grid. A `_flags` column holds bits, so it is Int64 rather than Float64.
+
+    Every caller states the cumulative column alongside its interval one, so
+    the builder completes neither half: delivery is read off the cumulative
+    readings the test puts there.
+    """
+    return datasets_frame(
+        {household_batch_of(household_id): {
+            name: list(values) for name, values in columns.items()
+        }},
+        start="2026-01-01", freq="5min", tz=None, n_rows=n,
+        dtypes={
+            name: "Int64" for name in columns if name.endswith("_flags")
+        },
+    )
 
 
 def _frame(*households):
@@ -66,7 +72,7 @@ def _impute(frame, constraints=None, volume_reports=None):
     out, _, _ = impute_and_normalize(
         frame,
         [CUM],
-        "ProjectIdBSV",
+        ids.PROJECT,
         cadence=cadence_table(frame, [CUM]),
         constraints=constraints,
         volume_reports=volume_reports,
@@ -107,7 +113,7 @@ class TestNoDeliveredNoFill:
             _frame(_delivering_household(1), self._all_na_household(2)),
             volume_reports=volume_reports,
         )
-        empty_rows = out.index[out["HuisIdBSV"] == 2]
+        empty_rows = out.index[out[ids.HOUSEHOLD] == 2]
         assert out.loc[empty_rows, DIFF].isna().all()
         assert not out.loc[empty_rows, f"{DIFF}_is_imputed"].any()
         assert out.loc[empty_rows, f"{DIFF}_impute_type"].isna().all()
@@ -117,11 +123,11 @@ class TestNoDeliveredNoFill:
         out = _impute(
             _frame(_delivering_household(1), self._all_na_household(2)),
         )
-        filled_rows = out.index[(out["HuisIdBSV"] == 1)][1:]
+        filled_rows = out.index[(out[ids.HOUSEHOLD] == 1)][1:]
         assert out.loc[filled_rows, DIFF].notna().all()
         assert out.loc[filled_rows, f"{DIFF}_is_imputed"].all()
 
-    def test_no_volume_rows_are_collected_for_the_skipped_household(self):
+    def test_no_volume_rows_are_collected_for_the_skipped_dataset(self):
         volume_reports = []
         _impute(
             _frame(_delivering_household(1), self._all_na_household(2)),
@@ -129,7 +135,11 @@ class TestNoDeliveredNoFill:
         )
         gaps = volume_reports[-1]
         assert not gaps.empty
-        assert set(gaps["HuisIdBSV"].astype(int)) == {1}
+        # A gap belongs to the series it was found in, so the accumulator
+        # names the dataset.
+        assert set(gaps[ids.HOUSEHOLD_BATCH].astype(int)) == {
+            household_batch_of(1)
+        }
 
     def test_invented_zeros_do_not_count_as_delivered(self):
         # The zero-prefill era: a cumulative of pipeline-written zeros,
@@ -147,7 +157,7 @@ class TestNoDeliveredNoFill:
             },
         )
         out = _impute(_frame(_delivering_household(1), invented))
-        empty_rows = out.index[out["HuisIdBSV"] == 2]
+        empty_rows = out.index[out[ids.HOUSEHOLD] == 2]
         assert out.loc[empty_rows, DIFF].isna().all()
         assert out.loc[empty_rows, f"{DIFF}_impute_type"].isna().all()
 
@@ -162,7 +172,7 @@ class TestNoDeliveredNoFill:
             },
         )
         out = _impute(_frame(_delivering_household(1), one_reading))
-        rows = out.index[out["HuisIdBSV"] == 2][1:]
+        rows = out.index[out[ids.HOUSEHOLD] == 2][1:]
         assert out.loc[rows, DIFF].notna().all()
 
 

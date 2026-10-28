@@ -15,6 +15,7 @@ import shutil
 import pandas as pd
 import pytest
 
+from etdmap import ids
 from etdtransform.aggregate import (
     aggregate_project_data_duckdb,
     resample_hh_data_duckdb,
@@ -53,11 +54,11 @@ class TestProjectAggregateIsTheMeanOverItsOwnHouseholds:
     def project_rows(self, tmp_path):
         from unittest.mock import patch
 
-        from conftest import household_frame, write_shard_tree
+        from conftest import dataset_frame, write_shard_tree
 
         agg = tmp_path / "agg"
         write_shard_tree(agg / "household_15min", {
-            hid: household_frame(n_rows=_SLOTS, project=pid, freq="15min",
+            hid: dataset_frame(n_rows=_SLOTS, project=pid, freq="15min",
                                  **{_AVG_COL: value})
             for (pid, hid), value in _MEMBERSHIP.items()
         })
@@ -72,11 +73,11 @@ class TestProjectAggregateIsTheMeanOverItsOwnHouseholds:
 
     def test_each_project_takes_the_mean_of_its_own_households(self, project_rows):
         for pid, expected in _EXPECTED_MEAN.items():
-            rows = project_rows[project_rows["ProjectIdBSV"] == pid]
+            rows = project_rows[project_rows[ids.PROJECT] == pid]
             assert rows[_AVG_COL].astype(float).tolist() == [expected] * _SLOTS
 
     def test_both_projects_are_present_and_separate(self, project_rows):
-        assert sorted(project_rows["ProjectIdBSV"].unique().tolist()) == [1, 2]
+        assert sorted(project_rows[ids.PROJECT].unique().tolist()) == [1, 2]
         assert len(project_rows) == _SLOTS * len(_EXPECTED_MEAN)
 
     def test_the_project_output_is_a_single_file(self, tmp_path, project_rows):

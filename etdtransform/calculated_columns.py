@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import ibis
 import pandas as pd
+from etdmap import ids
 
 
 def sympy_to_ibis(expr, table):
@@ -18,17 +19,17 @@ def sympy_to_ibis(expr, table):
     Null handling: none. A null input yields a null result, because ibis
     arithmetic propagates it. A derived value whose input is unknown is
     unknown, and substituting zero states the opposite -- it reports a
-    measured quantity of nothing. That substitution produced negative gross
-    consumption wherever solar production was missing while the export
-    cumulative variable advanced: ``ElektriciteitNetgebruikDiff -
-    ElektriciteitTerugleveringDiff + ZonopwekBruto`` with a zero for the
-    missing solar term returns minus the exported amount.
+    measured quantity of nothing, which turns gross consumption negative
+    wherever solar production is missing while the export cumulative variable
+    advances: ``ElektriciteitNetgebruikDiff - ElektriciteitTerugleveringDiff +
+    ZonopwekBruto`` with a zero for the missing solar term returns minus the
+    exported amount.
 
     A column that genuinely means zero when absent -- a device that is not
     installed -- is handled by ``specialize_catalog_for_absent``, which
-    substitutes zero inside the expression for that household, from its own
-    declaration. The substitution is per household because the fact is: one
-    household's missing solar is an unknown, another's absent booster is a
+    substitutes zero inside the expression from the declaration that says so.
+    The substitution follows the declaration because the fact does: one
+    dataset's missing solar is an unknown, another's absent booster is a
     real zero, and only the metadata separates them.
 
     Parameters
@@ -202,21 +203,26 @@ def add_calculated_columns_adaptive(
 
     adapter = DatasetAdapter(catalog_df)
 
-    has_project_col = "ProjectIdBSV" in df.columns
+    has_project_col = ids.PROJECT in df.columns
 
     # Plan cache keyed on (frozenset(available), frozenset(targets)).
-    # Households with identical column-availability patterns share a plan.
+    # Datasets with identical column-availability patterns share a plan.
     # plan_stats tracks per-plan: derived cols, not_derivable cols, and which
-    # (project, household) pairs used it -- for structured end-of-run logging.
+    # (project, dataset) pairs used it -- for structured end-of-run logging.
     _plan_cache: dict = {}
     _plan_stats: dict = {}  # cache_key -> {derived, not_derivable, households}
 
-    # Write new columns in-place via df.loc to avoid per-household copies and
-    # the pd.concat peak at the end.  The groupby yields (household_id, row_index)
-    # pairs so we never materialise a per-household copy of the full frame.
-    for household_id, idx in df.groupby("HuisIdBSV", sort=False).groups.items():
+    # Write new columns in-place via df.loc to avoid per-dataset copies and
+    # the pd.concat peak at the end.  The groupby yields (dataset, row_index)
+    # pairs so we never materialise a per-dataset copy of the full frame.
+    #
+    # Per household batch dataset, not per household: which columns are
+    # available is a property of what the dataset's devices delivered, and a
+    # later dataset of the same household may hold it renovated -- different
+    # devices, so a different plan.
+    for batch_id, idx in df.groupby(ids.HOUSEHOLD_BATCH, sort=False).groups.items():
         household_slice = df.loc[idx]
-        project_id = household_slice["ProjectIdBSV"].iloc[0] if has_project_col else None
+        project_id = household_slice[ids.PROJECT].iloc[0] if has_project_col else None
         available = frozenset(adapter.available_columns(household_slice))
 
         if explicit_targets is None:
@@ -242,7 +248,7 @@ def add_calculated_columns_adaptive(
                 "households": [],
             }
 
-        _plan_stats[cache_key]["households"].append((project_id, household_id))
+        _plan_stats[cache_key]["households"].append((project_id, batch_id))
 
         for col_name, rhs_expr in _plan_cache[cache_key]:
             rhs_vars = [str(s) for s in rhs_expr.free_symbols]

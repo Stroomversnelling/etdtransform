@@ -16,6 +16,7 @@ import ibis
 
 from etdtransform.knmi import load_knmi_weather_data
 from etdtransform.load_data import join_weather_data
+from etdmap import ids
 
 pytestmark = pytest.mark.unit
 
@@ -94,7 +95,7 @@ def test_join_weather_data_uurvak_alignment():
     vak is identifiable; the cross-day vak 24 gets a distinct sentinel.
     """
     readings = pd.DataFrame({
-        "ProjectIdBSV": [1, 1, 1, 1],
+        ids.PROJECT: [1, 1, 1, 1],
         "ReadingDate": pd.to_datetime([
             "2022-01-02 00:00",  # -> uurvak 24 of 2022-01-01
             "2022-01-02 01:00",  # -> uurvak 1  of 2022-01-02
@@ -102,7 +103,7 @@ def test_join_weather_data_uurvak_alignment():
             "2022-01-02 23:00",  # -> uurvak 23 of 2022-01-02
         ]),
     })
-    stations = pd.DataFrame({"ProjectIdBSV": [1], "Weerstation": ["TEST"], "STN": [215]})
+    stations = pd.DataFrame({ids.PROJECT: [1], "Weerstation": ["TEST"], "STN": [215]})
     weather = pd.DataFrame({
         "STN": [215] * 25,
         "YYYYMMDD": [20220101] + [20220102] * 24,

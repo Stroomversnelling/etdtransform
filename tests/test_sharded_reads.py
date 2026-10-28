@@ -29,6 +29,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from etdmap import ids
 from etdtransform.load_data import (
     detect_mapped_format,
     mapped_household_files,
@@ -85,13 +86,13 @@ class TestReadStageFrame:
         from etdtransform.load_data import read_source_frame
         _write_sharded(tmp_path, [1, 2])
         df = read_source_frame(tmp_path / "sharded")
-        assert set(int(x) for x in df["HuisIdBSV"].unique()) == {1, 2}
-        assert str(df["HuisIdBSV"].dtype) == "Int64"
+        assert set(int(x) for x in df[ids.HOUSEHOLD].unique()) == {1, 2}
+        assert str(df[ids.HOUSEHOLD].dtype) == "Int64"
         assert len(df) == 12
         # column selection with injected ids
         sub = read_source_frame(tmp_path / "sharded",
-                               columns=["HuisIdBSV", "ReadingDate"])
-        assert list(sub.columns) == ["HuisIdBSV", "ReadingDate"]
+                               columns=[ids.HOUSEHOLD, "ReadingDate"])
+        assert list(sub.columns) == [ids.HOUSEHOLD, "ReadingDate"]
         # single-file passthrough
         f = tmp_path / "one.parquet"
         _hh_df(1).to_parquet(f)
@@ -149,10 +150,10 @@ class TestReadMappedHouseholds:
     def test_sharded_batch_read(self, tmp_path):
         _write_sharded(tmp_path, [1, 2, 3])
         df = read_mapped_households([1, 2], mapped_folder_path=tmp_path)
-        assert set(df["HuisIdBSV"].unique()) == {1, 2}
-        assert str(df["HuisIdBSV"].dtype) == "Int64"
-        assert str(df["HuisBatchIdBSV"].dtype) == "Int64"
-        assert (df["HuisBatchIdBSV"] == df["HuisIdBSV"]).all()
+        assert set(df[ids.HOUSEHOLD].unique()) == {1, 2}
+        assert str(df[ids.HOUSEHOLD].dtype) == "Int64"
+        assert str(df[ids.HOUSEHOLD_BATCH].dtype) == "Int64"
+        assert (df[ids.HOUSEHOLD_BATCH] == df[ids.HOUSEHOLD]).all()
         # nullable dtypes (ADR-005)
         assert str(df["ElektriciteitNetgebruik"].dtype) == "Float64"
         assert len(df) == 12  # 2 households x 6 rows
@@ -167,15 +168,15 @@ class TestReadMappedHouseholds:
         df_flat = read_mapped_households([1, 2], mapped_folder_path=flat_root)
         df_shard = read_mapped_households([1, 2], mapped_folder_path=shard_root)
         pd.testing.assert_frame_equal(
-            df_flat.sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True),
-            df_shard.sort_values(["HuisIdBSV", "ReadingDate"]).reset_index(drop=True),
+            df_flat.sort_values([ids.HOUSEHOLD, "ReadingDate"]).reset_index(drop=True),
+            df_shard.sort_values([ids.HOUSEHOLD, "ReadingDate"]).reset_index(drop=True),
         )
 
     def test_column_projection(self, tmp_path):
         _write_sharded(tmp_path, [1])
         df = read_mapped_households([1], columns=["ReadingDate", "Gasgebruik"],
                                     mapped_folder_path=tmp_path)
-        assert set(df.columns) == {"HuisIdBSV", "HuisBatchIdBSV", "ReadingDate", "Gasgebruik"}
+        assert set(df.columns) == {ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, "ReadingDate", "Gasgebruik"}
 
     def test_two_batches_yield_distinct_batch_ids(self, tmp_path):
         """Regression: HuisBatchIdBSV must come from the shard PATH per file.
@@ -187,7 +188,7 @@ class TestReadMappedHouseholds:
             d.mkdir(parents=True)
             _hh_df(1).to_parquet(d / "part.parquet")
         df = read_mapped_households([1], mapped_folder_path=tmp_path)
-        assert set(int(x) for x in df["HuisBatchIdBSV"].unique()) == {1, 9}
+        assert set(int(x) for x in df[ids.HOUSEHOLD_BATCH].unique()) == {1, 9}
         assert len(df) == 12
 
     def test_unparseable_shard_path_raises_not_defaults(self, tmp_path, monkeypatch):
@@ -217,7 +218,7 @@ class TestMappedHouseholdTable:
         tbl = mapped_household_table(mapped_folder_path=tmp_path)
         assert int(tbl.count().execute()) == 18  # 3 x 6 rows
         cols = set(tbl.columns)
-        assert {"HuisIdBSV", "HuisBatchIdBSV", "ReadingDate"}.issubset(cols)
+        assert {ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, "ReadingDate"}.issubset(cols)
         # engine-side filter on the hive partition column
         n1 = int(tbl.filter(tbl.HuisIdBSV == 1).count().execute())
         assert n1 == 6

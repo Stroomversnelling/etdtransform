@@ -1,26 +1,26 @@
 """How much of a project has to be present before its average means anything.
 
 A project average is the mean of the values at a slot. Without a minimum, the
-contributor set changes as households come and go, so the average changes shape
-for reasons that have nothing to do with consumption: a household joining
-mid-month moves the level, and one dropping out moves it back.
+contributor set changes as datasets come and go, so the average changes shape
+for reasons that have nothing to do with consumption: a dataset starting
+mid-month moves the level, and one ending moves it back.
 
 Three gates close that:
 
 Window eligibility
-    Per (household, column, window). A household's readings count only where it
+    Per (dataset, column, window). A dataset's readings count only where it
     was reporting through the window -- coverage at or above
-    ``MIN_WINDOW_COVERAGE``. A household present for an hour of a day says
+    ``MIN_WINDOW_COVERAGE``. A dataset present for an hour of a day says
     nothing about that day.
 
 Project sufficiency
     Per (project, column, window). The window is averaged at all only where at
-    least ``MIN_ELIGIBLE_HOUSEHOLDS`` were eligible for it. The slot fraction
+    least ``MIN_ELIGIBLE_DATASETS`` were eligible for it. The slot fraction
     below cannot carry this, because it scales with the count it is judging.
 
 Slot sufficiency
     Per (project, column, slot). A slot has an average only where enough of the
-    eligible households delivered a value for it. The minimum is
+    eligible datasets delivered a value for it. The minimum is
     ``min(SUFFICIENCY_SHAPE, ceil(SUFFICIENCY_FRACTION * n_eligible))``: a
     fraction of the project, capped so a large project does not need an
     unreachable count.
@@ -38,27 +38,31 @@ import logging
 from math import ceil
 
 import pandas as pd
+from etdmap import ids
 
 #: The window eligibility is judged over, in minutes. A day is the shortest
-#: period over which a household's presence is a property of the household
+#: period over which a dataset's presence is a property of the dataset
 #: rather than of the hour.
 WINDOW_MINUTES = 1440
 
-#: The fraction of a window's slots a household must have delivered for.
+#: The fraction of a window's slots a dataset must have delivered for.
 MIN_WINDOW_COVERAGE = 0.95
 
 #: The largest contributor count ever demanded of a slot.
 SUFFICIENCY_SHAPE = 25
 
-#: The fraction of the eligible households demanded of a slot below that cap.
+#: The fraction of the eligible datasets demanded of a slot below that cap.
 SUFFICIENCY_FRACTION = 0.5
 
-#: The eligible households a window needs before its average is published at
+#: The eligible datasets a window needs before its average is published at
 #: all. A project average is a shape taken from the project, and the slot
 #: fraction alone does not say there is a project behind it: at one eligible
-#: household it demands one contributor, which that household always meets, so
+#: dataset it demands one contributor, which that dataset always meets, so
 #: its own readings would be published as the project's average.
-MIN_ELIGIBLE_HOUSEHOLDS = 10
+#:
+#: Counted in household batches, because a household batch is the unit of
+#: data: one household delivered as two datasets contributes two series.
+MIN_ELIGIBLE_DATASETS = 10
 
 
 def window_minutes_for_column(cadence_minutes, base=WINDOW_MINUTES) -> float:
@@ -87,7 +91,7 @@ def window_index(reading_dates: pd.Series, window_minutes: float) -> pd.Series:
     """Which window each timestamp falls in, counted from the epoch.
 
     Windows are aligned to 00:00 UTC rather than to the first reading, so the
-    same calendar day is one window for every household and the eligible count
+    same calendar day is one window for every dataset and the eligible count
     at a slot is comparable across them.
     """
     minutes = pd.to_datetime(reading_dates).astype("int64") // (60 * 1_000_000_000)
@@ -95,11 +99,11 @@ def window_index(reading_dates: pd.Series, window_minutes: float) -> pd.Series:
 
 
 def slot_minimum(n_eligible, shape=SUFFICIENCY_SHAPE, fraction=SUFFICIENCY_FRACTION):
-    """The contributor count a slot needs, given *n_eligible* households.
+    """The contributor count a slot needs, given *n_eligible* datasets.
 
     A fraction of the project, capped at *shape*: a project of four needs two,
     a project of four hundred needs twenty-five rather than two hundred.
-    Zero eligible households needs zero, which no slot can fail -- there is
+    Zero eligible datasets needs zero, which no slot can fail -- there is
     nothing to average either way.
     """
     if n_eligible is None or pd.isna(n_eligible) or int(n_eligible) <= 0:
@@ -107,17 +111,17 @@ def slot_minimum(n_eligible, shape=SUFFICIENCY_SHAPE, fraction=SUFFICIENCY_FRACT
     return int(min(int(shape), ceil(float(fraction) * int(n_eligible))))
 
 
-def window_is_averageable(n_eligible, minimum=MIN_ELIGIBLE_HOUSEHOLDS) -> bool:
-    """Whether a window has enough eligible households to average at all.
+def window_is_averageable(n_eligible, minimum=MIN_ELIGIBLE_DATASETS) -> bool:
+    """Whether a window has enough eligible datasets to average at all.
 
     A separate question from :func:`slot_minimum`, which asks how many of them a
-    slot needs, and both have to hold. A window of three households satisfies
+    slot needs, and both have to hold. A window of three datasets satisfies
     the contributor fraction with two and still does not describe a project, so
     the fraction cannot carry this on its own -- it scales with the count it is
     meant to be judging.
 
     An unknown count is not averageable: the gate exists to stop an average
-    resting on households nobody counted.
+    resting on datasets nobody counted.
     """
     if n_eligible is None or pd.isna(n_eligible):
         return False
@@ -129,27 +133,27 @@ def window_presence_frame(
     column,
     window_minutes,
     project_id_column,
-    household_column="HuisIdBSV",
+    dataset_column=ids.HOUSEHOLD_BATCH,
     min_coverage=MIN_WINDOW_COVERAGE,
     shape=SUFFICIENCY_SHAPE,
     fraction=SUFFICIENCY_FRACTION,
-    min_eligible=MIN_ELIGIBLE_HOUSEHOLDS,
+    min_eligible=MIN_ELIGIBLE_DATASETS,
 ):
-    """One row per (project, household, window): the counts the presence gates
+    """One row per (project, dataset, window): the counts the presence gates
     judged, and the judgements derived from them.
 
-    *counts* carries *project_id_column*, *household_column*, ``_window`` (the
+    *counts* carries *project_id_column*, *dataset_column*, ``_window`` (the
     :func:`window_index` value) and the two raw counts ``n_slots`` and
-    ``n_delivered``. Everything else -- eligibility, the per-window household
+    ``n_delivered``. Everything else -- eligibility, the per-window dataset
     tallies, the slot minimum and whether the window is averageable at all --
     is derived here, so a caller supplies counts and reads verdicts rather than
     carrying its own copy of the rules.
 
-    ``n_contributing`` tallies the eligible households that delivered at least
+    ``n_contributing`` tallies the eligible datasets that delivered at least
     one slot of the window. At the default coverage minimum it equals
     ``n_eligible``; the two part when the minimum is lowered.
 
-    ``averageable`` is the household floor (:func:`window_is_averageable`).
+    ``averageable`` is the dataset floor (:func:`window_is_averageable`).
     Recorded per row rather than left implicit, because a window with no average
     and a window with a thin one are different facts and the counts alone do not
     separate them.
@@ -198,7 +202,7 @@ def window_presence_frame(
     ordered = [
         "column",
         project_id_column,
-        household_column,
+        dataset_column,
         "window_start",
         "window_minutes",
         "n_slots",
@@ -217,6 +221,6 @@ def window_presence_frame(
     ]
     return (
         out[ordered]
-        .sort_values([project_id_column, household_column, "window_start"])
+        .sort_values([project_id_column, dataset_column, "window_start"])
         .reset_index(drop=True)
     )

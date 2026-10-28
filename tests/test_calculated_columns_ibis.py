@@ -2,9 +2,11 @@ import ibis
 import pandas as pd
 import pytest
 import sympy as sp
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
-from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
+from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
 
 pytestmark = pytest.mark.integration
 
@@ -22,6 +24,8 @@ A, B, C = sp.symbols("A B C")
 
 @pytest.fixture
 def tbl():
+    """Three rows of A, B and C, stated here because the per-cell null
+    placement is what every assertion over this table reads."""
     df = pd.DataFrame(
         {
             "A": pd.array([1.0, 2.0, None], dtype="Float64"),
@@ -181,47 +185,39 @@ def test_pandas_ibis_equivalence(tbl, label, expr):
 
 N = 10  # rows per household
 
+#: What each household holds for A, B and C. An all-pd.NA column holds no
+#: value, so it is absent from that household's schema.
+_MULTI_SCHEMA_VALUES = {
+    1: {"A": 1.0, "B": 2.0, "C": pd.NA},   # HH 1: A and B
+    2: {"A": 3.0, "B": pd.NA, "C": 4.0},   # HH 2: A and C
+    3: {"A": 5.0, "B": 6.0, "C": 7.0},     # HH 3: A, B, and C
+}
+
 
 def _make_multi_schema_df():
+    """One dataset per household, each over A, B and C.
+
+    No cumulative counterpart is completed: A, B and C are not data model
+    variables, so none of them has one.
     """
-    Build a DataFrame with 3 households having different available columns.
-    B is all-NA for HH 2 (so completeness < threshold -> absent from its schema).
-    C is all-NA for HH 1 (absent from its schema).
-    """
-    rows = []
-    for household_id, a_val, b_val, c_val in [
-        (1, 1.0, 2.0, None),   # HH 1: A and B
-        (2, 3.0, None, 4.0),   # HH 2: A and C
-        (3, 5.0, 6.0, 7.0),   # HH 3: A, B, and C
-    ]:
-        for _ in range(N):
-            rows.append({
-                "HuisIdBSV": pd.NA if household_id is None else household_id,
-                "HuisBatchIdBSV": pd.NA if household_id is None else household_id + 1000,
-                # One batch per household: the stage writes one shard per
-                # (household, batch), and a household artifact always carries
-                # the batch it was mapped in.
-                "HuisBatchIdBSV": household_id + 1000,
-                "ProjectIdBSV": 1,
-                "A": a_val,
-                "B": b_val,
-                "C": c_val,
-            })
-    df = pd.DataFrame(rows)
-    for col in ["HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV"]:
-        df[col] = df[col].astype("Int64")
-    for col in ["A", "B", "C"]:
-        df[col] = df[col].astype("Float64")
-    return df
+    return datasets_frame(
+        {
+            household_batch_of(household_id): {
+                column: [value] * N for column, value in values.items()
+            }
+            for household_id, values in _MULTI_SCHEMA_VALUES.items()
+        },
+        pairs=False,
+    )
 
 
 def _run_ibis(tmp_path, catalog, targets, df=None):
     """Run the production calculated stage over the multi-schema fixture.
 
-    The source is a single parquet, which the stage supports and which this
-    fixture needs: its rows carry no ReadingDate, so a sharded source would
-    trip the batch-safety guard. The OUTPUT is a hive tree, which is the only
-    shape the stage writes.
+    The source is a single parquet, the layout that takes both ids from the
+    file, which is where the fixture carries them -- a shard tree takes them
+    from its path instead. The OUTPUT is a hive tree, which is the only shape
+    the stage writes.
     """
     from etdmap.storage import read_source_frame
 
@@ -267,15 +263,15 @@ class TestSchemaGroupingPicksTheRulePerHousehold:
         df_out = _run_ibis(tmp_path, _multi_schema_catalog(), ["Target"])
 
         # HH 1: Target = A + B = 1 + 2 = 3
-        hh1 = df_out[df_out["HuisIdBSV"] == 1]["Target"].astype(float).tolist()
+        hh1 = df_out[df_out[ids.HOUSEHOLD] == 1]["Target"].astype(float).tolist()
         assert hh1 == pytest.approx([3.0] * N)
 
         # HH 2: Target = A + C = 3 + 4 = 7  (B was absent, so fallback rule used)
-        hh2 = df_out[df_out["HuisIdBSV"] == 2]["Target"].astype(float).tolist()
+        hh2 = df_out[df_out[ids.HOUSEHOLD] == 2]["Target"].astype(float).tolist()
         assert hh2 == pytest.approx([7.0] * N)
 
         # HH 3: Target = A + B = 5 + 6 = 11  (preferred rule, C ignored)
-        hh3 = df_out[df_out["HuisIdBSV"] == 3]["Target"].astype(float).tolist()
+        hh3 = df_out[df_out[ids.HOUSEHOLD] == 3]["Target"].astype(float).tolist()
         assert hh3 == pytest.approx([11.0] * N)
 
 
@@ -284,6 +280,8 @@ class TestSchemaGroupingPicksTheRulePerHousehold:
 # ---------------------------------------------------------------------------
 
 def _ratio_table():
+    """A numerator and a denominator over four rows, stated here because the
+    zero and the two nulls in them are what the ratio tests read."""
     return ibis.memtable(pd.DataFrame({
         "t": pd.array([1.0, 1.0, 1.0, None], dtype="Float64"),
         "z": pd.array([2.0, 0.0, None, 5.0], dtype="Float64"),
@@ -315,6 +313,8 @@ def test_a_defined_ratio_still_computes():
 
 
 def _ratio_frame():
+    """The same four rows as :func:`_ratio_table`, as the frame the pandas
+    evaluator takes, so the two evaluators are compared on one input."""
     return pd.DataFrame({
         "t": pd.array([1.0, 1.0, 1.0, None], dtype="Float64"),
         "z": pd.array([2.0, 0.0, None, 5.0], dtype="Float64"),
@@ -406,7 +406,7 @@ class TestNothingSubstitutesZeroForAnAbsentColumn:
         result = self._run(
             tmp_path, _make_catalog(("Target", "A + B", ["A", "B"])), ["Target"]
         )
-        household_2 = result[result["HuisIdBSV"] == 2]
+        household_2 = result[result[ids.HOUSEHOLD] == 2]
         assert household_2["Target"].isna().all()
         assert not (household_2["Target"] == 3.0).any()
 
@@ -417,7 +417,7 @@ class TestNothingSubstitutesZeroForAnAbsentColumn:
             tmp_path, _make_catalog(("Target", "A + B", ["A", "B"])), ["Target"]
         )
         for household_id, expected in ((1, 3.0), (3, 11.0)):
-            values = result[result["HuisIdBSV"] == household_id]["Target"]
+            values = result[result[ids.HOUSEHOLD] == household_id]["Target"]
             assert values.notna().all()
             assert float(values.iloc[0]) == pytest.approx(expected)
 
@@ -427,6 +427,6 @@ class TestNothingSubstitutesZeroForAnAbsentColumn:
         # scored 1.0 on the availability scan and won the preferred rule,
         # yielding 3.0 from a column that holds nothing.
         result = self._run(tmp_path, _multi_schema_catalog(), ["Target"])
-        household_2 = result[result["HuisIdBSV"] == 2]
+        household_2 = result[result[ids.HOUSEHOLD] == 2]
         assert household_2["Target"].notna().all()
         assert float(household_2["Target"].iloc[0]) == pytest.approx(7.0)

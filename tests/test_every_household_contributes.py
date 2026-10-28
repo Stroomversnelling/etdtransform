@@ -1,30 +1,32 @@
-"""Plan group K: every household contributes to its project average.
+"""Every household contributes to its project average.
 
-The relative filter that used to run here excluded a household whose maximum
-reached twice the 95th percentile of the project's household maxima. Three
-things were wrong with it, and they are what these tests pin:
+A household is never excluded wholesale, and these tests pin the three
+properties that requires:
 
-- **All-or-nothing per household.** One bad reading cost every good row that
-  household had. The per-value threshold discard removes the bad value and keeps
-  the rest.
-- **Far looser than the declared bound.** Measured at 86x on
-  `WatergebruikWarmTapwaterDiff` (8,579 against a Max of 100) and 17.6x on
-  `ElektriciteitsgebruikBoosterDiff`. It excluded 1 household of the 42 and 20
-  that were genuinely out of bounds.
-- **Blind to a systemic error.** If every household reports the same impossible
-  value, every maximum equals it, the 95th percentile equals it, and
-  `max < 2 x max` includes everyone.
+- **Exclusion is per value, not per household.** One bad reading must cost only
+  itself; the per-value threshold discard removes it and keeps the rest of that
+  household's rows.
+- **The bound that decides is the declared one.** A relative rule measured
+  against the other households in the project is far looser: on
+  `WatergebruikWarmTapwaterDiff` twice the 95th percentile of the maxima sits at
+  8,579 against a declared Max of 100, so it admits 41 of the 42 households
+  that are genuinely out of bounds.
+- **A systemic error must still be caught.** If every household reports the
+  same impossible value then every maximum equals it, so any rule comparing a
+  household against its peers admits all of them.
 
 Fixture note: `ElektriciteitNetgebruikDiff` declares a maximum of 1.5. Any test
 value above that is discarded per value before averaging, which is correct but
-turns a test of the household filter into a test of the threshold. Keep ordinary
-values well under it and make the out-of-bounds ones obviously extreme.
+turns a test of household eligibility into a test of the threshold. Keep
+ordinary values well under it and make the out-of-bounds ones obviously
+extreme.
 """
 
 import pandas as pd
 import pytest
-
 from conftest import cadence_table, project_averages
+from etdmap import ids
+from etdmap.testing import PAIRS_EMPTY, datasets_frame, household_batch_of
 
 pytestmark = pytest.mark.unit
 
@@ -34,18 +36,25 @@ N = 12
 
 
 def _household(household, values, project=1):
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * len(values), dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * len(values)], dtype="Int64"),
-        "ProjectIdBSV": pd.array([project] * len(values), dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=len(values), freq="5min"),
-        DIFF: pd.array(values, dtype="Float64"),
-    })
+    """One dataset's rows, holding *values*.
+
+    ``PAIRS_EMPTY``: the cumulative counterpart is present -- a frame holding
+    half a pair is not a household artifact -- and empty, so the averaging
+    takes the dataset's volume from the values stated here.
+    """
+    return datasets_frame(
+        {household_batch_of(household): {DIFF: values}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        project=project,
+        pairs=PAIRS_EMPTY,
+    )
 
 
 def _average(frame):
     result = project_averages(
-        frame, "ProjectIdBSV", [DIFF],
+        frame, ids.PROJECT, [DIFF],
         cadence=cadence_table(frame, [CUM]), grid_minutes=5,
         # These frames hold a few households so each one's contribution is
         # readable; the household floor is about project size and is tested at

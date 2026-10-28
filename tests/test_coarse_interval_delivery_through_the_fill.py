@@ -18,9 +18,17 @@ conservation on every window a delivered reading actually covers.
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    declare_synthetic_model,
+    household_batch_of,
+    sidecar_frame,
+    synthetic_model,
+)
 
-from etdmap.mapping_helpers import detect_column_cadence
-from etdmap.testing import declare_synthetic_model, synthetic_model
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
 pytestmark = pytest.mark.unit
@@ -50,20 +58,36 @@ READING = 0.6
 HOUSEHOLD = 1
 
 
-def _batch(household):
-    """The dataset id a frame for *household* carries.
-
-    A dataset -- one body of data for a household -- is keyed on
-    `HuisBatchIdBSV`, which the sidecars, the cadence table and every lookup
-    built from it are keyed on too. It is not the household id.
-    """
-    return household + 1000
-
-
 @pytest.fixture(autouse=True)
 def _declared_model():
     with declare_synthetic_model(MODEL):
         yield
+
+
+def _hourly_frame(reading):
+    """One dataset on the grid, carrying *reading* on every hourly tick.
+
+    Returns the frame and the row positions those ticks landed on.
+    """
+    # PAIRS_EMPTY keeps the register present and empty, which is the delivery
+    # shape under test: with a usable register the fill would read its volume
+    # from there instead of from the interval column.
+    frame = datasets_frame(
+        {household_batch_of(HOUSEHOLD): {DIFF: [pd.NA] * N}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        pairs=PAIRS_EMPTY,
+        # The project average is an input to the fill, not something this test
+        # should derive: one slot's worth of a delivered reading.
+        **{f"{DIFF}_avg": reading / K},
+    )
+    ticks = [
+        position for position, stamp in enumerate(frame["ReadingDate"])
+        if stamp.minute == 0
+    ]
+    frame.loc[ticks, DIFF] = reading
+    return frame, ticks
 
 
 def _delivered(drop_tick=5):
@@ -71,26 +95,9 @@ def _delivered(drop_tick=5):
 
     *drop_tick* indexes the hourly ticks, not the rows.
     """
-    stamps = pd.date_range("2026-01-01", periods=N, freq="5min")
-    ticks = [i for i in range(N) if stamps[i].minute == 0]
-
-    values = pd.Series(pd.NA, index=range(N), dtype="Float64")
-    for position in ticks:
-        values.iloc[position] = READING
+    frame, ticks = _hourly_frame(READING)
     dropped = ticks[drop_tick]
-    values.iloc[dropped] = pd.NA
-
-    frame = pd.DataFrame({
-        "HuisIdBSV": pd.array([HOUSEHOLD] * N, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(HOUSEHOLD)] * N, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
-        "ReadingDate": stamps,
-        CUM: pd.array([pd.NA] * N, dtype="Float64"),
-        DIFF: values.values,
-    })
-    # The project average is an input to the fill, not something this test
-    # should derive: one slot's worth of a delivered reading.
-    frame[f"{DIFF}_avg"] = pd.array([READING / K] * N, dtype="Float64")
+    frame.loc[dropped, DIFF] = pd.NA
     return frame, ticks, dropped
 
 
@@ -103,20 +110,23 @@ def _cadence(frame):
     table on `HuisBatchIdBSV`, so a table keyed on anything else reaches no row
     and the delivered form goes unrecorded.
     """
-    table = detect_column_cadence(frame, grid_minutes=GRID)
-    batches = sorted(int(b) for b in frame["HuisBatchIdBSV"].dropna().unique())
-    assert len(batches) == 1, "one dataset per frame here"
-    table.insert(
-        0, "HuisBatchIdBSV", pd.array(batches * len(table), dtype="Int64")
+    batches = sorted(
+        int(b) for b in frame[ids.HOUSEHOLD_BATCH].dropna().unique()
     )
-    return table
+    assert len(batches) == 1, "one dataset per frame here"
+    return sidecar_frame(
+        "cadence",
+        cadence_to_rows(
+            batches[0], detect_column_cadence(frame, grid_minutes=GRID)
+        ),
+    )
 
 
 def _filled(drop_tick=5):
     frame, ticks, dropped = _delivered(drop_tick)
     delivered_total = float(frame[DIFF].sum())
     out, _, _ = impute_and_normalize(
-        frame.copy(), [CUM], "ProjectIdBSV", cadence=_cadence(frame),
+        frame.copy(), [CUM], ids.PROJECT, cadence=_cadence(frame),
     )
     return out, ticks, dropped, delivered_total
 
@@ -243,26 +253,10 @@ class TestTheColumnIsJudgedPerSlot:
         """An hourly reading above the per-slot bound but below the hourly one.
         Spreading puts each slot under the bound; not spreading would have the
         threshold pass remove the lot."""
-        stamps = pd.date_range("2026-01-01", periods=N, freq="5min")
-        ticks = [i for i in range(N) if stamps[i].minute == 0]
         over_a_slot = 1.5 * 2  # above the per-slot bound, below the hourly one
-
-        values = pd.Series(pd.NA, index=range(N), dtype="Float64")
-        for position in ticks:
-            values.iloc[position] = over_a_slot
-        frame = pd.DataFrame({
-            "HuisIdBSV": pd.array([HOUSEHOLD] * N, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([_batch(HOUSEHOLD)] * N, dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
-            "ReadingDate": stamps,
-            CUM: pd.array([pd.NA] * N, dtype="Float64"),
-            DIFF: values.values,
-        })
-        frame[f"{DIFF}_avg"] = pd.array(
-            [over_a_slot / K] * N, dtype="Float64"
-        )
+        frame, _ = _hourly_frame(over_a_slot)
         out, _, _ = impute_and_normalize(
-            frame.copy(), [CUM], "ProjectIdBSV", cadence=_cadence(frame),
+            frame.copy(), [CUM], ids.PROJECT, cadence=_cadence(frame),
         )
         assert float(out[DIFF].max()) == pytest.approx(
             over_a_slot / K, abs=1e-9

@@ -29,6 +29,7 @@ from typing import Callable
 import pandas as pd
 
 from etdtransform.catalog import classify_linear_nonlinear
+from etdmap import ids
 
 CONSTRAINT_COLUMNS = (
     "lhs",
@@ -114,11 +115,11 @@ def apparaat_set_key(variables) -> str:
 
 
 def specialize_catalog_for_absent(catalog: pd.DataFrame, absent_vars) -> pd.DataFrame:
-    """The catalog with a household set's absent devices substituted at 0.
+    """The catalog with a declared set's absent devices substituted at 0.
 
-    This is the derived-model machinery of the missing-meter design (actions
-    document, action 8): absence is resolved ONCE at compile time, zero IN
-    the expression, never per row. For each absent device variable the
+    This is the derived-model machinery of the missing-meter design: absence is
+    resolved ONCE at compile time, zero IN the expression, never per row. For
+    each absent device variable the
     substitution covers the variable itself and its data-model-linked pair
     (the interval form of a cumulative and vice versa), because catalog
     expressions name the Diff forms while declarations carry the cumulative
@@ -207,17 +208,17 @@ def rule_sets_by_household(household_ids, catalog, cadence_minutes,
                            metadata_path=None) -> dict:
     """What each of *household_ids* may derive, keyed by its apparaat-set.
 
-    A household may only see a formula whose variables it actually has. A
-    household that declares no heat pump has no heat-pump term to solve for
-    and no heat-pump reading to solve with, so a formula naming one must not
-    be a candidate for it -- not rejected later by a null check, absent from
-    its formula set.
+    A row may only be derived with a formula whose variables are actually
+    present. Where no heat pump is declared there is no heat-pump term to
+    solve for and no heat-pump reading to solve with, so a formula naming one
+    must not be a candidate -- not rejected later by a null check, absent from
+    the formula set.
 
-    The declarations decide that, and households sharing a declaration share
-    everything that follows from it, so the work is done once per distinct
-    set rather than once per household: the catalog is specialized and the
-    constraint package is built per set, and every member of the set gets the
-    same two objects.
+    ``ApparaatOntbrekend`` declares that, per household batch. Everything
+    sharing a declaration shares everything that follows from it, so the work
+    is done once per distinct set rather than once per member: the catalog is
+    specialized and the constraint package is built per set, and every member
+    of the set gets the same two objects.
 
     Returns ``{apparaat_set_key: RuleSet}``. A household the metadata does
     not mention raises rather than falling back to the full model: the full
@@ -274,15 +275,18 @@ _APPARAAT_SETS_CACHE: dict = {}
 
 
 def apparaat_set_by_household(metadata_path=None) -> dict:
-    """``HuisIdBSV -> canonical apparaat-set key`` from the BSV metadata.
+    """``ids.HOUSEHOLD -> canonical apparaat-set key`` from the BSV metadata.
 
-    The Grist household table's ``ApparaatOntbrekend`` declarations flow
-    through ``build_bsv_metadata`` into the BSV metadata CSV; this reads
-    them once per path and resolves each household to the key of its
-    specialized constraint table (``apparaat_set_key``). Mirrors how
-    ``physical_model_by_project`` resolves the model: the set decides which
-    compiled rules apply, so a stale metadata file (no declaration column)
-    raises rather than defaulting every household to the full model.
+    ``ApparaatOntbrekend`` is declared per household batch: the Grist table
+    behind the BSV metadata holds one row per ``ids.HOUSEHOLD_BATCH``, because
+    a later household batch may hold the same household renovated and so
+    carrying different devices. The declarations flow through
+    ``build_bsv_metadata`` into the BSV metadata CSV; this reads them once per
+    path and keys the result on the household, which is the grain the callers
+    ask at. Mirrors how ``physical_model_by_project`` resolves the model: the
+    set decides which compiled rules apply, so a stale metadata file (no
+    declaration column) raises rather than defaulting every household to the
+    full model.
     """
     if metadata_path is None:
         import etdmap
@@ -311,7 +315,7 @@ def apparaat_set_by_household(metadata_path=None) -> dict:
 
     resolved: dict = {}
     for _, row in metadata.iterrows():
-        household_id = row.get("HuisIdBSV")
+        household_id = row.get(ids.HOUSEHOLD)
         if pd.isna(household_id):
             continue
         resolved[int(household_id)] = apparaat_set_key(

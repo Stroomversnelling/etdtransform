@@ -1,7 +1,7 @@
 """A chunk is a memory window, and the spread must not be able to see it.
 
 Chunking batches by **household**: ``_chunk_ids_by_project`` returns household
-ids and ``impute_mapped_households_sharded`` reads batches of ``chunk_size``
+household_ids and ``impute_mapped_households_sharded`` reads batches of ``chunk_size``
 households. So a household's whole series is always in one chunk, and a spread
 window -- which lives inside one household's series -- cannot straddle a chunk
 boundary.
@@ -12,8 +12,15 @@ household, and a household's spread is identical alone and among peers.
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    household_batch_of,
+    sidecar_frame,
+)
 
-from etdmap.mapping_helpers import detect_column_cadence
 from etdtransform.aggregate import _chunk_ids_by_project
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -28,86 +35,78 @@ N = 288
 READING = 0.6
 
 
-def _batch(household):
-    """The dataset id a frame for household *household* carries."""
-    return household + 1000
-
-
 class TestTheChunkerNeverSplitsAHousehold:
     """The structural half. If a chunk could hold part of a household, every
     behavioural claim below would be about the wrong thing."""
 
     def test_every_household_lands_in_exactly_one_chunk(self):
-        ids = list(range(1, 26))
-        project_of = {h: 1 if h <= 12 else 2 for h in ids}
-        chunks = _chunk_ids_by_project(ids, project_of, chunk_size=5)
+        household_ids = list(range(1, 26))
+        project_of = {h: 1 if h <= 12 else 2 for h in household_ids}
+        chunks = _chunk_ids_by_project(household_ids, project_of, chunk_size=5)
 
         seen = [h for chunk in chunks for h in chunk]
-        assert sorted(seen) == ids
+        assert sorted(seen) == household_ids
         assert len(seen) == len(set(seen)), "a household in two chunks"
 
     def test_a_chunk_is_household_ids_not_rows(self):
         """The unit the cap applies to. A row-based cap is what would let a
         series be divided."""
-        ids = list(range(1, 8))
-        chunks = _chunk_ids_by_project(ids, {h: 1 for h in ids}, chunk_size=3)
+        household_ids = list(range(1, 8))
+        chunks = _chunk_ids_by_project(household_ids, {h: 1 for h in household_ids}, chunk_size=3)
         assert [len(c) for c in chunks] == [3, 3, 1]
         for chunk in chunks:
             assert all(isinstance(h, int) for h in chunk)
 
     @pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 100])
     def test_the_partition_holds_at_every_size(self, chunk_size):
-        ids = list(range(1, 13))
-        project_of = {h: (h % 3) for h in ids}
-        chunks = _chunk_ids_by_project(ids, project_of, chunk_size)
+        household_ids = list(range(1, 13))
+        project_of = {h: (h % 3) for h in household_ids}
+        chunks = _chunk_ids_by_project(household_ids, project_of, chunk_size)
         seen = [h for chunk in chunks for h in chunk]
-        assert sorted(seen) == ids
+        assert sorted(seen) == household_ids
         assert len(seen) == len(set(seen))
 
 
 def _household(household):
-    """Register absent, the interval delivered hourly on a five-minute grid."""
-    stamps = pd.date_range("2026-01-01", periods=N, freq=f"{GRID}min")
-    values = pd.Series(pd.NA, index=range(N), dtype="Float64")
-    for position, stamp in enumerate(stamps):
-        if stamp.minute == 0:
-            values.iloc[position] = READING
-    frame = pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * N, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(household)] * N, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * N, dtype="Int64"),
-        "ReadingDate": stamps,
-        CUM: pd.array([pd.NA] * N, dtype="Float64"),
-        DIFF: values.values,
-    })
-    frame[f"{DIFF}_avg"] = pd.array([READING / K] * N, dtype="Float64")
-    return frame
+    """The cumulative variable empty, the interval delivered hourly on a
+    five-minute grid.
+
+    ``PAIRS_EMPTY`` is what leaves the cumulative column present and holding
+    nothing, which is the delivery the spread is applied to; one reading lands
+    every ``K`` slots, the first on the first.
+    """
+    values = [READING if position % K == 0 else pd.NA for position in range(N)]
+    return datasets_frame(
+        {household_batch_of(household): {DIFF: values}},
+        start="2026-01-01",
+        freq=f"{GRID}min",
+        tz=None,
+        pairs=PAIRS_EMPTY,
+        **{f"{DIFF}_avg": READING / K},
+    )
 
 
 def _cadence(frame):
     """The sidecar rows *frame* would be mapped with: one block per dataset,
     keyed on ``HuisBatchIdBSV``, measured on that dataset's own readings."""
-    tables = []
+    rows = []
     for household_batch in sorted(
-        int(b) for b in frame["HuisBatchIdBSV"].unique()
+        int(b) for b in frame[ids.HOUSEHOLD_BATCH].unique()
     ):
-        own = frame[frame["HuisBatchIdBSV"] == household_batch]
-        table = detect_column_cadence(own, grid_minutes=GRID)
-        table.insert(
-            0, "HuisBatchIdBSV",
-            pd.array([household_batch] * len(table), dtype="Int64"),
-        )
-        tables.append(table)
-    return pd.concat(tables, ignore_index=True)
+        own = frame[frame[ids.HOUSEHOLD_BATCH] == household_batch]
+        rows.extend(cadence_to_rows(
+            household_batch, detect_column_cadence(own, grid_minutes=GRID)
+        ))
+    return sidecar_frame("cadence", rows)
 
 
 def _filled(frame, household):
     out, _stats, _reports = impute_and_normalize(
-        frame.copy(), [CUM], "ProjectIdBSV", cadence=_cadence(frame),
+        frame.copy(), [CUM], ids.PROJECT, cadence=_cadence(frame),
     )
     return (
-        out[out["HuisIdBSV"] == household]
-        .sort_values("ReadingDate")
+        out[out[ids.HOUSEHOLD_BATCH] == household_batch_of(household)]
+        .sort_values(ids.READING_DATE)
         .reset_index(drop=True)
     )
 

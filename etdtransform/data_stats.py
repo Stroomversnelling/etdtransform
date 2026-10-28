@@ -1,16 +1,16 @@
 """
-Per-(HuisIdBSV, column, season) stats producer for the wide pipeline
-artifacts emitted by etdtransform (``household_imputed``,
+Per-(``ids.HOUSEHOLD_BATCH``, column, season) stats producer for the wide
+pipeline artifacts emitted by etdtransform (``household_imputed``,
 ``household_calculated``, the resampled intervals).
 
 This module is the symmetric counterpart to
 ``etdmap.mapping_helpers.get_data_stats``. That function handles the
-raw and mapped stages -- many small per-household parquet files, fanned
+raw and mapped stages -- many small per-dataset parquet files, fanned
 out with ProcessPoolExecutor and pandas vectorised reductions. This
 function handles transform's own output: one wide artifact per stage,
-holding every household, processed lazily through ibis / DuckDB so the
-data stays on disk and only the per-(HH, col) aggregate result lands in
-pandas.
+holding every household batch dataset, processed lazily through ibis /
+DuckDB so the data stays on disk and only the per-(dataset, col) aggregate
+result lands in pandas.
 
 The output schema is identical to ``get_data_stats`` (enforced via the
 shared ``etdmap._STATS_DTYPES`` contract -- parent ADR-018) so a single
@@ -25,7 +25,7 @@ it mis-ranks polars as fastest while hiding its memory cost.
 Quantile precision: defaults to DuckDB's ``approx_quantile`` (t-digest)
 because it is 2x faster than exact AND 5x less memory AND fits the
 laptop budget. Pass ``precision="exact"`` for byte-equal comparison
-work (e.g. parked cross-stage drift reports). The chosen mode is
+work (e.g. cross-stage drift reports). The chosen mode is
 recorded in the output ``quantile_mode`` column so downstream consumers
 can branch on it.
 """
@@ -37,6 +37,7 @@ from typing import Literal
 
 import pandas as pd
 
+from etdmap import ids
 from etdmap.data_stats import (
     DEFAULT_SEASON_MONTHS,
     _STATS_DTYPES,  # noqa: F401  -- imported for documentation; _cast_stats_dtypes applies it
@@ -56,14 +57,17 @@ def get_data_stats(
         precision: Literal["approx", "exact"] = "approx",
 ) -> pd.DataFrame:
     """
-    Per-(HuisIdBSV, column, season) summary stats from a wide pipeline
-    artifact (``household_imputed`` / ``household_calculated`` / a
+    Per-(``ids.HOUSEHOLD_BATCH``, column, season) summary stats from a wide
+    pipeline artifact (``household_imputed`` / ``household_calculated`` / a
     resampled interval).
 
-    The artifact is keyed by (HuisIdBSV, ReadingDate) and holds every
-    household. ``parquet_path`` may be a single parquet file or a
-    directory of hive shards; the read layer resolves either, so the
-    stats do not depend on how the stage chose to store its output.
+    The artifact is keyed by (``ids.HOUSEHOLD_BATCH``, ReadingDate) and holds
+    every household batch dataset, which is the unit these statistics are
+    taken over: two datasets of one household are two series, and a min, max,
+    mean or percentile over both concatenated describes neither.
+    ``parquet_path`` may be a single parquet file or a directory of hive
+    shards; the read layer resolves either, so the stats do not depend on how
+    the stage chose to store its output.
     This function emits the same per-entity long-format stats that
     ``etdmap.mapping_helpers.get_data_stats`` produces in mapped mode,
     so a single downstream report consumes both producers without
@@ -73,10 +77,10 @@ def get_data_stats(
     Implementation: one ibis lazy aggregation per (season slice x
     column) combination. Predicate pushdown filters at the parquet scan
     layer so each season is a single DuckDB pass with no full
-    materialisation in pandas. To preserve parity with the per-HH
+    materialisation in pandas. To preserve parity with the per-dataset
     mapped path -- which emits a row even for all-NA columns -- the
-    (HH x col) cross product is reinstated after the lazy aggregation,
-    with ``count=0`` and the per-(HH, season) row count fed into
+    (dataset x col) cross product is reinstated after the lazy aggregation,
+    with ``count=0`` and the per-(dataset, season) row count fed into
     ``missing`` / ``errors``.
 
     Parameters
@@ -84,8 +88,8 @@ def get_data_stats(
     parquet_path : str | os.PathLike
         Path to the wide household parquet.
     seasonal : bool, optional
-        If True, emit one row per (HuisIdBSV, column, season) where
-        the season set is 'annual' plus each entry in ``seasons``.
+        If True, emit one row per (``ids.HOUSEHOLD_BATCH``, column, season)
+        where the season set is 'annual' plus each entry in ``seasons``.
         Default False (annual only).
     seasons : dict[str, set[int]] | None, optional
         Season-name -> set-of-month-numbers (1..12). None falls back to
@@ -98,7 +102,8 @@ def get_data_stats(
         columns".
     excluded_cols : set[str] | None, optional
         Column names to exclude from auto-discovery. None falls back
-        to ``{"HuisIdBSV", "ProjectIdBSV", "ReadingDate"}``.
+        to ``{ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, ids.PROJECT,
+        "ReadingDate"}``.
     precision : {'approx', 'exact'}, default 'approx'
         Quantile-compute precision:
           * ``'approx'`` -- DuckDB t-digest via ``approx_quantile``.
@@ -114,7 +119,8 @@ def get_data_stats(
     Returns
     -------
     pd.DataFrame
-        Long-format stats with one row per (HuisIdBSV, column, season).
+        Long-format stats with one row per
+        (``ids.HOUSEHOLD_BATCH``, column, season).
         Columns match the ``etdmap._STATS_DTYPES`` contract plus a
         ``quantile_mode`` column recording the precision used so
         downstream consumers can detect approximate values.
@@ -129,7 +135,7 @@ def get_data_stats(
     schema = tbl.schema()
 
     if excluded_cols is None:
-        excluded_cols = {"HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV", "ReadingDate"}
+        excluded_cols = {ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, ids.PROJECT, "ReadingDate"}
 
     if value_cols is None:
         # Auto-discover numeric / boolean columns. ibis is_numeric() does
@@ -152,8 +158,7 @@ def get_data_stats(
     # / quantiles / iqr); we do the same here for parity. Booleans
     # also fuse cleanly in DuckDB (cheap reductions, one scan for many
     # cols), while quantile-heavy numerics get one ibis execute per
-    # column (DuckDB does not fuse quantile() across columns -- see
-    # `compute-stats-strategies-2026-05-08.md` section 3).
+    # column (DuckDB does not fuse quantile() across columns).
     numeric_cols = [
         c for c in value_cols
         if schema[c].is_numeric() and not schema[c].is_boolean()
@@ -188,7 +193,7 @@ def get_data_stats(
 
     long_pieces = []
     group_n_pieces = []
-    household_universe: set = set()
+    household_batch_universe: set = set()
 
     for season_name, month_set in slice_specs:
         if month_set is None:
@@ -196,17 +201,17 @@ def get_data_stats(
         else:
             slc = tbl.filter(tbl.ReadingDate.month().isin(list(month_set)))
 
-        # Per (HuisIdBSV) row count for this season slice. Drives the
+        # Per-dataset row count for this season slice. Drives the
         # missing / errors columns: missing = group_n - count(non-null).
         # One small ibis execute per season.
         n_df = (
-            slc.group_by("HuisIdBSV")
-               .aggregate(_group_n=slc.HuisIdBSV.count())
+            slc.group_by(ids.HOUSEHOLD_BATCH)
+               .aggregate(_group_n=slc[ids.HOUSEHOLD_BATCH].count())
                .execute()
         )
         n_df["season"] = season_name
         group_n_pieces.append(n_df)
-        household_universe.update(n_df["HuisIdBSV"].tolist())
+        household_batch_universe.update(n_df[ids.HOUSEHOLD_BATCH].tolist())
 
         # Numeric cols: one ibis execute per column. DuckDB does NOT
         # fuse quantile() expressions across cols, so per-col is the
@@ -230,7 +235,7 @@ def get_data_stats(
             }
             import duckdb
             try:
-                sub = slc.group_by("HuisIdBSV").aggregate(**agg_exprs).execute()
+                sub = slc.group_by(ids.HOUSEHOLD_BATCH).aggregate(**agg_exprs).execute()
             except duckdb.OutOfRangeException as exc:
                 # Variance of very large values overflows float64 (e.g. an
                 # unbounded ratio column with near-zero denominators). The
@@ -243,7 +248,7 @@ def get_data_stats(
                     f"for this column are NA; counts are kept."
                 )
                 sub = (
-                    slc.group_by("HuisIdBSV")
+                    slc.group_by(ids.HOUSEHOLD_BATCH)
                        .aggregate(count=slc[col].count())
                        .execute()
                 )
@@ -271,11 +276,11 @@ def get_data_stats(
                 agg_exprs_bool[f"{col}__mean"] = e.mean()
                 agg_exprs_bool[f"{col}__min"] = e.min()
                 agg_exprs_bool[f"{col}__max"] = e.max()
-            wide = slc.group_by("HuisIdBSV").aggregate(**agg_exprs_bool).execute()
+            wide = slc.group_by(ids.HOUSEHOLD_BATCH).aggregate(**agg_exprs_bool).execute()
 
             bool_pieces = []
             for col in bool_cols:
-                sub = wide[["HuisIdBSV"]].copy()
+                sub = wide[[ids.HOUSEHOLD_BATCH]].copy()
                 sub["variable"] = col
                 sub["count"] = wide[f"{col}__count"]
                 sub["mean"] = wide[f"{col}__mean"]
@@ -291,48 +296,48 @@ def get_data_stats(
     group_n = (
         pd.concat(group_n_pieces, ignore_index=True)
         if group_n_pieces
-        else pd.DataFrame(columns=["HuisIdBSV", "_group_n", "season"])
+        else pd.DataFrame(columns=[ids.HOUSEHOLD_BATCH, "_group_n", "season"])
     )
 
-    # Reinstate (HH x col x season) combos that the lazy aggregation
+    # Reinstate (dataset x col x season) combos that the lazy aggregation
     # dropped because count was zero. For wide parquets that means an
-    # all-NA column for a household -- which the mapped producer would
-    # emit as a count=0 row. Left-join keeps the (HH, col, season)
+    # all-NA column for a dataset -- which the mapped producer would
+    # emit as a count=0 row. Left-join keeps the (dataset, col, season)
     # universe; missing stats stay NaN.
     seasons_emitted = [s for s, _ in slice_specs]
     grid = pd.MultiIndex.from_product(
-        [sorted(household_universe), value_cols, seasons_emitted],
-        names=["HuisIdBSV", "variable", "season"],
+        [sorted(household_batch_universe), value_cols, seasons_emitted],
+        names=[ids.HOUSEHOLD_BATCH, "variable", "season"],
     ).to_frame(index=False)
 
     if long_pieces:
         long = pd.concat(long_pieces, ignore_index=True)
     else:
         long = pd.DataFrame(
-            columns=["HuisIdBSV", "variable", "season",
+            columns=[ids.HOUSEHOLD_BATCH, "variable", "season",
                      "count", "mean", "std", "min", "max", "median",
                      "p01", "p25", "p75", "p99", "iqr"]
         )
 
     long = grid.merge(
         long,
-        on=["HuisIdBSV", "variable", "season"],
+        on=[ids.HOUSEHOLD_BATCH, "variable", "season"],
         how="left",
     )
     long["count"] = long["count"].fillna(0).astype("Int64")
 
-    long = long.merge(group_n, on=["HuisIdBSV", "season"], how="left")
+    long = long.merge(group_n, on=[ids.HOUSEHOLD_BATCH, "season"], how="left")
     long["_group_n"] = long["_group_n"].fillna(0).astype("Int64")
     long["missing"] = long["_group_n"] - long["count"]
     long["errors"] = long["missing"]
     long = long.drop(columns=["_group_n"])
 
     long = long.rename(columns={"variable": "column"})
-    # HuisIdBSV is the natural key in the wide parquet; cast to the
-    # project's nullable Int64 (ADR-005). Identifier mirrors the
-    # mapped-mode contract -- the mode-agnostic handle as a string.
-    long["HuisIdBSV"] = long["HuisIdBSV"].astype("Int64")
-    long["Identifier"] = long["HuisIdBSV"].astype("string")
+    # The household batch dataset is the key of the wide parquet; cast to the
+    # project's nullable Int64. Identifier mirrors the mapped-mode contract --
+    # the mode-agnostic handle as a string.
+    long[ids.HOUSEHOLD_BATCH] = long[ids.HOUSEHOLD_BATCH].astype("Int64")
+    long["Identifier"] = long[ids.HOUSEHOLD_BATCH].astype("string")
 
     # Per-column dtype from the parquet schema (Float64, Boolean, etc.).
     type_map = {name: str(schema[name]) for name in value_cols}
@@ -348,7 +353,7 @@ def get_data_stats(
     # source_file is always present in get_data_stats output to keep
     # the column set shape-stable across modes. Populated in raw mode,
     # all-NA otherwise. Wide-parquet stages are mapped-style
-    # (HuisIdBSV-keyed), so source_file is all-NA here.
+    # (keyed on the household), so source_file is all-NA here.
     long["source_file"] = pd.Series(
         [pd.NA] * len(long), index=long.index, dtype="string"
     )
@@ -369,7 +374,7 @@ def get_data_stats(
         "min", "max", "mean", "std", "median", "iqr",
         "p01", "p25", "p75", "p99",
         "min_datetime", "max_datetime", "top5",
-        "season", "HuisIdBSV", "source_file",
+        "season", ids.HOUSEHOLD_BATCH, "source_file",
         "quantile_mode",
     ]
     long = long[[c for c in ordered if c in long.columns]]

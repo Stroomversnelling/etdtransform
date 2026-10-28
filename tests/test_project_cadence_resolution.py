@@ -21,6 +21,7 @@ import pandas as pd
 import pytest
 
 from etdmap.mapping_helpers import detect_column_cadence
+from etdmap import ids
 from etdtransform.bounds import (
     grid_minutes_by_household_batch,
     grid_minutes_by_project,
@@ -40,7 +41,7 @@ def _household_rows(household, minutes, periods=12):
     })
     table = detect_column_cadence(frame, grid_minutes=minutes)
     table.insert(
-        0, "HuisBatchIdBSV", pd.array([household] * len(table), dtype="Int64")
+        0, ids.HOUSEHOLD_BATCH, pd.array([household] * len(table), dtype="Int64")
     )
     return table
 
@@ -147,7 +148,7 @@ class TestWhatTheResolverCannotSee:
         """Omitted rather than defaulted: a project with no readable grid has no
         interval to spread onto, and a fallback would be invented."""
         cadence = _cadence((1, 5), (2, 15))
-        cadence.loc[cadence["HuisBatchIdBSV"] == 2, "cadence_minutes"] = pd.NA
+        cadence.loc[cadence[ids.HOUSEHOLD_BATCH] == 2, "cadence_minutes"] = pd.NA
 
         resolved = grid_minutes_by_project(cadence, {1: 10, 2: 20})
         assert resolved == {10: 5.0}

@@ -43,12 +43,12 @@ def _frame(teruglevering, netgebruik):
     The stage asserts the pairing (``assert_cumulative_interval_pairs_complete``),
     because a set holding one half means the mapping conversion did not happen
     and every later stage would read the missing half as the variable being
-    absent. ``household_frame`` derives the cumulative counterparts from the
+    absent. ``dataset_frame`` derives the cumulative counterparts from the
     model, so the fixture cannot drift from the pairing the guard enforces.
     """
-    from conftest import household_frame
+    from conftest import dataset_frame
 
-    return household_frame(
+    return dataset_frame(
         n_rows=N,
         **{TERUGLEVERING_ROOT: teruglevering, NETGEBRUIK_ROOT: netgebruik},
     )

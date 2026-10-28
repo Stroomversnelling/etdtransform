@@ -24,6 +24,8 @@ test_impute_type_flags.py and is not what this file is about.
 import pandas as pd
 import pytest
 from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.vectorized_impute import impute_and_normalize
 
@@ -31,6 +33,9 @@ pytestmark = pytest.mark.unit
 
 CUM = "ElektriciteitNetgebruik"
 DIFF = "ElektriciteitNetgebruikDiff"
+
+#: The one household this frame describes.
+HOUSEHOLD = 1
 
 #: Ten five-minute slots for one household. An interval is measured where the
 #: register was read on consecutive slots, so the two run together:
@@ -51,24 +56,28 @@ _N = len(_CUM)
 
 
 def _frame():
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * _N, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * _N], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * _N, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=_N, freq="5min"),
-        CUM: pd.array(_CUM, dtype="Float64"),
-        DIFF: pd.array(_DIFF, dtype="Float64"),
-        # The project average the scaled fill reads. Well inside the column's
-        # declared bound, so nothing here is a threshold case.
-        f"{DIFF}_avg": pd.array([0.6] * _N, dtype="Float64"),
-    })
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {
+            CUM: _CUM,
+            DIFF: _DIFF,
+            # The project average the scaled fill reads. Well inside the
+            # column's declared bound, so nothing here is a threshold case.
+            f"{DIFF}_avg": [0.6] * _N,
+        }},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the read cumulative column,
+        # and the interval column the fill writes into.
+        pairs=False,
+    )
 
 
 @pytest.fixture
 def filled():
     frame = _frame()
     out, _, _ = impute_and_normalize(
-        frame, [CUM], "ProjectIdBSV",
+        frame, [CUM], ids.PROJECT,
         cadence=cadence_table(frame, [CUM]),
     )
     return out

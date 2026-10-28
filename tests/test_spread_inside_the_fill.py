@@ -16,6 +16,14 @@ import logging
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    household_batch_of,
+    sidecar_columns,
+    sidecar_frame,
+)
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -29,6 +37,8 @@ MAX_PER_HOUR = 1.5 * 12**0.5  # the same bound scaled to an hourly reading
 
 K = 12  # an hourly column on a 5-minute grid
 N = 48
+#: The household every frame below belongs to.
+HOUSEHOLD = 1
 
 
 @pytest.fixture(autouse=True)
@@ -36,16 +46,6 @@ def _quiet_logs():
     logging.disable(logging.CRITICAL)
     yield
     logging.disable(logging.NOTSET)
-
-
-def _cadence(rows):
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [r[0] for r in rows]], dtype="Int64"),
-        "column": pd.array([r[1] for r in rows], dtype="string"),
-        "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
-        "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
-    })
 
 
 def _interval_only_frame(reading=1.2, missing=(), n=N):
@@ -56,31 +56,33 @@ def _interval_only_frame(reading=1.2, missing=(), n=N):
     for row in missing:
         values[row] = pd.NA
 
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array([pd.NA] * n, dtype="Float64"),
-        DIFF: pd.array(values, dtype="Float64"),
-    })
-    df[f"{DIFF}_avg"] = pd.array([reading / K] * n, dtype="Float64")
-    return df
+    # PAIRS_EMPTY: the register is the one that never arrived, so the pair is
+    # present and holds nothing, leaving the interval column the only source.
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {DIFF: values}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        pairs=PAIRS_EMPTY,
+        **{f"{DIFF}_avg": reading / K},
+    )
 
 
-def _interval_only_cadence(household=1):
-    return _cadence([
-        (household, "ReadingDate", GRID, n)
-        for n in [N]
-    ] + [
-        (household, CUM, GRID, 0),
-        (household, DIFF, GRID * K, N // K),
-    ])
+def _interval_only_cadence(household=HOUSEHOLD):
+    return sidecar_frame(
+        "cadence",
+        [
+            {"column": "ReadingDate", "cadence_minutes": GRID, "n_readings": N},
+            {"column": CUM, "cadence_minutes": GRID, "n_readings": 0},
+            {"column": DIFF, "cadence_minutes": GRID * K, "n_readings": N // K},
+        ],
+        household_batch_id=household_batch_of(household),
+    )
 
 
 def _impute(df, cadence):
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence
+        df.copy(), [CUM], ids.PROJECT, cadence=cadence
     )
     return out
 
@@ -168,31 +170,45 @@ class TestWhatTheColumnIsJudgedBy:
 
 class TestOtherDeliveryFormsAreUntouched:
     def _register_frame(self, n=N):
-        """A register delivered hourly; its interval column derived from it."""
+        """A register delivered hourly; its interval column derived from it.
+
+        The register's values are the subject here, so they are stated rather
+        than taken from a builder, and the interval column is the difference
+        between them.
+        """
         rise = 1.2
         values, total = [], 100.0
         for row in range(n):
             if row % K == K - 1:
                 total += rise
             values.append(total if row % K == K - 1 else pd.NA)
-        df = pd.DataFrame({
-            "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-            CUM: pd.array(values, dtype="Float64"),
-        })
+        # pairs=False: both halves are supplied here, the register directly and
+        # the interval column by differencing it.
+        df = datasets_frame(
+            {household_batch_of(HOUSEHOLD): {CUM: values}},
+            start="2026-01-01",
+            freq="5min",
+            tz=None,
+            pairs=False,
+            **{f"{DIFF}_avg": rise / K},
+        )
         df[DIFF] = df[CUM].diff().round(10)
         df.loc[0, DIFF] = 0
-        df[f"{DIFF}_avg"] = pd.array([rise / K] * n, dtype="Float64")
         return df
 
     def _register_cadence(self):
-        return _cadence([
-            (1, "ReadingDate", GRID, N),
-            (1, CUM, GRID * K, N // K),
-            (1, DIFF, GRID * K, N // K),
-        ])
+        return sidecar_frame(
+            "cadence",
+            [
+                {"column": "ReadingDate", "cadence_minutes": GRID,
+                 "n_readings": N},
+                {"column": CUM, "cadence_minutes": GRID * K,
+                 "n_readings": N // K},
+                {"column": DIFF, "cadence_minutes": GRID * K,
+                 "n_readings": N // K},
+            ],
+            household_batch_id=household_batch_of(HOUSEHOLD),
+        )
 
     def test_a_delivered_register_is_never_spread(self):
         out = _impute(self._register_frame(), self._register_cadence())
@@ -201,11 +217,16 @@ class TestOtherDeliveryFormsAreUntouched:
     def test_nothing_delivered_is_never_spread(self):
         df = _interval_only_frame()
         df[DIFF] = pd.array([pd.NA] * N, dtype="Float64")
-        cadence = _cadence([
-            (1, "ReadingDate", GRID, N),
-            (1, CUM, GRID, 0),
-            (1, DIFF, GRID, 0),
-        ])
+        cadence = sidecar_frame(
+            "cadence",
+            [
+                {"column": "ReadingDate", "cadence_minutes": GRID,
+                 "n_readings": N},
+                {"column": CUM, "cadence_minutes": GRID, "n_readings": 0},
+                {"column": DIFF, "cadence_minutes": GRID, "n_readings": 0},
+            ],
+            household_batch_id=household_batch_of(HOUSEHOLD),
+        )
         out = _impute(df, cadence)
         assert not any(_has(out, ImputeType.RESAMPLED_TO_GRID))
 
@@ -213,11 +234,19 @@ class TestOtherDeliveryFormsAreUntouched:
         """Older tables carry no n_readings. The form is then unknown, and an
         unknown form is not a licence to rewrite the column."""
         df = _interval_only_frame()
-        cadence = pd.DataFrame({
-            "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001, 1001], dtype="Int64"),
-            "column": pd.array([CUM, DIFF], dtype="string"),
-            "cadence_minutes": pd.array([GRID, GRID * K], dtype="Int64"),
-        })
+        # The subject: every cadence column but n_readings, which is the one
+        # the delivered form is read from.
+        cadence = sidecar_frame(
+            "cadence",
+            [
+                {"column": CUM, "cadence_minutes": GRID},
+                {"column": DIFF, "cadence_minutes": GRID * K},
+            ],
+            household_batch_id=household_batch_of(HOUSEHOLD),
+            partial=[
+                name for name in sidecar_columns("cadence")
+                if name != "n_readings"
+            ],
+        )
         out = _impute(df, cadence)
         assert not any(_has(out, ImputeType.RESAMPLED_TO_GRID))

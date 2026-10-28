@@ -11,6 +11,8 @@ cell.
 import pandas as pd
 import pytest
 from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 from test_constraint_package import _constraints
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -22,6 +24,10 @@ DIFF = "ElektriciteitNetgebruikDiff"
 CUM_B = "ElektriciteitTeruglevering"
 DIFF_B = "ElektriciteitTerugleveringDiff"
 
+#: The household every frame here describes. One dataset of it, so a frame
+#: states one time series.
+HOUSEHOLD = 1
+
 # K and L are unbounded in the thresholds; known together they can disagree.
 CONFLICT = (
     (DIFF, "K", {"K": 1}),
@@ -30,23 +36,24 @@ CONFLICT = (
 
 
 def _frame(columns):
-    n = max(len(v) for v in columns.values())
-    data = {
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-    }
-    for name, values in columns.items():
-        data[name] = pd.array(values, dtype="Float64")
-    return pd.DataFrame(data)
+    """One dataset of HOUSEHOLD, tz-naive at the 5-minute grid.
+
+    Every caller states each cumulative column alongside its interval one, so
+    the builder completes neither half and the stated readings bound the gaps.
+    """
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {
+            name: list(values) for name, values in columns.items()
+        }},
+        start="2026-01-01", freq="5min", tz=None,
+    )
 
 
 def _impute(frame, cums, constraints):
     out, _, _ = impute_and_normalize(
         frame,
         cums,
-        "ProjectIdBSV",
+        ids.PROJECT,
         cadence=cadence_table(frame, cums),
         constraints=constraints,
     )

@@ -15,6 +15,7 @@ import shutil
 import pytest
 
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
+from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -44,13 +45,13 @@ class TestSourceGuards:
         # before anything is written. Stated with a frame that simply has no
         # HuisBatchIdBSV, rather than borrowing an artifact that happens to
         # lack one.
-        from conftest import household_frame
+        from conftest import dataset_frame
 
         source = tmp_path / "no_batch_id.parquet"
-        household_frame(ElektriciteitNetgebruikDiff=1.0).to_parquet(
+        dataset_frame(ElektriciteitNetgebruikDiff=1.0).to_parquet(
             source, index=False
         )
-        with pytest.raises(ValueError, match="HuisBatchIdBSV"):
+        with pytest.raises(ValueError, match=ids.HOUSEHOLD_BATCH):
             add_calculated_columns_to_hh_data_ibis(
                 source_path=str(source),
                 output_path=str(tmp_path / "out"),
@@ -83,10 +84,10 @@ class TestDerivationIsPerRow:
 
     @pytest.fixture
     def derived(self, tmp_path):
-        from conftest import household_frame, write_shard_tree
+        from conftest import dataset_frame, write_shard_tree
 
         src = write_shard_tree(tmp_path / "imputed_shards", {
-            hid: household_frame(n_rows=_ROWS, **{_TERUG: terug, _NETG: netg})
+            hid: dataset_frame(n_rows=_ROWS, **{_TERUG: terug, _NETG: netg})
             for hid, (terug, netg) in _PER_HOUSEHOLD.items()
         })
         out = tmp_path / "calculated_shards"
@@ -100,7 +101,7 @@ class TestDerivationIsPerRow:
 
     def test_every_household_keeps_its_own_values(self, derived):
         for hid, (terug, netg) in _PER_HOUSEHOLD.items():
-            rows = derived[derived["HuisIdBSV"] == hid]
+            rows = derived[derived[ids.HOUSEHOLD] == hid]
             assert len(rows) == _ROWS, f"household {hid}: {len(rows)} rows"
             assert rows["TerugleveringTotaalNetto"].astype(float).tolist() == [terug] * _ROWS
             assert rows["ElektriciteitsgebruikTotaalNetto"].astype(float).tolist() == [netg] * _ROWS
@@ -109,9 +110,9 @@ class TestDerivationIsPerRow:
         # netgebruik - teruglevering, per household: 1.0, -4.0, 7.0. A
         # derivation mixing households could not produce all three.
         for hid, (terug, netg) in _PER_HOUSEHOLD.items():
-            rows = derived[derived["HuisIdBSV"] == hid]
+            rows = derived[derived[ids.HOUSEHOLD] == hid]
             assert rows["Netuitwisseling"].astype(float).tolist() == [netg - terug] * _ROWS
 
     def test_no_household_is_dropped_or_duplicated(self, derived):
-        assert sorted(derived["HuisIdBSV"].unique().tolist()) == sorted(_PER_HOUSEHOLD)
+        assert sorted(derived[ids.HOUSEHOLD].unique().tolist()) == sorted(_PER_HOUSEHOLD)
         assert len(derived) == _ROWS * len(_PER_HOUSEHOLD)

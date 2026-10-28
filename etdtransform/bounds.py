@@ -6,9 +6,9 @@ relevant when a column does not report at the grid cadence:
 
 Column threshold
     The declared threshold scaled to how often the column reports, per
-    household. A cumulative variable reporting hourly delivers an hour of consumption in a
-    single reading, so its plausible maximum is twelve times the declared
-    five-minute value.
+    household batch. A cumulative variable reporting hourly delivers an hour
+    of consumption in a single reading, so its plausible maximum is twelve
+    times the declared five-minute value.
 
 Grid threshold
     The declared threshold itself. It applies to a value occupying one slot of
@@ -51,6 +51,7 @@ from etdmap.data_model import (
 )
 from etdmap.flags import MappingFlag, _as_limit, flag_column
 from etdmap.index_helpers import frequency_to_minutes
+from etdmap import ids
 
 
 def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
@@ -59,13 +60,13 @@ def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
 
     Cadence is determined at the mapping stage, from the timestamps as
     delivered and before any fill, and written to a parquet beside the mapped
-    data. It is recorded per (household, column) and is not carried in the
-    aggregated table.
+    data. It is recorded per (household batch, column) and is not carried in
+    the aggregated table.
 
     An absent sidecar is an error rather than a default. Without it every
     threshold is judged at the grid cadence, which silently tightens the bound
-    for every household reporting more coarsely and nulls their readings as
-    out of bounds. Re-map the dataset to produce it.
+    for every household batch reporting more coarsely and nulls its readings as
+    out of bounds. Re-map the mapped data to produce it.
 
     Returns
     -------
@@ -96,7 +97,7 @@ def load_column_cadence(mapped_folder_path=None) -> pd.DataFrame:
         raise FileNotFoundError(
             f"No {CADENCE_FILENAME} in {folder}. Every column's threshold is "
             f"scaled to the cadence it reports at, so without it a coarsely "
-            f"reporting household is judged against the grid bound and its "
+            f"reporting household batch is judged against the grid bound and its "
             f"readings are nulled. Re-map the dataset."
         )
 
@@ -108,10 +109,11 @@ def dataset_grid_minutes(mapped_folder_path=None):
     The grid the mapped data sits on, in minutes.
 
     Each household batch declares its own grid as ``Gegevensfrequentie``, and
-    the index carries it. An aggregated dataset spans batches, so its grid is
-    the finest of theirs: that is the spacing its rows are on, and the spacing a
-    shape can be resolved at. Batches on a coarser grid contribute level but not
-    shape, which is what the averaging already does with a column's cadence.
+    the index carries it. The mapped data spans household batches, so its grid
+    is the finest of theirs: that is the spacing its rows are on, and the
+    spacing a shape can be resolved at. Household batches on a coarser grid
+    contribute level but not shape, which is what the averaging already does
+    with a column's cadence.
 
     An undeclared grid is an error rather than a default. The grid sets the
     spacing every threshold is judged at, so assuming one silently rescales
@@ -165,17 +167,19 @@ def dataset_grid_minutes(mapped_folder_path=None):
         logging.info(
             f"Household batches declare {len(minutes)} different grids "
             f"({', '.join(str(m) for m in minutes)} minutes). Using the finest "
-            f"as the dataset grid; coarser batches contribute level but not "
-            f"shape."
+            f"as the dataset grid; coarser household batches contribute level "
+            f"but not shape."
         )
     return float(minutes[0])
 
 
 def cadence_minutes_by_household_batch(diff_col, cadence) -> dict:
     """
-    The interval each household's reading of *diff_col* covers, in minutes.
+    The interval each household batch's reading of *diff_col* covers, in
+    minutes.
 
-    Households absent from the table, or recorded with no cadence, are omitted;
+    Household batches absent from the table, or recorded with no cadence, are
+    omitted;
     callers decide what an unknown cadence means for them.
 
     *diff_col*'s own row wins. It is looked up under the variable it is paired
@@ -192,13 +196,13 @@ def cadence_minutes_by_household_batch(diff_col, cadence) -> dict:
         The column being asked about.
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`: one row per
-        (HuisBatchIdBSV, column), with ``cadence_minutes`` holding the interval that
-        column's readings cover. None or empty resolves nothing.
+        (``ids.HOUSEHOLD_BATCH``, column), with ``cadence_minutes`` holding the
+        interval that column's readings cover. None or empty resolves nothing.
 
     Returns
     -------
     dict
-        HuisBatchIdBSV -> minutes.
+        ``ids.HOUSEHOLD_BATCH`` -> minutes.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -220,16 +224,16 @@ def grid_bound(diff_col, bound_key="Max"):
     Return the declared threshold for *diff_col*.
 
     This is the grid threshold: what one slot of the grid may hold. It is a
-    scalar, since the grid is the same for every household.
+    scalar, since the grid is the same for every household batch.
     """
     return thresholds_dict.get(diff_col, {}).get(bound_key, pd.NA)
 
 
 def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
     """
-    The threshold for *diff_col* scaled to each household's cadence.
+    The threshold for *diff_col* scaled to each household batch's cadence.
 
-    Households absent from the cadence table are omitted; they take the declared
+    Household batches absent from the cadence table are omitted; they take the declared
     threshold, which :func:`grid_bound` returns.
 
     Parameters
@@ -237,8 +241,8 @@ def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
     diff_col : str
         The column being bounded.
     cadence : pd.DataFrame or None
-        The cadence table from :func:`load_column_cadence`. Each household's
-        bound is the declared threshold scaled to the interval its readings of
+        The cadence table from :func:`load_column_cadence`. Each household
+        batch's bound is the declared threshold scaled to the interval its readings of
         *diff_col* cover.
     bound_key : str
         ``"Max"`` or ``"Min"``.
@@ -246,7 +250,7 @@ def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
     Returns
     -------
     dict
-        HuisBatchIdBSV -> bound.
+        ``ids.HOUSEHOLD_BATCH`` -> bound.
     """
     declared = thresholds_dict.get(diff_col, {})
     index = 0 if bound_key == "Min" else 1
@@ -263,7 +267,7 @@ def column_bound_by_household_batch(diff_col, cadence, bound_key="Max") -> dict:
 
 def column_bound(df, diff_col, cadence, bound_key="Max"):
     """
-    Return the threshold for *diff_col* scaled to each household's cadence.
+    Return the threshold for *diff_col* scaled to each household batch's cadence.
 
     An interval column inherits the cadence of the cumulative variable it is derived from,
     since it is computed during the pipeline and does not appear in the cadence
@@ -272,7 +276,7 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
     Parameters
     ----------
     df : pd.DataFrame
-        Rows to return a threshold for. Must contain ``HuisBatchIdBSV``.
+        Rows to return a threshold for. Must contain ``ids.HOUSEHOLD_BATCH``.
     diff_col : str
         Interval column name.
     cadence : pd.DataFrame
@@ -280,7 +284,7 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
     bound_key : str
         Which threshold to scale, ``"Max"`` or ``"Min"``.
 
-    A household with no recorded cadence for this column takes the declared
+    A household batch with no recorded cadence for this column takes the declared
     bound, which is the bound for one interval of the threshold's own unit. The
     cadence table records a column only if it carried readings when cadence was
     measured, and some columns acquire values afterwards -- a zero written for an
@@ -299,7 +303,7 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
     ------
     ValueError
         When there is no cadence table at all, since then no column could be
-        scaled and every household would silently take the grid bound.
+        scaled and every household batch would silently take the grid bound.
     """
     declared = thresholds_dict.get(diff_col, {})
     bound = declared.get(bound_key, pd.NA)
@@ -308,25 +312,25 @@ def column_bound(df, diff_col, cadence, bound_key="Max"):
 
     if cadence is None or cadence.empty:
         raise ValueError(
-            f"{diff_col}: no cadence table, so every household would be judged "
-            f"at the grid interval. Re-map the dataset."
+            f"{diff_col}: no cadence table, so every household batch would be "
+            f"judged at the grid interval. Re-map the mapped data."
         )
 
     per_household_batch = column_bound_by_household_batch(diff_col, cadence, bound_key=bound_key)
-    if "HuisBatchIdBSV" not in df.columns:
+    if ids.HOUSEHOLD_BATCH not in df.columns:
         return bound
 
     unrecorded = sorted(
-        set(df["HuisBatchIdBSV"].dropna().unique()) - set(per_household_batch)
+        set(df[ids.HOUSEHOLD_BATCH].dropna().unique()) - set(per_household_batch)
     )
     if unrecorded:
         logging.info(
-            f"{diff_col}: {len(unrecorded)} household(s) have no recorded "
+            f"{diff_col}: {len(unrecorded)} household batch(es) have no recorded "
             f"cadence and take the declared bound {bound} "
             f"({unrecorded[:10]})."
         )
 
-    scaled = df["HuisBatchIdBSV"].map(per_household_batch).astype("Float64").fillna(bound)
+    scaled = df[ids.HOUSEHOLD_BATCH].map(per_household_batch).astype("Float64").fillna(bound)
     n_scaled = int((scaled != bound).sum())
     if n_scaled:
         logging.info(
@@ -344,7 +348,7 @@ def clip_to_bounds(values, lo, hi):
     definition of "in range" serves them all rather than each carrying its own.
 
     Either bound is a scalar for the whole column or one value per row: a
-    cadence-scaled bound varies by household, and a rule-derived bound varies by
+    cadence-scaled bound varies by household batch, and a rule-derived bound varies by
     row, being a formula in that row's other cells. An absent bound is no bound,
     per row as well as per column.
 
@@ -455,11 +459,11 @@ def usable_readings(df, column):
 
 def delivered_by_household_batch(column, cadence) -> dict:
     """
-    Whether *column* carried delivered readings, per household.
+    Whether *column* carried delivered readings, per household batch.
 
     Read from ``n_readings``, counted on the data as delivered before any fill.
-    A household with no row for *column*, or a row recording no readings, did
-    not have that form delivered.
+    A household batch with no row for *column*, or a row recording no
+    readings, did not have that form delivered.
 
     The cumulative/interval pairing is **not** followed. A variable delivered in
     both forms has a row for each, and one delivered as intervals only still has
@@ -491,8 +495,8 @@ def delivered_by_household_batch(column, cadence) -> dict:
     Returns
     -------
     dict
-        HuisBatchIdBSV -> bool, for every household the table has a row for under any
-        of the names read.
+        ``ids.HOUSEHOLD_BATCH`` -> bool, for every household batch the table
+        has a row for under any of the names read.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -517,14 +521,14 @@ def delivered_by_household_batch(column, cadence) -> dict:
 
 def grid_minutes_by_household_batch(cadence, date_column="ReadingDate") -> dict:
     """
-    The interval each household's rows sit on, in minutes.
+    The interval each household batch's rows sit on, in minutes.
 
     ``detect_column_cadence`` measures the timestamp column alongside the data
-    columns, so its row carries the grid the household's batch declares -- the
-    spacing ``ensure_intervals`` padded that household to. Read from the table
-    rather than from a dataset-wide figure, because an aggregated dataset spans
-    batches and a household on a coarser grid would be judged against the finest
-    of them.
+    columns, so its row carries the grid the household batch declares -- the
+    spacing ``ensure_intervals`` padded it to. Read from the table rather than
+    from a figure spanning the whole mapped data, because that spans household
+    batches and one on a coarser grid would be judged against the finest of
+    them.
 
     Parameters
     ----------
@@ -536,7 +540,8 @@ def grid_minutes_by_household_batch(cadence, date_column="ReadingDate") -> dict:
     Returns
     -------
     dict
-        HuisBatchIdBSV -> minutes, omitting any household with no usable row.
+        ``ids.HOUSEHOLD_BATCH`` -> minutes, omitting any household batch with
+        no usable row.
     """
     if cadence is None or cadence.empty:
         return {}
@@ -556,9 +561,10 @@ def grid_minutes_by_project(
     The one interval each project's rows sit on, in minutes.
 
     A project average is a shape placed on the slots a project reports at, so it
-    needs one interval per project. Where every household in a project sits on
-    the same grid -- which is what declaring ``Gegevensfrequentie`` per batch is
-    for -- that interval is well defined and this returns it.
+    needs one interval per project. Where every dataset in a project sits on
+    the same grid -- which is what declaring ``Gegevensfrequentie`` per
+    household batch is for -- that interval is well defined and this returns
+    it.
 
     This is the interval the averages are sharded on, together with the project.
     A project reporting quarter-hourly is spread over quarter-hourly steps and
@@ -568,7 +574,7 @@ def grid_minutes_by_project(
     Raises
     ------
     ValueError
-        When a project's households declare more than one grid. There is no
+        When a project's datasets declare more than one grid. There is no
         rule for which grid such a project's average sits on, and picking one
         would either invent slots the project never reported at or discard
         volume.
@@ -578,18 +584,18 @@ def grid_minutes_by_project(
     cadence : pd.DataFrame or None
         The cadence table from :func:`load_column_cadence`.
     project_by_household_batch : dict
-        HuisBatchIdBSV -> ProjectIdBSV, from the index rather than from the data:
-        which project a household belongs to is a registry fact, and a household
-        contributing no rows to the frame in hand still belongs to its project.
-        Every household the cadence table resolves a grid for must appear, or
-        its grid cannot be attributed to a project.
+        ``ids.HOUSEHOLD_BATCH`` -> ``ids.PROJECT``, from the index rather than
+        from the data: which project a dataset belongs to is a registry fact,
+        and a dataset contributing no rows to the frame in hand still belongs to
+        its project. Every dataset the cadence table resolves a grid for must
+        appear, or its grid cannot be attributed to a project.
     date_column : str
         Name of the timestamp column, whose row carries the grid.
 
     Returns
     -------
     dict
-        ProjectIdBSV -> minutes, omitting any project none of whose households
+        ``ids.PROJECT`` -> minutes, omitting any project none of whose datasets
         resolve a grid.
     """
     by_household_batch = grid_minutes_by_household_batch(cadence, date_column=date_column)

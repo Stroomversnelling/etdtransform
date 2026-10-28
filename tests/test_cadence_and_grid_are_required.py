@@ -8,31 +8,48 @@ names the fix, not a default.
 """
 
 import ibis
-import pandas as pd
 import pytest
-
+from etdmap import ids
 from etdmap.mapping_helpers import CADENCE_FILENAME
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    cadence_sidecar,
+    datasets_frame,
+    household_batch_of,
+    index_frame,
+    sidecar_frame,
+)
+
 from etdtransform.bounds import dataset_grid_minutes, load_column_cadence
 from etdtransform.impute import calculate_average_diff_ibis
 
 pytestmark = pytest.mark.unit
 
+#: The household the artifacts below describe. Its dataset -- the key of the
+#: index, of the cadence sidecar and of every lookup built from them -- is
+#: ``household_batch_of(HOUSEHOLD)``.
+HOUSEHOLD = 1
+
+CUM = "ElektriciteitNetgebruik"
+DIFF = f"{CUM}Diff"
+
+#: The cadence the sidecar below declares, and the grid its ReadingDate row
+#: carries with it.
+CADENCE = 15
+
 
 def _write_cadence(folder):
-    pd.DataFrame({
-        "HuisIdBSV": pd.array([1], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001], dtype="Int64"),
-        "column": pd.array(["ElektriciteitNetgebruik"], dtype="string"),
-        "cadence_minutes": pd.array([15], dtype="Int64"),
-    }).to_parquet(folder / CADENCE_FILENAME, engine="pyarrow")
+    cadence_sidecar(
+        [CUM],
+        minutes=CADENCE,
+        household_batch_id=household_batch_of(HOUSEHOLD),
+    ).to_parquet(folder / CADENCE_FILENAME, engine="pyarrow")
 
 
 def _write_index(folder, frequency="5min"):
-    pd.DataFrame({
-        "HuisIdBSV": pd.array([1], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001], dtype="Int64"),
-        "Gegevensfrequentie": pd.array([frequency], dtype="string"),
-    }).to_parquet(folder / "index.parquet", engine="pyarrow")
+    index_frame(
+        [household_batch_of(HOUSEHOLD)], Gegevensfrequentie=frequency
+    ).to_parquet(folder / "index.parquet", engine="pyarrow")
 
 
 class TestTheCadenceSidecarIsRequired:
@@ -57,7 +74,7 @@ class TestTheCadenceSidecarIsRequired:
         _write_cadence(tmp_path)
         cadence = load_column_cadence(str(tmp_path))
         assert not cadence.empty
-        assert int(cadence["cadence_minutes"].iloc[0]) == 15
+        assert int(cadence["cadence_minutes"].iloc[0]) == CADENCE
 
 
 class TestTheDeclaredGridIsRequired:
@@ -75,10 +92,11 @@ class TestTheDeclaredGridIsRequired:
             dataset_grid_minutes()
 
     def test_an_index_without_the_field_raises(self, tmp_path):
-        pd.DataFrame({
-            "HuisIdBSV": pd.array([1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001], dtype="Int64"),
-        }).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
+        # The absent column is the subject, so it is dropped from the index
+        # shape rather than the shape being built without it.
+        index_frame([household_batch_of(HOUSEHOLD)]).drop(
+            columns=["Gegevensfrequentie"]
+        ).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         with pytest.raises(ValueError, match="Gegevensfrequentie"):
             dataset_grid_minutes(str(tmp_path))
 
@@ -94,11 +112,10 @@ class TestTheDeclaredGridIsRequired:
     def test_the_finest_declared_grid_wins(self, tmp_path):
         """An aggregated dataset spans batches; its rows sit on the finest of
         their grids."""
-        pd.DataFrame({
-            "HuisIdBSV": pd.array([1, 2], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001, 1002], dtype="Int64"),
-            "Gegevensfrequentie": pd.array(["15min", "5min"], dtype="string"),
-        }).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
+        index_frame(
+            [household_batch_of(1), household_batch_of(2)],
+            Gegevensfrequentie=["15min", "5min"],
+        ).to_parquet(tmp_path / "index.parquet", engine="pyarrow")
         assert dataset_grid_minutes(str(tmp_path)) == 5.0
 
 
@@ -122,30 +139,28 @@ class TestTheGridIsNotDefaultedDownstream:
         not the same as defaulting to a number: a project that resolves none
         raises, naming itself, rather than being averaged at some other
         project's spacing."""
-        frame = pd.DataFrame({
-            "ProjectIdBSV": pd.array([4, 4], dtype="Int64"),
-            "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001, 1001], dtype="Int64"),
-            "ReadingDate": pd.to_datetime(
-                ["2026-01-01 00:00", "2026-01-01 00:05"]
-            ),
-            "ElektriciteitNetgebruikDiff": pd.array(
-                [1.0, 1.0], dtype="Float64"
-            ),
-        })
+        frame = datasets_frame(
+            {household_batch_of(HOUSEHOLD): {DIFF: [1.0, 1.0]}},
+            project=4,
+            start="2026-01-01",
+            tz=None,
+            # The averaging takes a dataset's volume from the cumulative column
+            # wherever that column holds a value; here the interval column is
+            # the source.
+            pairs=PAIRS_EMPTY,
+        )
         # A cadence table with a row for the column but none for ReadingDate,
         # which is where the household's grid is recorded.
-        cadence = pd.DataFrame({
-            "HuisIdBSV": pd.array([1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001], dtype="Int64"),
-            "column": pd.array(["ElektriciteitNetgebruik"], dtype="string"),
-            "cadence_minutes": pd.array([5], dtype="Int64"),
-        })
+        cadence = sidecar_frame(
+            "cadence",
+            [{"column": CUM, "cadence_minutes": 5}],
+            household_batch_id=household_batch_of(HOUSEHOLD),
+        )
 
         with pytest.raises(ValueError, match=r"Project\(s\) \[4\] resolve no grid"):
             calculate_average_diff_ibis(
                 ibis.memtable(frame),
-                "ProjectIdBSV",
-                ["ElektriciteitNetgebruikDiff"],
+                ids.PROJECT,
+                [DIFF],
                 cadence=cadence,
             )

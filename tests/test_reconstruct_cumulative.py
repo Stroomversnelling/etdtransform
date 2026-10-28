@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 import ibis
 
+from etdmap import ids
 from etdtransform.aggregate import (
     reconstruct_cumulative_columns,
     reconstruct_cumulative_columns_ibis,
@@ -32,7 +33,7 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     series, and a household can have several.
     """
     modified = []
-    for _, hh in df.groupby("HuisBatchIdBSV"):
+    for _, hh in df.groupby(ids.HOUSEHOLD_BATCH):
         for col in cols:
             hh = hh.copy()
             hh[col + "Original"] = hh[col]
@@ -49,7 +50,7 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
     """Frames for *datasets*, each ``(HuisIdBSV, HuisBatchIdBSV)``.
 
-    Not `conftest.household_frame`: that builds one household's rows and fills
+    Not `conftest.dataset_frame`: that builds one household's rows and fills
     the cumulative counterpart with arbitrary values, while the relation
     ``cumulative == cumsum(interval) + 100`` is what reconstruction is checked
     against here, and these frames carry several datasets at once.
@@ -67,9 +68,9 @@ def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
         cumulatives = [pd.Series(d, dtype="Float64").cumsum() + 100.0 for d in diffs]
         for i, dt in enumerate(dates):
             row = {
-                "HuisIdBSV": household_id,
-                "HuisBatchIdBSV": household_batch_id,
-                "ProjectIdBSV": 1,
+                ids.HOUSEHOLD: household_id,
+                ids.HOUSEHOLD_BATCH: household_batch_id,
+                ids.PROJECT: 1,
                 "ReadingDate": dt,
             }
             for j, col in enumerate(COLS):
@@ -77,13 +78,13 @@ def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
                 row[col + "Diff"] = diffs[j][i]
             rows.append(row)
     df = pd.DataFrame(rows)
-    for id_column in ("HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV"):
+    for id_column in (ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, ids.PROJECT):
         df[id_column] = df[id_column].astype("Int64")
     for col in COLS:
         df[col] = df[col].astype("Float64")
         df[col + "Diff"] = df[col + "Diff"].astype("Float64")
     return df.sort_values(
-        ["HuisBatchIdBSV", "ReadingDate"]
+        [ids.HOUSEHOLD_BATCH, "ReadingDate"]
     ).reset_index(drop=True)
 
 
@@ -104,7 +105,7 @@ def base_df():
 
 def _sort(df: pd.DataFrame) -> pd.DataFrame:
     return (
-        df.sort_values(["HuisBatchIdBSV", "ReadingDate"])
+        df.sort_values([ids.HOUSEHOLD_BATCH, "ReadingDate"])
         .reset_index(drop=True)
     )
 
@@ -139,7 +140,7 @@ def test_pandas_original_column_preserved(base_df):
 def test_pandas_cumsum_is_per_dataset(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for _dataset, grp in out.groupby("HuisBatchIdBSV"):
+        for _dataset, grp in out.groupby(ids.HOUSEHOLD_BATCH):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 
@@ -147,7 +148,7 @@ def test_pandas_cumsum_is_per_dataset(base_df):
 def test_pandas_check_column_is_diff_of_residual(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for _, grp in out.groupby("HuisBatchIdBSV"):
+        for _, grp in out.groupby(ids.HOUSEHOLD_BATCH):
             residual = grp[col] - grp[col + "Original"]
             expected = residual.diff().values
             np.testing.assert_allclose(
@@ -159,7 +160,7 @@ def test_pandas_single_row_per_dataset():
     """Edge case: one row per dataset -- check should be NaN."""
     df = (
         _make_df([(10, 1010), (11, 1011)])
-        .groupby("HuisBatchIdBSV").head(1).reset_index(drop=True)
+        .groupby(ids.HOUSEHOLD_BATCH).head(1).reset_index(drop=True)
     )
     out = reconstruct_cumulative_columns(df.copy(), COLS)
     for col in COLS:
@@ -192,7 +193,7 @@ def test_ibis_cumsum_per_dataset(base_df):
     out = reconstruct_cumulative_columns_ibis(tbl, COLS).execute()
     out = _sort(out)
     for col in COLS:
-        for _, grp in out.groupby("HuisBatchIdBSV"):
+        for _, grp in out.groupby(ids.HOUSEHOLD_BATCH):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 

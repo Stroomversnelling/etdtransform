@@ -13,9 +13,11 @@ import logging
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
-from etdtransform.catalog.query import DatasetAdapter
 from etdtransform.calculated_columns import add_calculated_columns_adaptive
+from etdtransform.catalog.query import DatasetAdapter
 
 pytestmark = pytest.mark.unit
 
@@ -39,25 +41,31 @@ def _make_catalog(*rules):
     return pd.DataFrame(columns=["lhs", "rhs_text", "rhs_vars", "rhs_var_count"])
 
 
-def _full_col(n=100, value=1.0, dtype="Float64"):
-    """Series that is 100% non-null, using pandas nullable type."""
-    return pd.array([value] * n, dtype=dtype)
+def _full_col(n=100, value=1.0):
+    """A column's values over *n* rows, none of them missing."""
+    return [value] * n
 
 
 def _sparse_col(n=100, frac=0.5, value=1.0):
-    """Series with `frac` non-null fraction using pd.NA (not NaN)."""
-    data = [value] * int(n * frac) + [pd.NA] * (n - int(n * frac))
-    return pd.array(data, dtype="Float64")
+    """A column's values over *n* rows, a *frac* share present and the rest
+    pd.NA -- the completeness the adapter assesses."""
+    return [value] * int(n * frac) + [pd.NA] * (n - int(n * frac))
 
 
-def _make_df(cols: dict, n=100, household_id=1) -> pd.DataFrame:
+def _make_df(cols: dict, household_id=1) -> pd.DataFrame:
+    """One household dataset's rows over *cols*, carrying the index ids.
+
+    Each value in *cols* is that column's values in full, so the longest of
+    them sets the row count (use _full_col / _sparse_col). No cumulative
+    counterpart is completed: availability is assessed per column, so one the
+    test did not declare would be another available column.
     """
-    Build a DataFrame with HuisIdBSV and the given columns.
-    Values in cols must already be array-like (use _full_col / _sparse_col).
-    """
-    data = {"HuisIdBSV": pd.array([household_id] * n, dtype="Int64")}
-    data.update(cols)
-    return pd.DataFrame(data)
+    return datasets_frame(
+        {household_batch_of(household_id): {
+            column: list(values) for column, values in cols.items()
+        }},
+        pairs=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -83,14 +91,13 @@ class TestAvailableColumns:
         """A column with no values cannot feed a formula. This is the one
         exclusion that survives, and it is not a fraction question."""
         n = 100
-        df = _make_df({"A": pd.array([pd.NA] * n, dtype="Float64")}, n=n)
+        df = _make_df({"A": [pd.NA] * n})
         assert "A" not in DatasetAdapter(_make_catalog()).available_columns(df)
 
     def test_pdna_counted_as_missing(self):
         """pd.NA must count as missing, not as 0 -- which is what the fraction
         reported and what the arithmetic used to assume."""
-        n = 100
-        df = _make_df({"A": pd.array([1.0] * 60 + [pd.NA] * 40, dtype="Float64")}, n=n)
+        df = _make_df({"A": [1.0] * 60 + [pd.NA] * 40})
         assert DatasetAdapter(_make_catalog()).assess_columns(df)["A"] == 0.60
 
 
@@ -146,10 +153,7 @@ class TestAdaptiveDerivation:
         # A is 99% non-null (above threshold) so it counts as available
         a_vals = [1.0] * (n - 1) + [pd.NA]
         catalog = _make_catalog(("C", "A + B", ["A", "B"]))
-        df = _make_df({
-            "A": pd.array(a_vals, dtype="Float64"),
-            "B": pd.array([1.0] * n, dtype="Float64"),
-        })
+        df = _make_df({"A": a_vals, "B": [1.0] * n})
         result = add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         assert "C" in result.columns
         assert pd.isna(result["C"].iloc[-1]), (
@@ -163,10 +167,7 @@ class TestAdaptiveDerivation:
         n = 100
         a_vals = [1.0] * (n - 1) + [pd.NA]
         catalog = _make_catalog(("C", "A + B", ["A", "B"]))
-        df = _make_df({
-            "A": pd.array(a_vals, dtype="Float64"),
-            "B": pd.array([1.0] * n, dtype="Float64"),
-        })
+        df = _make_df({"A": a_vals, "B": [1.0] * n})
         result = add_calculated_columns_adaptive(
             df, catalog, target_columns={"C"}, fillna=True
         )
@@ -181,8 +182,8 @@ class TestAdaptiveDerivation:
         ], ignore_index=True)
         result = add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         assert "C" in result.columns
-        hh1 = result[result["HuisIdBSV"] == 1]["C"]
-        hh2 = result[result["HuisIdBSV"] == 2]["C"]
+        hh1 = result[result[ids.HOUSEHOLD] == 1]["C"]
+        hh2 = result[result[ids.HOUSEHOLD] == 2]["C"]
         assert (hh1 == 3.0).all()
         assert (hh2 == 7.0).all()
 
@@ -193,12 +194,11 @@ class TestAdaptiveDerivation:
 
 class TestPrestatiedataBerekendInTargets:
     def test_berekend_columns_are_attempted(self):
-        from etdmap.data_model import all_performance_data_columns
         from etdmap.catalog import load_catalog
+        from etdmap.data_model import all_performance_data_columns
 
         catalog_df = load_catalog()
 
-        from etdmap.data_model import model_column_order
         catalog_lhs = set(catalog_df["lhs"].dropna().unique())
         in_all = catalog_lhs & set(all_performance_data_columns)
 
@@ -250,7 +250,8 @@ class TestCompletenessReporting:
             add_calculated_columns_adaptive(df, catalog, target_columns={"C"})
         derive_errors = [
             r for r in caplog.records
-            if r.levelno >= logging.ERROR and "Could not derive" in r.message
+            if r.levelno >= logging.ERROR
+            and "could not derive" in r.message.lower()
         ]
         assert not derive_errors
 
@@ -326,7 +327,7 @@ def _standard_raw_df(n=50, household_id=1) -> pd.DataFrame:
     paths agree numerically."""
     cols = {c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS}
     cols.update({c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS})
-    return _make_df(cols, n=n, household_id=household_id)
+    return _make_df(cols, household_id=household_id)
 
 
 @pytest.fixture(scope="module")
@@ -411,9 +412,8 @@ class TestOcclusionBackCalculation:
             {
                 "ElektriciteitTerugleveringHoogDiff": _full_col(n=n, value=3.0),
                 "TerugleveringTotaalNetto": _full_col(n=n, value=5.0),
-                "ElektriciteitTerugleveringLaagDiff": pd.array([pd.NA] * n, dtype="Float64"),
-            },
-            n=n,
+                "ElektriciteitTerugleveringLaagDiff": [pd.NA] * n,
+            }
         )
         result = add_calculated_columns_adaptive(
             df, catalog,
@@ -452,10 +452,9 @@ class TestOcclusionBackCalculation:
                 "HigherTotal": _full_col(n=n, value=7.0),
                 "Correction": _full_col(n=n, value=2.0),  # TotaalNetto = 5.0
                 "ElektriciteitTerugleveringHoogDiff": _full_col(n=n, value=3.0),
-                "TerugleveringTotaalNetto": pd.array([pd.NA] * n, dtype="Float64"),
-                "ElektriciteitTerugleveringLaagDiff": pd.array([pd.NA] * n, dtype="Float64"),
-            },
-            n=n,
+                "TerugleveringTotaalNetto": [pd.NA] * n,
+                "ElektriciteitTerugleveringLaagDiff": [pd.NA] * n,
+            }
         )
         result = add_calculated_columns_adaptive(
             df, catalog,
@@ -482,12 +481,11 @@ class TestOcclusionBackCalculation:
         df = _make_df(
             {
                 "ElektriciteitsgebruikTotaalWarmtepomp": _full_col(n=n, value=5.0),
-                "ElektriciteitsgebruikBoilervatDiff": pd.array([pd.NA] * n, dtype="Float64"),
+                "ElektriciteitsgebruikBoilervatDiff": [pd.NA] * n,
                 **{c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS
                    if c != "ElektriciteitsgebruikBoilervatDiff"},
                 **{c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS},
-            },
-            n=n,
+            }
         )
         result = add_calculated_columns_adaptive(df, real_catalog)
 
@@ -511,12 +509,11 @@ class TestOcclusionBackCalculation:
         df = _make_df(
             {
                 "ElektriciteitsgebruikTotaalWarmtepomp": _full_col(n=n, value=5.0),
-                "ElektriciteitsgebruikBoilervatDiff": pd.array([pd.NA] * n, dtype="Float64"),
+                "ElektriciteitsgebruikBoilervatDiff": [pd.NA] * n,
                 **{c: _full_col(n=n, value=1.0) for c in _RAW_DIFF_COLS
                    if c != "ElektriciteitsgebruikBoilervatDiff"},
                 **{c: _full_col(n=n, value=2.0) for c in _ROOT_DIFF_COLS},
-            },
-            n=n,
+            }
         )
         result = add_calculated_columns_adaptive(df, real_catalog)
         for col in ("Zelfgebruik", "ElektriciteitsgebruikTotaalBruto"):
@@ -613,11 +610,11 @@ class TestGapFillAPocOnARealCatalogRule:
         """
         values = [delivered] * n
         for i in self.HOLES:
-            values[i] = None
+            values[i] = pd.NA
         return _make_df({
-            GAPFILL_INPUTS[i]: pd.array([self.PARTS[i]] * n, dtype="Float64")
+            GAPFILL_INPUTS[i]: _full_col(n=n, value=self.PARTS[i])
             for i in range(3)
-        } | {GAPFILL_TARGET: pd.array(values, dtype="Float64")}, n=n)
+        } | {GAPFILL_TARGET: values})
 
     def _plan(self, real_catalog, frame):
         adapter = DatasetAdapter(real_catalog)

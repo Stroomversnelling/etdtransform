@@ -26,6 +26,7 @@ from etdtransform.aggregate import (
 )
 from etdtransform.calculated_columns import _catalog_hash
 from etdtransform.calculated_stage import _write_calc_provenance
+from etdmap import ids
 
 pytestmark = pytest.mark.integration
 
@@ -71,7 +72,7 @@ class TestDeriveHelper:
         path = str(tmp_path / "agg.parquet")
         pd.DataFrame(
             {
-                "ProjectIdBSV": [1, 1, 1],
+                ids.PROJECT: [1, 1, 1],
                 "Zelfgebruik": pd.array([3.0, 0.0, 6.0], dtype="Float64"),
                 "ZonopwekBruto": pd.array([12.0, 0.0, 8.0], dtype="Float64"),
             }
@@ -89,7 +90,7 @@ class TestDeriveHelper:
         path = str(tmp_path / "agg.parquet")
         pd.DataFrame(
             {
-                "ProjectIdBSV": [1],
+                ids.PROJECT: [1],
                 "Zelfgebruik": pd.array([3.0], dtype="Float64"),
                 "ZonopwekBruto": pd.array([12.0], dtype="Float64"),
                 _ZP: pd.array([-999.0], dtype="Float64"),  # stale, must be replaced
@@ -103,7 +104,7 @@ class TestDeriveHelper:
     def test_missing_component_skips_and_logs(self, tmp_path):
         path = str(tmp_path / "agg.parquet")
         pd.DataFrame(
-            {"ProjectIdBSV": [1], "Zelfgebruik": pd.array([3.0], dtype="Float64")}
+            {ids.PROJECT: [1], "Zelfgebruik": pd.array([3.0], dtype="Float64")}
         ).to_parquet(path)
 
         # No ZonopwekBruto -> not derivable; must not raise, must not add the column.
@@ -132,7 +133,7 @@ def _calculated_tree(tmp_path):
     zp = pd.array([25.0, pd.NA, pd.NA, 100.0, pd.NA, 20.0], dtype="Float64")
     frame = pd.DataFrame(
         {
-            "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
+            ids.PROJECT: pd.array([1] * 6, dtype="Int64"),
             "ReadingDate": ts,
             "Zelfgebruik": zelf,
             "ZonopwekBruto": zon,
@@ -195,7 +196,7 @@ class TestProjectDerive:
 
         def _one(zelfgebruik, zon, ratio):
             return pd.DataFrame({
-                "ProjectIdBSV": pd.array([1], dtype="Int64"),
+                ids.PROJECT: pd.array([1], dtype="Int64"),
                 "ReadingDate": [ts],
                 "Zelfgebruik": pd.array([zelfgebruik], dtype="Float64"),
                 "ZonopwekBruto": pd.array([zon], dtype="Float64"),
@@ -249,8 +250,8 @@ class TestProvenanceHelpers:
              "rhs_vars": "Zelfgebruik,ZonopwekBruto"},
         ]
         hh_rows = [
-            {"HuisIdBSV": 1, "HuisBatchIdBSV": 1 + 1000, "schema_group_id": 0},
-            {"HuisIdBSV": 2, "HuisBatchIdBSV": 2 + 1000, "schema_group_id": 0},
+            {ids.HOUSEHOLD: 1, ids.HOUSEHOLD_BATCH: 1 + 1000, "schema_group_id": 0},
+            {ids.HOUSEHOLD: 2, ids.HOUSEHOLD_BATCH: 2 + 1000, "schema_group_id": 0},
         ]
         _write_calc_provenance(out, plan_rows, hh_rows, "cafef00d")
 
@@ -258,5 +259,5 @@ class TestProvenanceHelpers:
         hh = _read(str(tmp_path / "household_derivation.parquet"))
         assert list(plan["variable"]) == [_ZP]
         assert (plan["catalog_hash"] == "cafef00d").all()
-        assert set(int(x) for x in hh["HuisIdBSV"]) == {1, 2}
+        assert set(int(x) for x in hh[ids.HOUSEHOLD]) == {1, 2}
         assert (hh["schema_group_id"] == 0).all()

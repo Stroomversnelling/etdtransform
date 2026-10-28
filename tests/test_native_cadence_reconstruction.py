@@ -21,21 +21,28 @@ import logging
 
 import pandas as pd
 import pytest
-
+from conftest import cadence_table
+from etdmap import ids
 from etdmap.flags import contiguous_runs
 from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household_batch,
     _treat_frozen_spans,
     add_diff_columns,
 )
+from etdmap.testing import datasets_frame, household_batch_of
+
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
-from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
 CUM = "WatergebruikWarmTapwater"
 DIFF = f"{CUM}Diff"
 NORMAL = 3.0
+
+#: The household the fixture below describes. Its dataset -- the key the
+#: cadence table and the frozen-span sidecar rows are recorded against -- is
+#: ``household_batch_of(HOUSEHOLD)``.
+HOUSEHOLD = 1
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +59,9 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
     A frozen span (the cumulative variable stops advancing, then delivers what it
     held) and an ordinary transmission gap at the grid cadence (readings simply
     absent).
+
+    The cumulative series is the subject, so it is generated here; the frame
+    around it comes from the shared builder.
     """
     values, current = [], 1000.0
     for i in range(n):
@@ -63,13 +73,16 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
             current += NORMAL
         values.append(current)
 
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(values, dtype="Float64"),
-    })
+    df = datasets_frame(
+        {household_batch_of(HOUSEHOLD): {CUM: values}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the cumulative column above,
+        # and the interval column `add_diff_columns` derives below. That is the
+        # production path, and the bit it records is what the treatment reads.
+        pairs=False,
+    )
     delivered = df[CUM].copy()
     if gap is not None:
         df.loc[list(gap), CUM] = pd.NA
@@ -86,11 +99,11 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
 
 def _treated_and_imputed(df):
     rows = _detect_frozen_spans_for_household_batch(
-        df, 1, cadence=cadence_table(df, [CUM])
+        df, household_batch_of(HOUSEHOLD), cadence=cadence_table(df, [CUM])
     )
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], ids.PROJECT, cadence=cadence_table(df, [CUM])
     )
     return out, rows
 

@@ -22,6 +22,7 @@ import pandas as pd
 from unittest.mock import patch
 
 import etdtransform
+from etdmap import ids
 from etdtransform.aggregate import (
     resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
@@ -33,8 +34,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 # Constants
 # ---------------------------------------------------------------------------
 
-SORT_COLS_HH = ("HuisIdBSV", "ProjectIdBSV", "ReadingDate")
-SORT_COLS_PRJ = ("ProjectIdBSV", "ReadingDate")
+SORT_COLS_HH = (ids.HOUSEHOLD, ids.PROJECT, "ReadingDate")
+SORT_COLS_PRJ = (ids.PROJECT, "ReadingDate")
 REL_TOL = 1e-5
 
 # Covers both active method patterns.
@@ -136,12 +137,12 @@ class TestResampleDuckdb:
         base_col = "ElektriciteitNetgebruikHoog"
         for interval in ("15min", "60min"):
             df = _load(str(duckdb_dir / f"household_{interval}"),
-                       sort_cols=["HuisIdBSV", "ProjectIdBSV", "ReadingDate"])
+                       sort_cols=[ids.HOUSEHOLD, ids.PROJECT, "ReadingDate"])
             assert base_col in df.columns, f"{base_col} missing from {interval} output"
             # DuckDB uses SUM() OVER (UNBOUNDED PRECEDING) which skips NULLs.
             # pandas .expanding().sum() is the equivalent (also skips NAs).
             expected = (
-                df.groupby(["HuisIdBSV", "ProjectIdBSV"], group_keys=False)[diff_col]
+                df.groupby([ids.HOUSEHOLD, ids.PROJECT], group_keys=False)[diff_col]
                 .transform(lambda x: x.expanding().sum())
             )
             actual = df[base_col]
@@ -182,7 +183,7 @@ class TestAggregateProjectDuckdb:
         )
 
         manual_avg = (
-            hh.groupby(["ProjectIdBSV", "ReadingDate"])[col]
+            hh.groupby([ids.PROJECT, "ReadingDate"])[col]
             .mean()
             .reset_index()
             .sort_values(list(SORT_COLS_PRJ))

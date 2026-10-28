@@ -13,6 +13,8 @@ impute_and_normalize for every fill shell).
 import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.impute import (
     concatenate_avg_diff_columns,
@@ -55,43 +57,47 @@ class TestAveragingChokePoint:
 
 
 class TestAveragingMicroMixedSupplier:
-    """Action 10d: a mixed-supplier frame -- project 1 (root delivered
-    directly) and project 2 (root combined from splits at mapping; the frame
-    carries the combined root plus the delivered splits). avg_diffs carries
-    NO split columns, the root IS averaged in both projects, and a
-    non-tariff column is unaffected."""
+    """A mixed-supplier frame: project 1 delivers the root directly, project 2
+    has it combined from splits at mapping, so that frame carries the combined
+    root plus the delivered splits. avg_diffs carries NO split columns, the
+    root IS averaged in both projects, and a non-tariff column is
+    unaffected."""
 
     def _frame(self):
-        n = 12
-        dates = pd.date_range("2026-01-01", periods=n, freq="5min")
-        rows = []
+        per_dataset = {}
+        project_of = {}
         for project, household, root_value in (
             (1, 1, 1.0), (1, 2, 3.0), (2, 3, 2.0), (2, 4, 4.0),
         ):
-            rows.append(pd.DataFrame({
-                "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-                "HuisBatchIdBSV": pd.array([value + 1000 for value in [household] * n], dtype="Int64"),
-                "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
-                "ReadingDate": dates,
-                ROOT_DIFF: pd.array([root_value] * n, dtype="Float64"),
-                # project 2 also carries its delivered splits (kept as mapped)
-                HOOG_DIFF: pd.array(
-                    [root_value / 2 if project == 2 else pd.NA] * n,
-                    dtype="Float64",
-                ),
-                LAAG_DIFF: pd.array(
-                    [root_value / 2 if project == 2 else pd.NA] * n,
-                    dtype="Float64",
-                ),
-                WTW_DIFF: pd.array([0.5] * n, dtype="Float64"),
-            }))
-        return pd.concat(rows, ignore_index=True)
+            dataset = household_batch_of(household)
+            project_of[dataset] = project
+            # Project 2 also carries its delivered splits (kept as mapped);
+            # project 1 delivered the root and no splits.
+            split = root_value / 2 if project == 2 else pd.NA
+            per_dataset[dataset] = {
+                ROOT_DIFF: root_value,
+                HOOG_DIFF: split,
+                LAAG_DIFF: split,
+            }
+        return datasets_frame(
+            per_dataset,
+            project_of=project_of,
+            start="2026-01-01",
+            freq="5min",
+            tz=None,
+            n_rows=12,
+            # No cumulative counterpart is completed: the frame holds only
+            # what the suppliers delivered, and a counterpart for a split
+            # would be a column neither of them sent.
+            pairs=False,
+            **{WTW_DIFF: 0.5},
+        )
 
     def test_avg_diffs_has_root_not_splits(self):
         df = self._frame()
         diff_columns = get_diff_columns([ROOT, HOOG, LAAG, WTW])
         avg_dict = project_averages(
-            df, "ProjectIdBSV", diff_columns,
+            df, ids.PROJECT, diff_columns,
             bounds={},
             cadence=cadence_table(df, [ROOT, WTW]),
             grid_minutes=5,
@@ -101,7 +107,7 @@ class TestAveragingMicroMixedSupplier:
         )
         assert set(avg_dict) == {ROOT_DIFF, WTW_DIFF}
 
-        diffs = concatenate_avg_diff_columns(avg_dict, "ProjectIdBSV")
+        diffs = concatenate_avg_diff_columns(avg_dict, ids.PROJECT)
         avg_cols = [c for c in diffs.columns if c.endswith("_avg")]
         assert f"{ROOT_DIFF}_avg" in avg_cols
         assert f"{WTW_DIFF}_avg" in avg_cols
@@ -109,7 +115,7 @@ class TestAveragingMicroMixedSupplier:
         assert f"{LAAG_DIFF}_avg" not in avg_cols
 
         # The root average is the project mean of the delivered roots.
-        by_project = diffs.groupby("ProjectIdBSV")[f"{ROOT_DIFF}_avg"].mean()
+        by_project = diffs.groupby(ids.PROJECT)[f"{ROOT_DIFF}_avg"].mean()
         assert float(by_project.loc[1]) == pytest.approx(2.0)
         assert float(by_project.loc[2]) == pytest.approx(3.0)
         # The non-tariff column is unaffected by the exclusion.
@@ -121,22 +127,27 @@ class TestFillSkipsSplits:
     it, and its delivered values (including gaps) stay byte-identical."""
 
     def _frame(self):
-        n = 8
         split_diff = [0.5, 0.5, pd.NA, pd.NA, 0.5, 0.5, 0.5, 0.5]
         split_cum = [0.5, 1.0, pd.NA, pd.NA, 2.0, 2.5, 3.0, 3.5]
-        return pd.DataFrame({
-            "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-            ROOT: pd.array([1.0, 2.0, pd.NA, pd.NA, 5.0, 6.0, 7.0, 8.0], dtype="Float64"),
-            ROOT_DIFF: pd.array([1.0, 1.0, pd.NA, pd.NA, pd.NA, 1.0, 1.0, 1.0], dtype="Float64"),
-            f"{ROOT_DIFF}_avg": pd.array([1.0] * n, dtype="Float64"),
-            HOOG: pd.array(split_cum, dtype="Float64"),
-            HOOG_DIFF: pd.array(split_diff, dtype="Float64"),
-            LAAG: pd.array(split_cum, dtype="Float64"),
-            LAAG_DIFF: pd.array(split_diff, dtype="Float64"),
-        })
+        return datasets_frame(
+            {
+                household_batch_of(1): {
+                    ROOT: [1.0, 2.0, pd.NA, pd.NA, 5.0, 6.0, 7.0, 8.0],
+                    ROOT_DIFF: [1.0, 1.0, pd.NA, pd.NA, pd.NA, 1.0, 1.0, 1.0],
+                    f"{ROOT_DIFF}_avg": [1.0] * 8,
+                    HOOG: split_cum,
+                    HOOG_DIFF: split_diff,
+                    LAAG: split_cum,
+                    LAAG_DIFF: split_diff,
+                },
+            },
+            start="2026-01-01",
+            freq="5min",
+            tz=None,
+            # Every pair is stated here -- the delivered cumulative register
+            # of the root and of both splits -- so none is completed.
+            pairs=False,
+        )
 
     def test_split_gets_no_flags_and_stays_untouched(self):
         frame = self._frame()
@@ -144,7 +155,7 @@ class TestFillSkipsSplits:
         out, _, _ = impute_and_normalize(
             frame,
             [ROOT, HOOG, LAAG],
-            "ProjectIdBSV",
+            ids.PROJECT,
             cadence=cadence_table(frame, [ROOT, HOOG, LAAG]),
         )
         # The root was processed: its flag column exists and the gap filled.
@@ -169,6 +180,6 @@ class TestFillSkipsSplits:
             impute_and_normalize(
                 frame,
                 [HOOG, LAAG],
-                "ProjectIdBSV",
+                ids.PROJECT,
                 cadence=cadence_table(frame, [HOOG, LAAG]),
             )

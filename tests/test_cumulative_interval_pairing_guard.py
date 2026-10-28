@@ -14,6 +14,7 @@ import pytest
 
 from etdmap.data_model import complement_column
 from etdtransform.impute import assert_cumulative_interval_pairs_complete
+from etdmap import ids
 
 #: A real pair from the committed data model whose names do NOT follow the
 #: Diff convention -- the case a suffix-based guard gets wrong.
@@ -45,7 +46,7 @@ class TestCompletePairsPass:
 
     def test_columns_with_no_declared_complement_are_ignored(self):
         assert_cumulative_interval_pairs_complete(
-            ["HuisIdBSV", "ReadingDate", "ProjectIdBSV"]
+            [ids.HOUSEHOLD, "ReadingDate", ids.PROJECT]
         )
 
     def test_an_empty_set_passes(self):
@@ -91,7 +92,7 @@ class TestTheCalculatedStageCallsIt:
     def _source(tmp_path, columns):
         """A sharded imputed artifact holding only *columns*.
 
-        The frame is spelled out rather than built by `household_frame`,
+        The frame is spelled out rather than built by `dataset_frame`,
         because that helper completes every pair from the model and a HALF
         pair is exactly what this fixture has to hold. The LAYOUT is the real
         one, so the guard is shown firing on the shape the stage actually
@@ -102,7 +103,7 @@ class TestTheCalculatedStageCallsIt:
 
         n = 4
         frame = pd_.DataFrame({
-            "ProjectIdBSV": pd_.array([1] * n, dtype="Int64"),
+            ids.PROJECT: pd_.array([1] * n, dtype="Int64"),
             "ReadingDate": pd_.date_range("2024-01-01", periods=n, freq="5min", tz="UTC"),
             **{c: pd_.array([1.0] * n, dtype="Float64") for c in columns},
         })

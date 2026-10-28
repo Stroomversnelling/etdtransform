@@ -14,8 +14,10 @@ a column ahead of one that actually moves.
 
 import pandas as pd
 import pytest
-
 from conftest import cadence_table, project_averages
+from etdmap import ids
+from etdmap.testing import PAIRS_EMPTY, datasets_frame, household_batch_of
+
 from etdtransform.impute import (
     _coverage_duty_by_project,
     write_coverage_duty,
@@ -29,8 +31,10 @@ AVG = f"{DIFF}_avg"
 
 
 def _avg_frame(projects, values):
+    """A project average as ``_coverage_duty_by_project`` reads it: one slot
+    per value, no household anywhere, and consecutive slots across projects."""
     return pd.DataFrame({
-        "ProjectIdBSV": pd.array(projects, dtype="Int64"),
+        ids.PROJECT: pd.array(projects, dtype="Int64"),
         "ReadingDate": pd.date_range("2026-01-01", periods=len(projects), freq="5min"),
         AVG: pd.array(values, dtype="Float64"),
     })
@@ -39,19 +43,19 @@ def _avg_frame(projects, values):
 class TestCoverageIsTheShareOfSlotsWithAValue:
     def test_every_slot_covered(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 1], [0.1, 0.2, 0.3]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1, 1], [0.1, 0.2, 0.3]), DIFF, ids.PROJECT
         )
         assert float(out["coverage"].iloc[0]) == 1.0
 
     def test_half_the_slots_covered(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 1, 1], [0.1, pd.NA, 0.3, pd.NA]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1, 1, 1], [0.1, pd.NA, 0.3, pd.NA]), DIFF, ids.PROJECT
         )
         assert float(out["coverage"].iloc[0]) == 0.5
 
     def test_nothing_covered(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1], [pd.NA, pd.NA]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1], [pd.NA, pd.NA]), DIFF, ids.PROJECT
         )
         assert float(out["coverage"].iloc[0]) == 0.0
 
@@ -59,7 +63,7 @@ class TestCoverageIsTheShareOfSlotsWithAValue:
 class TestDutyIsMeasuredAmongTheCoveredSlotsOnly:
     def test_all_covered_slots_carry_consumption(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1], [0.1, 0.2]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1], [0.1, 0.2]), DIFF, ids.PROJECT
         )
         assert float(out["duty"].iloc[0]) == 1.0
 
@@ -67,7 +71,7 @@ class TestDutyIsMeasuredAmongTheCoveredSlotsOnly:
         """Zero is a measurement, so it counts for coverage and not for duty.
         Conflating the two would read an idle device as an absent one."""
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 1, 1], [0.0, 0.0, 0.0, 0.4]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1, 1, 1], [0.0, 0.0, 0.0, 0.4]), DIFF, ids.PROJECT
         )
         row = out.iloc[0]
         assert float(row["coverage"]) == 1.0
@@ -75,7 +79,7 @@ class TestDutyIsMeasuredAmongTheCoveredSlotsOnly:
 
     def test_an_absent_slot_is_excluded_from_the_denominator(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 1, 1], [0.4, pd.NA, pd.NA, pd.NA]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1, 1, 1], [0.4, pd.NA, pd.NA, pd.NA]), DIFF, ids.PROJECT
         )
         row = out.iloc[0]
         assert float(row["coverage"]) == 0.25
@@ -83,7 +87,7 @@ class TestDutyIsMeasuredAmongTheCoveredSlotsOnly:
 
     def test_no_covered_slots_gives_zero_not_a_division(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1], [pd.NA, pd.NA]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1], [pd.NA, pd.NA]), DIFF, ids.PROJECT
         )
         assert float(out["duty"].iloc[0]) == 0.0
 
@@ -91,21 +95,21 @@ class TestDutyIsMeasuredAmongTheCoveredSlotsOnly:
 class TestOneRowPerProjectAndColumn:
     def test_each_project_is_counted_separately(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 2, 2], [0.1, 0.2, 0.3, pd.NA]), DIFF, "ProjectIdBSV"
-        ).set_index("ProjectIdBSV")
+            _avg_frame([1, 1, 2, 2], [0.1, 0.2, 0.3, pd.NA]), DIFF, ids.PROJECT
+        ).set_index(ids.PROJECT)
         assert float(out.loc[1, "coverage"]) == 1.0
         assert float(out.loc[2, "coverage"]) == 0.5
 
     def test_the_column_is_named_on_every_row(self):
         out = _coverage_duty_by_project(
-            _avg_frame([1, 2], [0.1, 0.2]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 2], [0.1, 0.2]), DIFF, ids.PROJECT
         )
         assert set(out["column"]) == {DIFF}
 
     def test_the_counts_behind_the_shares_are_kept(self):
         """A share alone cannot say whether it rests on three slots or a million."""
         out = _coverage_duty_by_project(
-            _avg_frame([1, 1, 1, 1], [0.0, 0.4, pd.NA, pd.NA]), DIFF, "ProjectIdBSV"
+            _avg_frame([1, 1, 1, 1], [0.0, 0.4, pd.NA, pd.NA]), DIFF, ids.PROJECT
         ).iloc[0]
         assert int(out["slots"]) == 4
         assert int(out["present"]) == 2
@@ -121,7 +125,7 @@ class TestTheArtifact:
                         columns={AVG: f"{col}_avg"}
                     ),
                     col,
-                    "ProjectIdBSV",
+                    ids.PROJECT,
                 )
             }
             for col in columns
@@ -157,15 +161,17 @@ class TestItAgreesWithTheScalarTheAveragingAlreadyReported:
     quantity at different grain, so a single project must give both."""
 
     def test_one_project_matches_the_scalar(self):
-        frame = pd.DataFrame({
-            "HuisIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * 4], dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "ReadingDate": pd.date_range("2026-01-01", periods=4, freq="5min"),
-            DIFF: pd.array([0.0, 0.4, 0.2, 0.1], dtype="Float64"),
-        })
+        # PAIRS_EMPTY: the cumulative counterpart is present and empty, so the
+        # averaging takes the dataset's volume from the values stated here.
+        frame = datasets_frame(
+            {household_batch_of(1): {DIFF: [0.0, 0.4, 0.2, 0.1]}},
+            start="2026-01-01",
+            freq="5min",
+            tz=None,
+            pairs=PAIRS_EMPTY,
+        )
         result = project_averages(
-            frame, "ProjectIdBSV", [DIFF],
+            frame, ids.PROJECT, [DIFF],
             cadence=cadence_table(frame, [CUM]), grid_minutes=5,
         )[DIFF]
         row = result["coverage_duty"].iloc[0]

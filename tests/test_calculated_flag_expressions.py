@@ -23,6 +23,8 @@ Fixtures are small synthetic frames; never real data.
 import ibis
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.calculated_flags import (
     calculated_flag_expressions,
@@ -42,16 +44,22 @@ FLAG = impute_type_column(COLUMN)
 
 
 def _frame(values, households=None, flags=None):
-    n = len(values)
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array(households or [1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in households or [1] * n], dtype="Int64"),
-        "ReadingDate": pd.date_range("2024-01-01", periods=n, freq="5min", tz="UTC"),
-        COLUMN: pd.array(values, dtype="Float64"),
-    })
-    if flags is not None:
-        df[FLAG] = pd.array(flags, dtype="Int64")
-    return df
+    """One dataset per household named in *households*, carrying the flag
+    column where *flags* states one per row.
+
+    ``pairs=False`` leaves COLUMN without a cumulative counterpart: the values
+    stated here are what every expression below is judged on.
+    """
+    per_household = households or [1] * len(values)
+    per_dataset: dict = {}
+    for row, (household, value) in enumerate(zip(per_household, values)):
+        columns = per_dataset.setdefault(
+            household_batch_of(household), {COLUMN: []}
+        )
+        columns[COLUMN].append(value)
+        if flags is not None:
+            columns.setdefault(FLAG, []).append(flags[row])
+    return datasets_frame(per_dataset, dtypes={FLAG: "Int64"}, pairs=False)
 
 
 def _flags(df, derived=None, undefined=None):
@@ -154,7 +162,7 @@ class TestUndefinedCalculation:
     def test_the_condition_marks_the_rows_it_selects(self):
         flags = _flags(
             _frame([1.0, pd.NA, pd.NA], households=[1, 2, 3]),
-            undefined=lambda t: {COLUMN: t["HuisIdBSV"] == 2},
+            undefined=lambda t: {COLUMN: t[ids.HOUSEHOLD] == 2},
         )
         undefined = (flags & ImputeType.CALCULATED_UNDEFINED.value) != 0
         assert list(undefined) == [False, True, False]
@@ -166,7 +174,7 @@ class TestUndefinedCalculation:
     def test_an_undefined_cell_is_not_marked_calculated(self):
         # Nothing was calculated there: the cell holds no value.
         flags = _flags(
-            _frame([pd.NA]), undefined=lambda t: {COLUMN: t["HuisIdBSV"] == 1},
+            _frame([pd.NA]), undefined=lambda t: {COLUMN: t[ids.HOUSEHOLD] == 1},
         )
         assert int((flags & ImputeType.CALCULATED_COLUMN.value).sum()) == 0
         assert bool(flags.iloc[0] & ImputeType.CALCULATED_UNDEFINED.value)
@@ -175,7 +183,7 @@ class TestUndefinedCalculation:
         # The mask is keyed per column; one column's undefined rows say nothing
         # about another's.
         flags = _flags(
-            _frame([pd.NA]), undefined=lambda t: {"SomeOtherColumn": t["HuisIdBSV"] == 1},
+            _frame([pd.NA]), undefined=lambda t: {"SomeOtherColumn": t[ids.HOUSEHOLD] == 1},
         )
         assert int((flags & ImputeType.CALCULATED_UNDEFINED.value).sum()) == 0
 

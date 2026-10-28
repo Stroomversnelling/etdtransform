@@ -9,14 +9,15 @@ with no slots at all.
 ``ibis.memtable()`` wraps each frame, which is what the averaging takes -- the
 pipeline passes a lazy table from ``ibis.read_parquet`` instead.
 """
+import ibis
 import numpy as np
 import pandas as pd
 import pytest
-
-import ibis
+from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.impute import calculate_average_diff_ibis
-from conftest import cadence_table
 
 
 def _cadence(frame, diff_columns):
@@ -30,7 +31,9 @@ def _cadence(frame, diff_columns):
 
 pytestmark = pytest.mark.unit
 
-# Two projects: 20 normal + 1 outlier per project.
+# Two projects: 20 normal + 1 outlier household per project. Each household's
+# dataset -- the key of its series, its cadence and its contribution to the
+# average -- is `household_batch_of` of its number.
 # Outlier values are ~15-20x larger than the normal range so the
 # 95th-percentile upper-bound logic clearly excludes them.
 _P1_NORMAL = list(range(101, 121))
@@ -40,51 +43,66 @@ _P2_OUTLIER = 299
 
 DIFF_COLS = ["ElektriciteitNetgebruikLaagDiff", "ZonopwekVerbruikDiff"]
 
+#: Slots every dataset in the module fixture reports at.
+SLOTS = 20
+
 # Rows whose measurement values are set to pd.NA to verify null handling.
 # We use (project_id, household_id, timestamp_index) tuples to identify them.
 _NULL_SLOTS = {(1, 105, 3), (1, 110, 7), (2, 207, 0), (2, 215, 12)}
+
+# Every frame below carries interval columns alone, built with `pairs=False`.
+# The averaging takes a dataset's volume from the cumulative counterpart
+# wherever that column holds a value, so a completed counterpart would supply
+# the averages in place of the values and the nulls each test states.
 
 
 @pytest.fixture(scope="module")
 def diff_fixture_df() -> pd.DataFrame:
     rng = np.random.default_rng(42)
-    dates = pd.date_range("2023-01-01", periods=20, freq="5min").as_unit("us")
-    rows = []
+    per_dataset = {}
+    project_of = {}
 
     for project_id, normal_ids, outlier_id in [
         (1, _P1_NORMAL, _P1_OUTLIER),
         (2, _P2_NORMAL, _P2_OUTLIER),
     ]:
         for household_id in normal_ids:
-            for t_idx, dt in enumerate(dates):
-                null_this = (project_id, household_id, t_idx) in _NULL_SLOTS
-                rows.append({
-                    "ProjectIdBSV": project_id,
-                    "HuisIdBSV": household_id,
-                    "HuisBatchIdBSV": household_id + 1000,
-                    "ReadingDate": dt,
-                    "ElektriciteitNetgebruikLaagDiff": pd.NA if null_this else float(rng.uniform(1.0, 10.0)),
-                    "ZonopwekVerbruikDiff": pd.NA if null_this else float(rng.uniform(0.5, 5.0)),
-                })
-        for dt in dates:
-            rows.append({
-                "ProjectIdBSV": project_id,
-                "HuisIdBSV": outlier_id,
-                "HuisBatchIdBSV": outlier_id + 1000,
-                "ReadingDate": dt,
-                "ElektriciteitNetgebruikLaagDiff": float(rng.uniform(150.0, 300.0)),
-                "ZonopwekVerbruikDiff": float(rng.uniform(150.0, 300.0)),
-            })
+            low_tariff, solar = [], []
+            for t_idx in range(SLOTS):
+                if (project_id, household_id, t_idx) in _NULL_SLOTS:
+                    low_tariff.append(pd.NA)
+                    solar.append(pd.NA)
+                else:
+                    low_tariff.append(float(rng.uniform(1.0, 10.0)))
+                    solar.append(float(rng.uniform(0.5, 5.0)))
+            dataset = household_batch_of(household_id)
+            per_dataset[dataset] = {
+                "ElektriciteitNetgebruikLaagDiff": low_tariff,
+                "ZonopwekVerbruikDiff": solar,
+            }
+            project_of[dataset] = project_id
 
-    df = pd.DataFrame(rows).astype({
-        "ProjectIdBSV": "Int64",
-        "HuisIdBSV": "Int64",
-        "HuisBatchIdBSV": "Int64",
-        "ElektriciteitNetgebruikLaagDiff": "Float64",
-        "ZonopwekVerbruikDiff": "Float64",
-    })
-    # Row-by-row construction reverts timestamps to ns; pin to us to match
-    # DuckDB's output precision and the parquet files produced by the pipeline.
+        low_tariff, solar = [], []
+        for _ in range(SLOTS):
+            low_tariff.append(float(rng.uniform(150.0, 300.0)))
+            solar.append(float(rng.uniform(150.0, 300.0)))
+        dataset = household_batch_of(outlier_id)
+        per_dataset[dataset] = {
+            "ElektriciteitNetgebruikLaagDiff": low_tariff,
+            "ZonopwekVerbruikDiff": solar,
+        }
+        project_of[dataset] = project_id
+
+    df = datasets_frame(
+        per_dataset,
+        start="2023-01-01",
+        freq="5min",
+        project_of=project_of,
+        tz=None,
+        pairs=False,
+    )
+    # Microsecond timestamps, matching DuckDB's output precision and the
+    # parquet files produced by the pipeline.
     df["ReadingDate"] = df["ReadingDate"].astype("datetime64[us]")
     return df
 
@@ -99,14 +117,14 @@ def test_ibis_memtable_preserves_nulls(diff_fixture_df):
     tbl = ibis.memtable(diff_fixture_df)
     result = tbl.execute().astype({c: diff_fixture_df[c].dtype for c in diff_fixture_df.columns})
 
-    sort_cols = ["HuisIdBSV", "ReadingDate"]
+    sort_cols = [ids.HOUSEHOLD_BATCH, ids.READING_DATE]
     original = diff_fixture_df.sort_values(sort_cols).reset_index(drop=True)
     restored = result.sort_values(sort_cols).reset_index(drop=True)
 
     for col in DIFF_COLS:
         orig_nulls = _null_positions(original, col)
         rest_nulls = _null_positions(restored, col)
-    assert orig_nulls == rest_nulls, (
+        assert orig_nulls == rest_nulls, (
             f"{col}: null positions changed after ibis round-trip. "
             f"original={orig_nulls}, restored={rest_nulls}"
         )
@@ -126,17 +144,19 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
     Null-in, null-out still holds: no slot comes back empty, because one
     household did cover every one of them.
     """
-    dates = pd.date_range("2024-01-01", periods=3, freq="5min")
-    mini = pd.DataFrame({
-        "ProjectIdBSV": pd.array([1, 1, 1, 1, 1, 1], dtype="Int64"),
-        "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001, 1001, 1001, 1002, 1002, 1002], dtype="Int64"),
-        "ReadingDate": list(dates) * 2,
-        "ZonopwekVerbruikDiff": pd.array([2.0, pd.NA, 4.0, 6.0, 6.0, 6.0], dtype="Float64"),
-    })
+    mini = datasets_frame(
+        {
+            household_batch_of(1): {"ZonopwekVerbruikDiff": [2.0, pd.NA, 4.0]},
+            household_batch_of(2): {"ZonopwekVerbruikDiff": [6.0, 6.0, 6.0]},
+        },
+        start="2024-01-01",
+        freq="5min",
+        tz=None,
+        pairs=False,
+    )
 
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        ibis.memtable(mini), ids.PROJECT, ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
         # Two households, which is smaller than a project: the household floor
         # would empty every slot, and what is under test here is which values
@@ -163,20 +183,22 @@ def test_empty_project_edge_cases():
       C) One 'normal' project alongside a zero-only project ->
          normal project processes correctly; zero project gets null upper_bound.
     """
-    dates = pd.date_range("2024-06-01", periods=3, freq="5min")
-
     # Project 1: all zeros. Project 2: normal non-zero values.
-    mini = pd.DataFrame({
-        "ProjectIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
-        "HuisIdBSV":    pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001, 1001, 1001, 1002, 1002, 1002], dtype="Int64"),
-        "ReadingDate":  list(dates) * 2,
-        "ZonopwekVerbruikDiff":     pd.array([0.0, 0.0, 0.0, 3.0, 5.0, 4.0], dtype="Float64"),
-    })
+    mini = datasets_frame(
+        {
+            household_batch_of(1): {"ZonopwekVerbruikDiff": [0.0, 0.0, 0.0]},
+            household_batch_of(2): {"ZonopwekVerbruikDiff": [3.0, 5.0, 4.0]},
+        },
+        start="2024-06-01",
+        freq="5min",
+        tz=None,
+        project_of={household_batch_of(1): 1, household_batch_of(2): 2},
+        pairs=False,
+    )
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        ibis.memtable(mini), ids.PROJECT, ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
         # Two households, which is smaller than a project: the household floor
         # would empty every slot, and what is under test here is which values
@@ -192,24 +214,24 @@ def test_empty_project_edge_cases():
     # slots exist and come back carrying pd.NA. A slot with no value is not
     # a missing slot, and the merge downstream is on
     # (project, ReadingDate).
-    assert set(avg["ProjectIdBSV"].dropna()) == {1, 2}, (
-            f"{label}: both projects should appear, got "
-            f"{set(avg['ProjectIdBSV'].dropna())}"
+    assert set(avg[ids.PROJECT].dropna()) == {1, 2}, (
+            "both projects should appear, got "
+            f"{set(avg[ids.PROJECT].dropna())}"
         )
     # Zero is a measurement, so an all-zero project averages to 0.0. That is
     # a different fact from pd.NA, which means nothing was measured, and the
     # two must not be conflated.
     assert (
-            avg.loc[avg["ProjectIdBSV"] == 1, "ZonopwekVerbruikDiff_avg"].dropna() == 0.0
-        ).all(), f"{label}: an all-zero project should average to zero, not NA"
-    assert avg.loc[avg["ProjectIdBSV"] == 2, "ZonopwekVerbruikDiff_avg"].notna().any(), (
-            f"{label}: project 2 has data and should have an average"
+            avg.loc[avg[ids.PROJECT] == 1, "ZonopwekVerbruikDiff_avg"].dropna() == 0.0
+        ).all(), "an all-zero project should average to zero, not NA"
+    assert avg.loc[avg[ids.PROJECT] == 2, "ZonopwekVerbruikDiff_avg"].notna().any(), (
+            "project 2 has data and should have an average"
         )
-    # Three slots for each of the two projects, now that project 1 is no
-    # longer dropped wholesale.
-    assert len(avg) == 6, f"{label}: expected 3 slots per project, got {len(avg)}"
-    assert len(avg[avg["ProjectIdBSV"] == 2]) == 3, (
-            f"{label}: project 2 should still have its 3 slots"
+    # Three slots for each of the two projects: a project with nothing to
+    # average keeps its slots rather than being dropped wholesale.
+    assert len(avg) == 6, f"expected 3 slots per project, got {len(avg)}"
+    assert len(avg[avg[ids.PROJECT] == 2]) == 3, (
+            "project 2 should still have its 3 slots"
         )
 
 
@@ -224,21 +246,28 @@ def test_flagged_values_excluded_in_both_paths():
     """
     from etdmap.flags import MappingFlag, flag_column
 
-    dates = pd.date_range("2024-06-01", periods=3, freq="5min")
-    mini = pd.DataFrame({
-        "ProjectIdBSV": pd.array([1] * 6, dtype="Int64"),
-        "HuisIdBSV": pd.array([1, 1, 1, 2, 2, 2], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001, 1001, 1001, 1002, 1002, 1002], dtype="Int64"),
-        "ReadingDate": list(dates) * 2,
-        "ZonopwekVerbruikDiff": pd.array([3.0, 3.0, 3.0, 9.0, 9.0, 9.0], dtype="Float64"),
-        flag_column("ZonopwekVerbruikDiff"): pd.array(
-            [0, 0, 0] + [MappingFlag.FROZEN_SPAN.value] * 3, dtype="Int64"
-        ),
-    })
+    findings = flag_column("ZonopwekVerbruikDiff")
+    mini = datasets_frame(
+        {
+            household_batch_of(1): {
+                "ZonopwekVerbruikDiff": [3.0, 3.0, 3.0],
+                findings: [0, 0, 0],
+            },
+            household_batch_of(2): {
+                "ZonopwekVerbruikDiff": [9.0, 9.0, 9.0],
+                findings: [MappingFlag.FROZEN_SPAN.value] * 3,
+            },
+        },
+        start="2024-06-01",
+        freq="5min",
+        tz=None,
+        dtypes={findings: "Int64"},
+        pairs=False,
+    )
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        ibis.memtable(mini), ids.PROJECT, ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
         # Two households, which is smaller than a project: the household floor
         # would empty every slot, and what is under test here is which values
@@ -247,36 +276,34 @@ def test_flagged_values_excluded_in_both_paths():
     )
 
     result = result_ibis
-    assert result["ZonopwekVerbruikDiff"]["n_flagged"] == 3, f"{label}: wrong flagged count"
+    assert result["ZonopwekVerbruikDiff"]["n_flagged"] == 3, "wrong flagged count"
     avg = result["ZonopwekVerbruikDiff"]["avg_diff"]["ZonopwekVerbruikDiff_avg"].astype(float)
-    assert (avg == 3.0).all(), f"{label}: flagged values shaped the average"
+    assert (avg == 3.0).all(), "flagged values shaped the average"
 
 
 
 def test_all_null_diffs_edge_case():
     """A project whose every value is pd.NA gets a row per slot, carrying pd.NA.
 
-    It used to get no rows at all, but only as a side effect of the relative
-    household filter: a household whose maximum was NA failed
-    `max < 2 x p95(maxima)` and was dropped, taking its slots with it. Plan group
-    K removed that filter, so the slots survive with no value -- which is what
-    they are. A slot that exists and has no average is not the same as a slot
-    that does not exist, and the merge downstream is on (project, ReadingDate).
+    A slot that exists and has no average is not the same as a slot that does
+    not exist, and the merge downstream is on (project, ReadingDate), so the
+    slots must survive the averaging with no value rather than being dropped
+    along with the household that had nothing to contribute.
 
     Both paths agree on this, which is the point of the assertion.
     """
-    dates = pd.date_range("2024-06-01", periods=2, freq="5min")
-    mini = pd.DataFrame({
-        "ProjectIdBSV": pd.array([1, 1], dtype="Int64"),
-        "HuisIdBSV":    pd.array([1, 1], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([1001, 1001], dtype="Int64"),
-        "ReadingDate":  list(dates),
-        "ZonopwekVerbruikDiff":     pd.array([pd.NA, pd.NA], dtype="Float64"),
-    })
+    absent = [pd.NA, pd.NA]
+    mini = datasets_frame(
+        {household_batch_of(1): {"ZonopwekVerbruikDiff": absent}},
+        start="2024-06-01",
+        freq="5min",
+        tz=None,
+        pairs=False,
+    )
     mini["ReadingDate"] = mini["ReadingDate"].astype("datetime64[us]")
 
     result_ibis = calculate_average_diff_ibis(
-        ibis.memtable(mini), "ProjectIdBSV", ["ZonopwekVerbruikDiff"],
+        ibis.memtable(mini), ids.PROJECT, ["ZonopwekVerbruikDiff"],
         cadence=_cadence(mini, ["ZonopwekVerbruikDiff"]), grid_minutes=5,
         # Two households, which is smaller than a project: the household floor
         # would empty every slot, and what is under test here is which values
@@ -287,9 +314,9 @@ def test_all_null_diffs_edge_case():
     result = result_ibis
     avg = result["ZonopwekVerbruikDiff"]["avg_diff"]
 
-    assert len(avg) == len(dates), (
-            f"{label}: expected one row per slot, got {len(avg)}"
+    assert len(avg) == len(absent), (
+            f"expected one row per slot, got {len(avg)}"
         )
     assert avg["ZonopwekVerbruikDiff_avg"].isna().all(), (
-            f"{label}: an all-null project has no average to report"
+            "an all-null project has no average to report"
         )

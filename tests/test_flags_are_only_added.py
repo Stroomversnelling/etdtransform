@@ -21,9 +21,11 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 import etdtransform.vectorized_impute as vectorized_impute
-from conftest import cadence_table
 from etdtransform.vectorized_impute import (
     ImputeType,
     apply_thresholds,
@@ -52,16 +54,18 @@ FILL_ROUTES = (
 
 
 def _frame(cumulative, diffs, averages):
-    n = len(cumulative)
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(cumulative, dtype="Float64"),
-        DIFF: pd.array(diffs, dtype="Float64"),
-        f"{DIFF}_avg": pd.array(averages, dtype="Float64"),
-    })
+    """One dataset's rows, as the fill reads them: the register, its interval
+    column, and the project average the scaling routes read."""
+    return datasets_frame(
+        {household_batch_of(1): {
+            CUM: list(cumulative),
+            DIFF: list(diffs),
+            f"{DIFF}_avg": list(averages),
+        }},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+    )
 
 
 def _routes_per_cell(filled):
@@ -172,7 +176,7 @@ class TestTheFillRoutesAreExclusive:
     def test_no_cell_carries_two_routes(self, label, cumulative, diffs, averages):
         frame = _frame(cumulative, diffs, averages)
         filled, _, _ = impute_and_normalize(
-            frame, [CUM], "ProjectIdBSV", cadence=cadence_table(frame, [CUM])
+            frame, [CUM], ids.PROJECT, cadence=cadence_table(frame, [CUM])
         )
         counts = _routes_per_cell(filled)
         assert (counts <= 1).all(), (
@@ -186,7 +190,7 @@ class TestTheFillRoutesAreExclusive:
             [100.0, pd.NA, pd.NA, 104.0], [0.0, pd.NA, pd.NA, pd.NA], [1.0] * 4
         )
         filled, _, _ = impute_and_normalize(
-            frame, [CUM], "ProjectIdBSV", cadence=cadence_table(frame, [CUM])
+            frame, [CUM], ids.PROJECT, cadence=cadence_table(frame, [CUM])
         )
         in_gap = filled[CUM].isna() | filled.index.isin([1, 2, 3])
         assert (_routes_per_cell(filled)[in_gap] == 1).all()
@@ -196,14 +200,25 @@ class TestTheThresholdPassAccumulates:
     """It runs after the fill, so it must add to what the route recorded."""
 
     def _with_flag(self, preset):
-        df = pd.DataFrame({
-            "HuisIdBSV": pd.array([1, 1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1001, 1001], dtype="Int64"),
-            DIFF: pd.array([0.5, 99.0], dtype="Float64"),
-            f"{DIFF}_avg": pd.array([0.5, 0.5], dtype="Float64"),
-            f"{DIFF}_impute_type": pd.array([preset, preset], dtype="Int64"),
-            f"{DIFF}_is_imputed": pd.array([True, True], dtype="boolean"),
-        })
+        """Two rows already carrying *preset* in the findings column, the second
+        of them out of bounds. No register: the pass reads the interval column
+        and its two findings columns only."""
+        df = datasets_frame(
+            {household_batch_of(1): {
+                DIFF: [0.5, 99.0],
+                f"{DIFF}_avg": [0.5, 0.5],
+                f"{DIFF}_impute_type": [preset, preset],
+                f"{DIFF}_is_imputed": [True, True],
+            }},
+            start="2026-01-01",
+            freq="5min",
+            tz=None,
+            pairs=False,
+            dtypes={
+                f"{DIFF}_impute_type": "Int64",
+                f"{DIFF}_is_imputed": "boolean",
+            },
+        )
         return apply_thresholds(
             df, 0.0, 1.0, DIFF, f"{DIFF}_avg",
             f"{DIFF}_impute_type", f"{DIFF}_is_imputed",

@@ -23,14 +23,16 @@ import logging
 
 import pandas as pd
 import pytest
-
+from conftest import cadence_table, project_averages
+from etdmap import ids
 from etdmap.flags import MappingFlag, flag_column
 from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household_batch,
     _treat_frozen_spans,
 )
+from etdmap.testing import datasets_frame, household_batch_of
+
 from etdtransform.vectorized_impute import impute_and_normalize
-from conftest import cadence_table, project_averages
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +63,9 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
     through the real path: detect at the column bound, treat, impute.
 
     Returns the frame as it reaches averaging -- the span redistributed, the
-    flags recording it.
+    flags recording it. Timestamps are tz-naive, the shape the averaging
+    receives. The interval column is differenced from the cumulative readings
+    rather than completed, so the pair holds the stated values on both sides.
     """
     first, last = freeze
     values, current = [], 1000.0
@@ -74,24 +78,25 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
             current += NORMAL
         values.append(current)
 
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [hh] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(values, dtype="Float64"),
-    })
+    household_batch_id = household_batch_of(hh)
+    df = datasets_frame(
+        {household_batch_id: {CUM: values}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        pairs=False,
+    )
     df[DIFF] = df[CUM].diff().round(10)
     df.loc[0, DIFF] = 0
     df[f"{DIFF}_avg"] = pd.array([NORMAL] * n, dtype="Float64")
 
     rows = _detect_frozen_spans_for_household_batch(
-        df, hh, cadence=cadence_table(df, [CUM])
+        df, household_batch_id, cadence=cadence_table(df, [CUM])
     )
     assert rows, "the fixture must produce a detected span"
     _treat_frozen_spans(df, rows)
     out, _, _ = impute_and_normalize(
-        df.copy(), [CUM], "ProjectIdBSV", cadence=cadence_table(df, [CUM])
+        df.copy(), [CUM], ids.PROJECT, cadence=cadence_table(df, [CUM])
     )
     return out
 
@@ -102,16 +107,24 @@ def _clean_household(hh, n=40):
     The first interval is 0, as it is for any diff series: there is no previous
     reading to difference against. The span household's fixture does the same, so
     the two are comparable at every slot.
+
+    No cumulative counterpart: the interval column is what the averaging reads
+    here, and a completed counterpart holding a total would supply the volume
+    instead. Timestamps are tz-naive, the shape the averaging receives.
     """
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([hh] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [hh] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        DIFF: pd.array([0.0] + [NORMAL] * (n - 1), dtype="Float64"),
-        FLAGS: pd.array([0] * n, dtype="Int64"),
-    })
-    return df
+    return datasets_frame(
+        {
+            household_batch_of(hh): {
+                DIFF: [0.0] + [NORMAL] * (n - 1),
+                FLAGS: [0] * n,
+            }
+        },
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        dtypes={FLAGS: "Int64"},
+        pairs=False,
+    )
 
 
 def _project(n_clean=19, with_span=1):
@@ -122,14 +135,14 @@ def _project(n_clean=19, with_span=1):
         for hh in range(n_clean + 1, n_clean + with_span + 1)
     ]
     keep = [
-        "HuisIdBSV", "HuisBatchIdBSV", "ProjectIdBSV", "ReadingDate", DIFF, FLAGS
+        ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH, ids.PROJECT, "ReadingDate", DIFF, FLAGS
     ]
     return pd.concat([f[keep] for f in frames], ignore_index=True)
 
 
 def _average(df):
     result = project_averages(
-        df, "ProjectIdBSV", [DIFF],
+        df, ids.PROJECT, [DIFF],
         cadence=cadence_table(df, [CUM]), grid_minutes=5,
     )[DIFF]
     avg = result["avg_diff"].sort_values("ReadingDate")[f"{DIFF}_avg"].astype(float)
@@ -193,7 +206,8 @@ class TestNothingChangesWhereThereIsNothingToExclude:
         assert float(avg.mean()) == pytest.approx(NORMAL, abs=1e-9)
 
     def test_data_without_a_flags_column_still_works(self):
-        """Mapped data produced before flags existed has no findings column."""
+        """A frame carrying no findings column: the exclusion has nothing to
+        read, so every value stands."""
         df = _project(n_clean=20, with_span=0).drop(columns=[FLAGS])
         avg, result = _average(df)
         assert result["n_flagged"] == 0
@@ -205,7 +219,9 @@ class TestNothingChangesWhereThereIsNothingToExclude:
     )
     def test_every_invented_kind_is_kept_out(self, flag):
         df = _project(n_clean=20, with_span=0)
-        target = df.HuisIdBSV.isin([1, 2])
+        target = df[ids.HOUSEHOLD_BATCH].isin(
+            [household_batch_of(1), household_batch_of(2)]
+        )
         df.loc[target, DIFF] = 99.0
         df.loc[target, FLAGS] = flag.value
 

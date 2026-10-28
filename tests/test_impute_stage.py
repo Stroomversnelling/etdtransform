@@ -24,62 +24,47 @@ Batch-aware imputation is native-resolution-phase work; until then: loud stop.
 import shutil
 from pathlib import Path
 
-import conftest
 import pandas as pd
 import pytest
-
-import etdtransform
+from etdmap import ids
 from etdmap.index_helpers import HouseBatchOverlapError
 from etdmap.storage import resolve_source_path
-from etdtransform.aggregate import impute_mapped_households_sharded
-from etdtransform.impute import prepare_diff_averages_sharded, read_diffs
-from etdtransform.load_data import included_household_ids
+from etdmap.testing import household_batch_of, index_frame
 
+import etdtransform
+from etdtransform.aggregate import impute_mapped_households_sharded
+from etdtransform.impute import prepare_diff_averages_sharded
+from etdtransform.load_data import included_household_ids
 
 #: The spacing every frame in this file sits on, in minutes. The averaging
 #: resolves a project's grid from the cadence sidecar, so the frames and the
 #: sidecar are built from this one number.
 GRID_MINUTES = 5
 
+#: A SECOND dataset of a household -- another body of data for the same
+#: household, such as a period after a renovation. The household it belongs to
+#: is not the one derived from the dataset id, so every frame carrying it
+#: declares that household through `household_of`.
+SECOND_DATASET = 2001
 
-def _batch(household):
-    """The dataset id (`HuisBatchIdBSV`) a frame for *household* carries.
 
-    Never the household's own id: a household can have several datasets, so
-    code reaching for `HuisIdBSV` where the dataset is meant finds no rows
-    rather than the right ones.
+def _write_index(folder: Path, household_batch_ids, *, household_of=None,
+                 **columns):
+    """Write index.parquet covering *household_batch_ids*.
+
+    One row per household dataset, which is the key of the index: a household
+    delivered as several datasets appears once per dataset. *household_of*
+    names the household a dataset belongs to where it is not the one derived
+    from the dataset id, and any further keyword overrides an index column
+    with a scalar or a per-row list.
     """
-    return household + 1000
-
-
-def _another_batch(household):
-    """The id of a SECOND dataset of *household* -- another body of data for
-    the same household, such as a period after a renovation."""
-    return household + 2000
-
-
-def _write_index(folder: Path, rows):
-    """rows: list of (HuisIdBSV, HuisBatchIdBSV, ProjectIdBSV, Meenemen).
-
-    Writes index.parquet (with the household-batch
-    columns) as save_index_to_parquet produces it. One row per household
-    batch, which is the key of the index; a household delivered in several
-    batches appears once per batch."""
-    n = len(rows)
-    df = pd.DataFrame({
-        "HuisIdLeverancier": pd.array([f"L{r[0]}" for r in rows], dtype="string"),
-        "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "Meenemen": pd.array([r[3] for r in rows], dtype="boolean"),
-        "ProjectIdLeverancier": pd.array(["P1"] * n, dtype="string"),
-        "ProjectIdBSV": pd.array([r[2] for r in rows], dtype="Int64"),
-        "Notities": pd.array([""] * n, dtype="string"),
-        "Dataleverancier": pd.array(["test"] * n, dtype="string"),
-        "HuisBatchIdBSV": pd.array([r[1] for r in rows], dtype="Int64"),
-        "BatchIdBSV": pd.array([1] * n, dtype="Int64"),
-        "Gegevensfrequentie": pd.array([f"{GRID_MINUTES}min"] * n, dtype="string"),
-    })
     folder.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(folder / "index.parquet")
+    index_frame(
+        household_batch_ids,
+        household_of=household_of,
+        Gegevensfrequentie=f"{GRID_MINUTES}min",
+        **columns,
+    ).to_parquet(folder / "index.parquet")
 
 
 @pytest.mark.unit
@@ -113,11 +98,13 @@ class TestExplicitOutputFolderRequired:
 @pytest.mark.unit
 class TestIncludedHouseholdIds:
     def test_meenemen_filter(self, tmp_path):
-        _write_index(tmp_path, [
-            (1, _batch(1), 1, True),
-            (2, _batch(2), 1, False),
-            (3, _batch(3), 2, True),
-        ])
+        _write_index(
+            tmp_path,
+            [household_batch_of(1), household_batch_of(2),
+             household_batch_of(3)],
+            Meenemen=[True, False, True],
+            **{ids.PROJECT: [1, 1, 2]},
+        )
         assert included_household_ids(mapped_folder_path=tmp_path) == [1, 3]
 
     def test_missing_index_raises(self, tmp_path):
@@ -125,9 +112,10 @@ class TestIncludedHouseholdIds:
             included_household_ids(mapped_folder_path=tmp_path)
 
     def test_household_with_two_included_batches_raises(self, tmp_path):
-        _write_index(tmp_path, [
-            (1, _batch(1), 1, True), (1, _another_batch(1), 1, True),
-        ])
+        _write_index(
+            tmp_path, [household_batch_of(1), SECOND_DATASET],
+            household_of={SECOND_DATASET: 1}, Meenemen=True,
+        )
         with pytest.raises(HouseBatchOverlapError):
             included_household_ids(mapped_folder_path=tmp_path)
 
@@ -163,25 +151,27 @@ def averaged_input(tmp_path_factory):
     chain: these tests want an artifact, not that dataset, and borrowing it
     makes them pay for a chain they do not read.
     """
+    from conftest import dataset_frame, write_shard_tree
     from etdmap.mapping_helpers import (
         cadence_to_rows,
         detect_column_cadence,
         write_column_cadence,
     )
     from etdmap.testing import DEFAULT_HOUSEHOLDS_PER_PROJECT
-    from conftest import household_frame, write_shard_tree
 
     root = tmp_path_factory.mktemp("averaged_input")
     mapped = root / "mapped"
     households = range(1, DEFAULT_HOUSEHOLDS_PER_PROJECT + 1)
     frames = {
-        (h, _batch(h)): household_frame(
+        (h, household_batch_of(h)): dataset_frame(
             n_rows=6, start="2024-01-01", freq=f"{GRID_MINUTES}min",
             ElektriciteitNetgebruikDiff=0.1,
         )
         for h in households
     }
-    _write_index(mapped, [(h, _batch(h), 1, True) for h in households])
+    _write_index(
+        mapped, [household_batch_of(h) for h in households], Meenemen=True,
+    )
     write_shard_tree(mapped / "sharded", frames)
 
     # The averaging reads the interval a dataset reports at from the cadence
@@ -227,11 +217,11 @@ class TestBatchSafetyGuards:
         resolve. The mapped sharded area has no artifact-name level, hence the
         `sharded` root.
         """
-        from conftest import household_frame, write_shard_tree
+        from conftest import dataset_frame, write_shard_tree
 
         write_shard_tree(
             root / "sharded",
-            {(household_id, household_batch_id): household_frame(
+            {(household_id, household_batch_id): dataset_frame(
                 n_rows=6, start=start, freq=f"{GRID_MINUTES}min",
                 ElektriciteitNetgebruikDiff=0.1,
             )},
@@ -247,11 +237,12 @@ class TestBatchSafetyGuards:
     def test_multi_batch_household_raises_in_impute(self, tmp_path, averaged_input, _cum_cols):
         # household 1 delivered in two batches (disjoint periods): imputing the
         # concatenated series would fill the BETWEEN-batch gap -> refuse.
-        _write_index(tmp_path, [
-            (1, _batch(1), 1, True), (1, _another_batch(1), 1, True),
-        ])
-        self._shard(tmp_path, 1, _batch(1), "2024-01-01")
-        self._shard(tmp_path, 1, _another_batch(1), "2025-01-01")
+        _write_index(
+            tmp_path, [household_batch_of(1), SECOND_DATASET],
+            household_of={SECOND_DATASET: 1}, Meenemen=True,
+        )
+        self._shard(tmp_path, 1, household_batch_of(1), "2024-01-01")
+        self._shard(tmp_path, 1, SECOND_DATASET, "2025-01-01")
         agg = self._agg_with_artifacts(tmp_path, averaged_input)
         with pytest.raises(HouseBatchOverlapError):
             impute_mapped_households_sharded(
@@ -261,12 +252,13 @@ class TestBatchSafetyGuards:
 
     def test_duplicate_timestamps_raise_in_impute(self, tmp_path, averaged_input, _cum_cols):
         # overlapping batch periods: duplicate (HuisIdBSV, ReadingDate).
-        _write_index(tmp_path, [
-            (1, _batch(1), 1, True), (1, _another_batch(1), 1, True),
-        ])
-        self._shard(tmp_path, 1, _batch(1), "2024-01-01")
+        _write_index(
+            tmp_path, [household_batch_of(1), SECOND_DATASET],
+            household_of={SECOND_DATASET: 1}, Meenemen=True,
+        )
+        self._shard(tmp_path, 1, household_batch_of(1), "2024-01-01")
         # Same period redelivered as a second dataset of household 1.
-        self._shard(tmp_path, 1, _another_batch(1), "2024-01-01")
+        self._shard(tmp_path, 1, SECOND_DATASET, "2024-01-01")
         agg = self._agg_with_artifacts(tmp_path, averaged_input)
         with pytest.raises((HouseBatchOverlapError, ValueError)):
             impute_mapped_households_sharded(
@@ -277,11 +269,12 @@ class TestBatchSafetyGuards:
     def test_multi_batch_household_raises_in_diffs(self, tmp_path, _cum_cols):
         # project AVERAGES must also refuse: a household in two batches feeds
         # the estimation inputs the imputer relies on.
-        _write_index(tmp_path, [
-            (1, _batch(1), 1, True), (1, _another_batch(1), 1, True),
-        ])
-        self._shard(tmp_path, 1, _batch(1), "2024-01-01")
-        self._shard(tmp_path, 1, _another_batch(1), "2024-01-01")
+        _write_index(
+            tmp_path, [household_batch_of(1), SECOND_DATASET],
+            household_of={SECOND_DATASET: 1}, Meenemen=True,
+        )
+        self._shard(tmp_path, 1, household_batch_of(1), "2024-01-01")
+        self._shard(tmp_path, 1, SECOND_DATASET, "2024-01-01")
         with pytest.raises((HouseBatchOverlapError, ValueError)):
             prepare_diff_averages_sharded(
                 mapped_folder_path=tmp_path, aggregate_folder_path=tmp_path / "agg",

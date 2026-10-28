@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from etdtransform.vectorized_impute import order_columns_for_fill
+from etdmap import ids
 
 pytestmark = pytest.mark.unit
 
@@ -25,7 +26,7 @@ def _table(*rows):
     """(diff column, project, coverage, duty) rows shaped like the artifact."""
     return pd.DataFrame({
         "column": pd.array([r[0] for r in rows], dtype="string"),
-        "ProjectIdBSV": pd.array([r[1] for r in rows], dtype="Int64"),
+        ids.PROJECT: pd.array([r[1] for r in rows], dtype="Int64"),
         "coverage": pd.array([r[2] for r in rows], dtype="Float64"),
         "duty": pd.array([r[3] for r in rows], dtype="Float64"),
     })

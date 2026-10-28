@@ -12,27 +12,17 @@ tested in test_minimum_household_presence.py, and the same spreading over a
 realistic span in test_averaging_coarse_delivery.py.
 """
 
-import ibis
 import pandas as pd
 import pytest
-
 from conftest import spread_average
+from etdmap import ids
+from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
 
 pytestmark = pytest.mark.unit
 
 CUM = "ElektriciteitNetgebruik"
 IV = "ElektriciteitNetgebruikDiff"
 GRID = 5
-
-
-def _batch(household):
-    """The dataset id a frame for *household* carries.
-
-    A household can be delivered as several datasets, so the two ids are
-    separate numbers: the cadence, the readings and the sidecar rows belong to
-    the dataset, and the household is what it is counted under.
-    """
-    return household + 1000
 
 
 def _average(frame, cadence, drop_na=True):
@@ -48,44 +38,48 @@ def _average(frame, cadence, drop_na=True):
 def _frame(per_household):
     """per_household: {HuisIdBSV: [cumulative readings, pd.NA where absent]}
 
-    One dataset per household, carrying both ids: the readings are the
-    dataset's, and the household is the one it belongs to.
+    One dataset per household: the readings are the dataset's, and the
+    household is the one it is counted under. Timestamps are tz-naive, the
+    shape the averaging receives.
+
+    Both halves of the pair are stated -- the cumulative readings and the
+    intervals differenced from them -- so no counterpart is completed.
     """
-    parts = []
+    per_dataset = {}
     for household, readings in per_household.items():
-        frame = pd.DataFrame({
-            "HuisIdBSV": pd.array([household] * len(readings), dtype="Int64"),
-            "HuisBatchIdBSV": pd.array(
-                [_batch(household)] * len(readings), dtype="Int64"
-            ),
-            "ProjectIdBSV": pd.array([1] * len(readings), dtype="Int64"),
-            "ReadingDate": pd.date_range(
-                "2026-01-01", periods=len(readings), freq=f"{GRID}min"
-            ),
-            CUM: pd.array(readings, dtype="Float64"),
-        })
-        frame[IV] = frame[CUM].diff().astype("Float64")
-        parts.append(frame)
-    return pd.concat(parts, ignore_index=True)
+        cumulative = pd.Series(pd.array(readings, dtype="Float64"))
+        per_dataset[household_batch_of(household)] = {
+            CUM: cumulative.tolist(),
+            IV: cumulative.diff().tolist(),
+        }
+    return datasets_frame(
+        per_dataset,
+        start="2026-01-01",
+        freq=f"{GRID}min",
+        tz=None,
+        pairs=False,
+    )
 
 
-def _cadence(minutes_by_household):
+def _cadence(minutes_by_household, column=CUM):
     """A cadence row per household's dataset, declaring what its readings cover.
 
     Cadence is a property of the dataset, so the rows are keyed on
-    ``HuisBatchIdBSV``; the household each belongs to rides along.
+    ``HuisBatchIdBSV``. *column* is the form the readings arrive in: the
+    cumulative variable, or the interval column where that is what the supplier
+    delivered. Every dataset sits on the grid the frames are built at.
     """
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array(list(minutes_by_household), dtype="Int64"),
-        "HuisBatchIdBSV": pd.array(
-            [_batch(household) for household in minutes_by_household],
-            dtype="Int64",
-        ),
-        "column": pd.array([CUM] * len(minutes_by_household), dtype="string"),
-        "cadence_minutes": pd.array(
-            list(minutes_by_household.values()), dtype="Int64"
-        ),
-    })
+    return pd.concat(
+        [
+            cadence_sidecar(
+                {column: minutes},
+                grid_minutes=GRID,
+                household_batch_id=household_batch_of(household),
+            )
+            for household, minutes in minutes_by_household.items()
+        ],
+        ignore_index=True,
+    )
 
 
 class TestHowAWindowIsSpread:
@@ -167,8 +161,7 @@ class TestWhichFormSuppliesTheVolume:
         no predecessor, so its first reading counts."""
         frame = _frame({1: [pd.NA] * 6})
         frame[IV] = pd.array([pd.NA, pd.NA, 6.0, pd.NA, pd.NA, 9.0], dtype="Float64")
-        cadence = _cadence({1: 15})
-        cadence["column"] = pd.array([IV], dtype="string")
+        cadence = _cadence({1: 15}, column=IV)
         assert _average(frame, cadence) == pytest.approx(
             [2.0, 2.0, 2.0, 3.0, 3.0, 3.0]
         )
@@ -178,19 +171,16 @@ class TestWhichFormSuppliesTheVolume:
             1: [100.0, pd.NA, pd.NA, 106.0, pd.NA, pd.NA, 115.0, pd.NA, pd.NA],
             2: [pd.NA] * 9,
         })
-        frame.loc[frame["HuisIdBSV"] == 2, IV] = pd.array(
+        frame.loc[
+            frame[ids.HOUSEHOLD_BATCH] == household_batch_of(2), IV
+        ] = pd.array(
             [pd.NA, pd.NA, 3.0, pd.NA, pd.NA, 6.0, pd.NA, pd.NA, 9.0],
             dtype="Float64",
         )
-        cadence = pd.concat([
-            _cadence({1: 15}),
-            pd.DataFrame({
-                "HuisIdBSV": pd.array([2], dtype="Int64"),
-                "HuisBatchIdBSV": pd.array([_batch(2)], dtype="Int64"),
-                "column": pd.array([IV], dtype="string"),
-                "cadence_minutes": pd.array([15], dtype="Int64"),
-            }),
-        ], ignore_index=True)
+        cadence = pd.concat(
+            [_cadence({1: 15}), _cadence({2: 15}, column=IV)],
+            ignore_index=True,
+        )
         # Both households report coarsely, by different forms, in one project.
         # Household 1's register gives windows of 6/3 = 2.0 on slots 1-3 and
         # 9/3 = 3.0 on slots 4-6, with slots 0, 7 and 8 bounded by no second
@@ -209,7 +199,7 @@ class TestUncoveredSlotsAreRowsNotAbsences:
     Grouping over the expanded windows alone loses those slots, and a missing
     row is not the same as a row with no value: the merge downstream is on
     (project, ReadingDate), so an absent row silently changes what imputation
-    sees. This is what the real fixtures caught and the synthetic ones did not.
+    sees. Only a span long enough to leave a window uncovered can show it.
     """
 
     @staticmethod

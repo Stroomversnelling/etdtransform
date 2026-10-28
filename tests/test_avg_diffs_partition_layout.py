@@ -16,6 +16,8 @@ import os
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs, write_diffs
 
@@ -25,12 +27,17 @@ COLUMN = "WarmteproductieRuimteverwarmingDiff"
 
 
 def _averages():
-    """Two projects on their own grids, as the averaging produces them."""
+    """Two projects on their own grids, as the averaging produces them.
+
+    Built here because the two cadences and the project column are the
+    partitioning this file is about, and no shared builder states an averages
+    frame.
+    """
     rows = []
     for project, grid in ((1, 5), (2, 15)):
         stamps = pd.date_range("2026-01-01", periods=4, freq=f"{grid}min")
         rows.append(pd.DataFrame({
-            "ProjectIdBSV": pd.array([project] * 4, dtype="Int64"),
+            ids.PROJECT: pd.array([project] * 4, dtype="Int64"),
             "ReadingDate": stamps,
             f"{COLUMN}_avg": pd.array(
                 [0.01, 0.02, pd.NA, 0.04], dtype="Float64"
@@ -69,7 +76,7 @@ class TestTheLayout:
         longer produces would otherwise be read back beside that run's."""
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
         smaller = _averages()
-        smaller = smaller[smaller["ProjectIdBSV"] == 1]
+        smaller = smaller[smaller[ids.PROJECT] == 1]
         write_diffs(smaller, aggregate_folder_path=tmp_path)
 
         assert _partitions(tmp_path / AVG_DIFFS_ARTIFACT) == [
@@ -89,7 +96,7 @@ class TestTheRoundTrip:
         write_diffs(written, aggregate_folder_path=tmp_path)
 
         back = read_diffs(tmp_path, with_cadence=True)
-        keys = ["ProjectIdBSV", "ReadingDate"]
+        keys = [ids.PROJECT, "ReadingDate"]
         assert sorted(back.columns) == sorted(written.columns)
         pd.testing.assert_frame_equal(
             back.sort_values(keys).reset_index(drop=True),
@@ -102,7 +109,7 @@ class TestTheRoundTrip:
         reconstructed from the path, not read from a file."""
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
         back = read_diffs(tmp_path, with_cadence=True)
-        assert str(back["ProjectIdBSV"].dtype) == "Int64"
+        assert str(back[ids.PROJECT].dtype) == "Int64"
         assert str(back["cadence_minutes"].dtype) == "Int64"
         assert str(back[f"{COLUMN}_avg"].dtype) == "Float64"
 
@@ -130,17 +137,15 @@ class TestWhatTheFillReceives:
 
     def test_it_merges_onto_a_chunk_on_project_and_date(self, tmp_path):
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
-        chunk = pd.DataFrame({
-            "HuisIdBSV": pd.array([7, 7], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([1007, 1007], dtype="Int64"),
-            "ProjectIdBSV": pd.array([2, 2], dtype="Int64"),
-            "ReadingDate": pd.to_datetime(
-                ["2026-01-01 00:00", "2026-01-01 00:15"]
-            ),
-        })
+        # One dataset of project 2, on that project's quarter-hourly grid and
+        # tz-naive, which is what the merge keys have to meet.
+        chunk = datasets_frame(
+            {household_batch_of(7): {}}, n_rows=2, project=2,
+            start="2026-01-01", freq="15min", tz=None,
+        )
         merged = chunk.merge(
             read_diffs(tmp_path),
-            on=["ProjectIdBSV", "ReadingDate"], how="left",
+            on=[ids.PROJECT, "ReadingDate"], how="left",
         )
         assert [float(v) for v in merged[f"{COLUMN}_avg"]] == [0.01, 0.02]
 
@@ -158,7 +163,7 @@ class TestTheLegacySingleFile:
         )
         back = read_diffs(tmp_path)
         assert len(back) == len(written)
-        assert str(back["ProjectIdBSV"].dtype) == "Int64"
+        assert str(back[ids.PROJECT].dtype) == "Int64"
 
     def test_the_directory_wins_when_both_are_present(self, tmp_path):
         """Promotion supersedes the stale form, but a staging area can hold

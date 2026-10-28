@@ -261,7 +261,7 @@ DESCRIPTIONS = {
         "own."
     ),
     "UNSCALED_AVERAGE": "The project average, unscaled.",
-    "HOUSEHOLD_SCALED_AVERAGE": "The project average, multiplied by this household's own factor.",
+    "HOUSEHOLD_SCALED_AVERAGE": "The project average, multiplied by this dataset's own factor.",
     "GAP_NOT_FILLED": "A cell inside a gap that holds no value.",
     "ONLY_CLOSING_READING": "Only the closing cumulative reading bounds the gap.",
     "ONLY_OPENING_READING": "Only the opening cumulative reading bounds the gap.",
@@ -374,6 +374,6 @@ DESCRIPTIONS = {
     ),
     "SPARSE_AVERAGE": (
         "RESERVED. No stage sets this yet. The average the fill used was "
-        "built from fewer than ten contributing households."
+        "built from fewer than ten contributing household datasets."
     ),
 }

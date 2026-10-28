@@ -20,13 +20,14 @@ from etdmap.testing import generate_mapped_dataset
 
 import etdtransform
 from etdtransform.impute import prepare_diff_averages_sharded, read_diffs
-from etdtransform.presence import MIN_ELIGIBLE_HOUSEHOLDS
+from etdtransform.presence import MIN_ELIGIBLE_DATASETS
+from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 #: Both projects start at the floor, so the one that keeps every household is
 #: averageable and the one that loses a household is one short of it.
-AT_THE_FLOOR = MIN_ELIGIBLE_HOUSEHOLDS
+AT_THE_FLOOR = MIN_ELIGIBLE_DATASETS
 SHORT_PROJECT = 1
 FULL_PROJECT = 2
 
@@ -71,9 +72,9 @@ def averaged(tmp_path_factory):
     index_df = pd.read_parquet(index_path, dtype_backend="numpy_nullable")
     index_df["Meenemen"] = pd.array([True] * len(index_df), dtype="boolean")
     dropped = int(
-        index_df.loc[index_df["ProjectIdBSV"] == SHORT_PROJECT, "HuisIdBSV"].iloc[0]
+        index_df.loc[index_df[ids.PROJECT] == SHORT_PROJECT, ids.HOUSEHOLD].iloc[0]
     )
-    index_df.loc[index_df["HuisIdBSV"] == dropped, "Meenemen"] = False
+    index_df.loc[index_df[ids.HOUSEHOLD] == dropped, "Meenemen"] = False
     index_df.to_parquet(index_path, engine="pyarrow")
 
     aggregate = config_dir / "aggregate"
@@ -112,24 +113,24 @@ class TestTheFloorDecidesWhetherAnAverageIsPublished:
     def test_the_project_at_the_floor_is_averaged(self, averaged):
         frame, _ = averaged
         column = _average_column(frame)
-        rows = frame[frame["ProjectIdBSV"] == FULL_PROJECT]
+        rows = frame[frame[ids.PROJECT] == FULL_PROJECT]
 
         assert not rows.empty, f"project {FULL_PROJECT} has no rows at all"
         assert rows[column].notna().any(), (
             f"project {FULL_PROJECT} has {AT_THE_FLOOR} eligible households, "
-            f"which meets the floor of {MIN_ELIGIBLE_HOUSEHOLDS}, so its "
+            f"which meets the floor of {MIN_ELIGIBLE_DATASETS}, so its "
             f"average must be published"
         )
 
     def test_the_project_below_the_floor_is_not(self, averaged):
         frame, dropped = averaged
         column = _average_column(frame)
-        rows = frame[frame["ProjectIdBSV"] == SHORT_PROJECT]
+        rows = frame[frame[ids.PROJECT] == SHORT_PROJECT]
 
         assert rows[column].isna().all(), (
             f"project {SHORT_PROJECT} lost household {dropped}, leaving "
             f"{AT_THE_FLOOR - 1} eligible against a floor of "
-            f"{MIN_ELIGIBLE_HOUSEHOLDS}, so it must publish no average"
+            f"{MIN_ELIGIBLE_DATASETS}, so it must publish no average"
         )
 
     def test_the_two_projects_disagree(self, averaged):
@@ -139,7 +140,7 @@ class TestTheFloorDecidesWhetherAnAverageIsPublished:
         column = _average_column(frame)
         published = {
             int(project): frame.loc[
-                frame["ProjectIdBSV"] == project, column
+                frame[ids.PROJECT] == project, column
             ].notna().any()
             for project in (SHORT_PROJECT, FULL_PROJECT)
         }

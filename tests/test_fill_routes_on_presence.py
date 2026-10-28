@@ -16,13 +16,14 @@ imputation and nulls anything above it.
 
 import pandas as pd
 import pytest
+from conftest import cadence_table
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.vectorized_impute import (
     ImputeType,
     process_gap_and_cumulative_groups,
     process_imputation_vectorized,
 )
-from conftest import cadence_table
 
 pytestmark = pytest.mark.unit
 
@@ -31,6 +32,9 @@ CUM = "ElektriciteitNetgebruik"
 AVG = f"{DIFF}_avg"
 IMPUTED = f"{DIFF}_is_imputed"
 ITYPE = f"{DIFF}_impute_type"
+
+#: The one household every frame below describes.
+HOUSEHOLD = 1
 
 # Readings at rows 0 and 4; rows 1-4 are the gap. A jump of 4.0 over four cells
 # averages 1.0, comfortably under the 1.5 maximum.
@@ -42,15 +46,19 @@ JUMP = 4.0
 def _frame(averages, end=CUMULATIVE[-1]):
     cumulative = CUMULATIVE[:-1] + [end]
     n = len(cumulative)
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(cumulative, dtype="Float64"),
-        DIFF: pd.array([pd.NA] * n, dtype="Float64"),
-        AVG: pd.array(averages, dtype="Float64"),
-    })
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): {
+            CUM: cumulative,
+            DIFF: [pd.NA] * n,
+            AVG: list(averages),
+        }},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the anchored cumulative
+        # column, and the empty interval column the fill writes into.
+        pairs=False,
+    )
 
 
 def _impute(averages, end=CUMULATIVE[-1]):
@@ -96,7 +104,7 @@ class TestTheThreeRoutes:
         assert _types(out) == {ImputeType.UNIFORM_FILL.value}
 
     def test_a_partly_present_average_fills_every_cell(self):
-        """The case that used to lose cells: those with no average got nothing."""
+        """The cells with no average are filled too, not left empty."""
         out = _impute([pd.NA, 1.0, pd.NA, 1.0, pd.NA])
         filled = _filled(out)
         assert filled.notna().all(), "a cell of the gap was left unfilled"

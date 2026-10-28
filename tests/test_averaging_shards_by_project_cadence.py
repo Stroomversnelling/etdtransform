@@ -20,9 +20,17 @@ import ibis
 import pandas as pd
 import pytest
 from conftest import spread_average
+from etdmap import ids
+from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    datasets_frame,
+    declare_synthetic_model,
+    household_batch_of,
+    sidecar_frame,
+    synthetic_model,
+)
 
-from etdmap.mapping_helpers import detect_column_cadence
-from etdmap.testing import declare_synthetic_model, synthetic_model
 from etdtransform.bounds import grid_minutes_by_project
 from etdtransform.flags import ImputeType
 from etdtransform.impute import calculate_average_diff_ibis
@@ -53,18 +61,8 @@ READING = 0.12
 #: a thin fixture would be testing the presence gate instead of the spreading.
 HOUSEHOLDS = 10
 HOURS = 24
-
-
-def _batch(household):
-    """The dataset id a frame for *household* carries.
-
-    A dataset (`HuisBatchIdBSV`) is one body of data for a household, and a
-    household may have several, so the two ids are distinct here: the sidecar
-    rows, the cadence table and every lookup built from it are keyed on the
-    dataset, and code reaching for the household instead must fail rather than
-    resolve.
-    """
-    return household + 1000
+#: Where every frame below starts.
+START = "2026-01-01"
 
 
 @pytest.fixture(autouse=True)
@@ -74,50 +72,58 @@ def _declared_model():
 
 
 def _household(household, project, grid):
-    """One household: register absent, the interval delivered once an hour."""
+    """One household: no cumulative readings, the interval delivered once an
+    hour."""
     periods = HOURS * 60 // grid
-    stamps = pd.date_range("2026-01-01", periods=periods, freq=f"{grid}min")
-    values = pd.Series(pd.NA, index=range(periods), dtype="Float64")
-    for position, stamp in enumerate(stamps):
-        if stamp.minute == 0:
-            values.iloc[position] = READING
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * periods, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array(
-            [_batch(household)] * periods, dtype="Int64"
-        ),
-        "ProjectIdBSV": pd.array([project] * periods, dtype="Int64"),
-        "ReadingDate": stamps,
-        CUM: pd.array([pd.NA] * periods, dtype="Float64"),
-        DIFF: values.values,
-    })
+    per_reading = DELIVERED_EVERY // grid
+    return datasets_frame(
+        {
+            household_batch_of(household): {
+                DIFF: [
+                    READING if position % per_reading == 0 else pd.NA
+                    for position in range(periods)
+                ]
+            }
+        },
+        project=project,
+        start=START,
+        freq=f"{grid}min",
+        tz=None,
+        # The averaging takes a dataset's volume from the cumulative column
+        # wherever that column holds a value, and what this file measures is
+        # the spreading of the interval column.
+        pairs=PAIRS_EMPTY,
+    )
+
+
+def _cadence_rows(frame, household, grid):
+    """The sidecar rows for *household*'s dataset, measured off its own rows."""
+    return cadence_to_rows(
+        household_batch_of(household),
+        detect_column_cadence(frame, grid_minutes=grid),
+    )
 
 
 def _estate():
     """The two projects, and the cadence table measured off their own rows."""
     frames = []
-    cadences = []
+    rows = []
     household = 0
     for project, grid in GRIDS.items():
         for _ in range(HOUSEHOLDS):
             household += 1
             frame = _household(household, project, grid)
             frames.append(frame)
-            table = detect_column_cadence(frame, grid_minutes=grid)
-            table.insert(
-                0, "HuisBatchIdBSV",
-                pd.array([_batch(household)] * len(table), dtype="Int64"),
-            )
-            cadences.append(table)
+            rows.extend(_cadence_rows(frame, household, grid))
     return (
         pd.concat(frames, ignore_index=True),
-        pd.concat(cadences, ignore_index=True),
+        sidecar_frame("cadence", rows),
     )
 
 
 def _averages(frame, cadence, **kwargs):
     result = calculate_average_diff_ibis(
-        ibis.memtable(frame), "ProjectIdBSV", [DIFF], cadence=cadence, **kwargs
+        ibis.memtable(frame), ids.PROJECT, [DIFF], cadence=cadence, **kwargs
     )
     return result[DIFF]
 
@@ -129,7 +135,7 @@ def _covering_window(avg, project, grid, ends_at):
     one hour of the project's own slots -- twelve of them at five minutes, four
     at fifteen.
     """
-    rows = avg[avg["ProjectIdBSV"] == project].sort_values("ReadingDate")
+    rows = avg[avg[ids.PROJECT] == project].sort_values("ReadingDate")
     start = ends_at - pd.Timedelta(minutes=DELIVERED_EVERY - grid)
     inside = rows[
         (rows["ReadingDate"] >= start) & (rows["ReadingDate"] <= ends_at)
@@ -147,7 +153,7 @@ class TestTheFixtureHoldsTwoGrids:
         # per dataset, so that is the key its grids are attributed through.
         membership = {
             int(b): int(p) for b, p in zip(
-                frame["HuisBatchIdBSV"], frame["ProjectIdBSV"]
+                frame[ids.HOUSEHOLD_BATCH], frame[ids.PROJECT]
             )
         }
         assert grid_minutes_by_project(cadence, membership) == {
@@ -156,7 +162,7 @@ class TestTheFixtureHoldsTwoGrids:
 
     def test_each_project_reports_the_same_volume_an_hour(self):
         frame, _ = _estate()
-        per_project = frame.groupby("ProjectIdBSV")[DIFF].sum()
+        per_project = frame.groupby(ids.PROJECT)[DIFF].sum()
         assert float(per_project.loc[1]) == pytest.approx(
             float(per_project.loc[2])
         )
@@ -235,7 +241,7 @@ class TestWhereEachProjectsAverageLands:
         only the slots that happened to coincide did."""
         frame, cadence = _estate()
         avg = _averages(frame, cadence)["avg_diff"]
-        rows = avg[avg["ProjectIdBSV"] == 2]
+        rows = avg[avg[ids.PROJECT] == 2]
         covered = int(rows[f"{DIFF}_avg"].notna().sum())
 
         slots_per_reading = DELIVERED_EVERY // GRIDS[2]
@@ -248,7 +254,7 @@ class TestWhereEachProjectsAverageLands:
         frame, cadence = _estate()
         avg = _averages(frame, cadence)["avg_diff"]
         for project, grid in GRIDS.items():
-            rows = avg[avg["ProjectIdBSV"] == project]
+            rows = avg[avg[ids.PROJECT] == project]
             offsets = set(
                 int(m) % grid for m in rows["ReadingDate"].dt.minute
             )
@@ -265,7 +271,7 @@ class TestTheCadenceRidesWithTheAverage:
         frame, cadence = _estate()
         avg = _averages(frame, cadence)["avg_diff"]
         recorded = (
-            avg.groupby("ProjectIdBSV")["cadence_minutes"].unique().to_dict()
+            avg.groupby(ids.PROJECT)["cadence_minutes"].unique().to_dict()
         )
         for project, grid in GRIDS.items():
             assert [int(m) for m in recorded[project]] == [grid]
@@ -276,8 +282,8 @@ class TestTheCadenceRidesWithTheAverage:
         frame, cadence = _estate()
         result = _averages(frame, cadence)
         assert result["coverage"] > 0.0
-        assert set(result["coverage_duty"]["ProjectIdBSV"]) == set(GRIDS)
-        assert set(result["window_presence"]["ProjectIdBSV"]) == set(GRIDS)
+        assert set(result["coverage_duty"][ids.PROJECT]) == set(GRIDS)
+        assert set(result["window_presence"][ids.PROJECT]) == set(GRIDS)
 
 
 class TestAGridThatDividesNothing:
@@ -287,42 +293,43 @@ class TestAGridThatDividesNothing:
 
     def test_both_projects_spread_over_their_own_slots(self):
         value = 0.02
-        rows = []
-        # Project 1 on a five-minute grid, reporting every ten.
-        stamps = pd.date_range("2026-01-01", periods=4, freq="5min")
-        rows.append(pd.DataFrame({
-            "HuisIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([_batch(1)] * 4, dtype="Int64"),
-            "ProjectIdBSV": pd.array([1] * 4, dtype="Int64"),
-            "ReadingDate": stamps,
-            DIFF: pd.array([pd.NA, pd.NA, value, pd.NA], dtype="Float64"),
-        }))
-        # Project 3 on a seven-minute grid, reporting every twenty-eight.
-        stamps = pd.date_range("2026-01-01", periods=5, freq="7min")
-        rows.append(pd.DataFrame({
-            "HuisIdBSV": pd.array([2] * 5, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([_batch(2)] * 5, dtype="Int64"),
-            "ProjectIdBSV": pd.array([3] * 5, dtype="Int64"),
-            "ReadingDate": stamps,
-            DIFF: pd.array(
-                [pd.NA, pd.NA, pd.NA, pd.NA, value], dtype="Float64"
+        # The cumulative counterpart of each frame carries nothing, so the
+        # spreading takes the volume from the interval column.
+        parts = [
+            # Project 1 on a five-minute grid, reporting every ten.
+            datasets_frame(
+                {household_batch_of(1): {DIFF: [pd.NA, pd.NA, value, pd.NA]}},
+                project=1, start=START, freq="5min", tz=None,
+                pairs=PAIRS_EMPTY,
             ),
-        }))
-        frame = pd.concat(rows, ignore_index=True)
-        cadence = pd.DataFrame({
-            "HuisIdBSV": pd.array([1, 2], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array(
-                [_batch(1), _batch(2)], dtype="Int64"
+            # Project 3 on a seven-minute grid, reporting every twenty-eight.
+            datasets_frame(
+                {
+                    household_batch_of(2): {
+                        DIFF: [pd.NA, pd.NA, pd.NA, pd.NA, value]
+                    }
+                },
+                project=3, start=START, freq="7min", tz=None,
+                pairs=PAIRS_EMPTY,
             ),
-            "cadence_minutes": pd.array([10, 28], dtype="Int64"),
-        })
+        ]
+        frame = pd.concat(parts, ignore_index=True)
+        cadence = sidecar_frame(
+            "cadence",
+            [
+                {ids.HOUSEHOLD_BATCH: household_batch_of(1), "column": DIFF,
+                 "cadence_minutes": 10},
+                {ids.HOUSEHOLD_BATCH: household_batch_of(2), "column": DIFF,
+                 "cadence_minutes": 28},
+            ],
+        )
 
         avg, _coverage, _duty = spread_average(
             frame, cadence, DIFF, grid_minutes={1: 5, 3: 7},
         )
 
-        five = avg[avg["ProjectIdBSV"] == 1][f"{DIFF}_avg"]
-        seven = avg[avg["ProjectIdBSV"] == 3][f"{DIFF}_avg"]
+        five = avg[avg[ids.PROJECT] == 1][f"{DIFF}_avg"]
+        seven = avg[avg[ids.PROJECT] == 3][f"{DIFF}_avg"]
 
         assert len(five) == 2, "ten minutes is two five-minute slots"
         assert [float(v) for v in five] == pytest.approx([value / 2] * 2)
@@ -356,40 +363,34 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
     GAP = slice(20, 24)
 
     def _frame(self, households=10):
-        parts = []
-        for household in range(1, households + 1):
-            stamps = pd.date_range(
-                "2026-01-01", periods=self.SLOTS, freq=f"{self.GRID}min"
-            )
-            parts.append(pd.DataFrame({
-                "HuisIdBSV": pd.array(
-                    [household] * self.SLOTS, dtype="Int64"
-                ),
-                "HuisBatchIdBSV": pd.array(
-                    [_batch(household)] * self.SLOTS, dtype="Int64"
-                ),
-                "ProjectIdBSV": pd.array([2] * self.SLOTS, dtype="Int64"),
-                "ReadingDate": stamps,
-                CUM: pd.array([pd.NA] * self.SLOTS, dtype="Float64"),
-                DIFF: pd.array(
-                    [self.AT_GRID] * self.SLOTS, dtype="Float64"
-                ),
-            }))
-        return pd.concat(parts, ignore_index=True)
+        return datasets_frame(
+            {
+                household_batch_of(household): {
+                    DIFF: [self.AT_GRID] * self.SLOTS
+                }
+                for household in range(1, households + 1)
+            },
+            project=2,
+            start=START,
+            freq=f"{self.GRID}min",
+            tz=None,
+            # The interval column is the source the spreading and the fill work
+            # from, so the cumulative counterpart carries nothing.
+            pairs=PAIRS_EMPTY,
+        )
 
     def _cadence(self, frame):
         """One sidecar row per (dataset, column), measured off the dataset's own
         rows."""
-        tables = []
-        for batch in sorted(int(b) for b in frame["HuisBatchIdBSV"].unique()):
-            own = frame[frame["HuisBatchIdBSV"] == batch]
-            table = detect_column_cadence(own, grid_minutes=self.GRID)
-            table.insert(
-                0, "HuisBatchIdBSV",
-                pd.array([batch] * len(table), dtype="Int64"),
+        rows = []
+        for batch in sorted(int(b) for b in frame[ids.HOUSEHOLD_BATCH].unique()):
+            own = frame[frame[ids.HOUSEHOLD_BATCH] == batch]
+            rows.extend(
+                cadence_to_rows(
+                    batch, detect_column_cadence(own, grid_minutes=self.GRID)
+                )
             )
-            tables.append(table)
-        return pd.concat(tables, ignore_index=True)
+        return sidecar_frame("cadence", rows)
 
     def _averaged_then_filled(self, **kwargs):
         frame = self._frame()
@@ -399,17 +400,17 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
         # One household loses a window; the rest of the project still delivers,
         # which is what gives the gap a shape to be filled from.
         gapped = frame.copy()
-        first = gapped[gapped["HuisIdBSV"] == 1].index
+        first = gapped[gapped[ids.HOUSEHOLD] == 1].index
         gapped.loc[first[self.GAP], DIFF] = pd.NA
 
         gapped = gapped.merge(
-            avg[["ProjectIdBSV", "ReadingDate", f"{DIFF}_avg"]],
-            on=["ProjectIdBSV", "ReadingDate"], how="left",
+            avg[[ids.PROJECT, "ReadingDate", f"{DIFF}_avg"]],
+            on=[ids.PROJECT, "ReadingDate"], how="left",
         )
         out, _stats, _reports = impute_and_normalize(
-            gapped, [CUM], "ProjectIdBSV", cadence=cadence,
+            gapped, [CUM], ids.PROJECT, cadence=cadence,
         )
-        return out[out["HuisIdBSV"] == 1].reset_index(drop=True)
+        return out[out[ids.HOUSEHOLD] == 1].reset_index(drop=True)
 
     def test_the_average_reaching_the_fill_is_a_quarter_hour(self):
         frame = self._frame()
@@ -470,22 +471,17 @@ class TestAMixedCadenceProjectIsRefused:
 
     def test_the_averaging_raises_naming_the_project_and_the_cadences(self):
         frames = []
-        cadences = []
+        rows = []
         # One project, two grids.
         for household, grid in ((1, 5), (2, 15)):
             frame = _household(household, 7, grid)
             frames.append(frame)
-            table = detect_column_cadence(frame, grid_minutes=grid)
-            table.insert(
-                0, "HuisBatchIdBSV",
-                pd.array([_batch(household)] * len(table), dtype="Int64"),
-            )
-            cadences.append(table)
+            rows.extend(_cadence_rows(frame, household, grid))
 
         with pytest.raises(ValueError) as raised:
             _averages(
                 pd.concat(frames, ignore_index=True),
-                pd.concat(cadences, ignore_index=True),
+                sidecar_frame("cadence", rows),
             )
 
         message = str(raised.value)

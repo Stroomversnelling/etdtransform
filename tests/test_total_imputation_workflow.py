@@ -38,6 +38,7 @@ from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 from conftest import INTERVALS
+from etdmap import ids
 
 #: Composites the calculated stage derives for this fixture. Named rather than
 #: read from the catalog: the point is that the chain publishes them, and a
@@ -98,8 +99,8 @@ def test_include(index_df):
 
 
 def test_project_id(index_df):
-    assert index_df['ProjectIdBSV'].notna().all(), 'column ProjectIdBSV has None values'
-    assert index_df['ProjectIdBSV'].dtype in [int, 'int64', 'Int64', 'int32'], "Column 'ProjectIdBSV' is not an integer dtype"
+    assert index_df[ids.PROJECT].notna().all(), 'column ProjectIdBSV has None values'
+    assert index_df[ids.PROJECT].dtype in [int, 'int64', 'Int64', 'int32'], "Column ids.PROJECT is not an integer dtype"
 
 
 @pytest.fixture(scope="session")
@@ -194,12 +195,12 @@ def test_no_household_is_dropped_along_the_chain(chain_frames, index_df):
     well-formed artifact, so the household set is compared at every step
     rather than only at the end."""
     expected = set(
-        index_df.loc[index_df["Meenemen"] == True, "HuisIdBSV"]  # noqa: E712
+        index_df.loc[index_df["Meenemen"] == True, ids.HOUSEHOLD]  # noqa: E712
         .dropna().astype(int).tolist()
     )
     assert expected, "the fixture index includes no households"
     for stage, frame in chain_frames.items():
-        got = set(frame["HuisIdBSV"].dropna().astype(int).tolist())
+        got = set(frame[ids.HOUSEHOLD].dropna().astype(int).tolist())
         assert got == expected, (
             f"{stage}: households {sorted(expected - got)} lost, "
             f"{sorted(got - expected)} appeared"
@@ -213,8 +214,8 @@ def test_no_project_is_dropped_into_the_project_aggregate(chain_frames, full_cha
             full_chain["resampled"] / f"project_{interval}.parquet",
             dtype_backend="numpy_nullable",
         )
-        expected = set(households["ProjectIdBSV"].dropna().astype(int).tolist())
-        got = set(projects["ProjectIdBSV"].dropna().astype(int).tolist())
+        expected = set(households[ids.PROJECT].dropna().astype(int).tolist())
+        got = set(projects[ids.PROJECT].dropna().astype(int).tolist())
         assert got == expected, f"project_{interval}: {expected} -> {got}"
 
 
@@ -300,7 +301,7 @@ def test_a_grouping_interval_buckets_each_household_separately(
     five = chain_frames["5min"]
     expected = (
         five.assign(_bucket=five["ReadingDate"].dt.floor(f"{minutes}min"))
-        .groupby(["HuisIdBSV", "_bucket"])
+        .groupby([ids.HOUSEHOLD, "_bucket"])
         .ngroups
     )
     assert len(chain_frames[interval]) == expected

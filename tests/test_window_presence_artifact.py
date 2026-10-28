@@ -7,7 +7,13 @@ and presence window, with the raw counts so every judgement can be re-derived.
 
 import ibis
 import pandas as pd
-import pytest
+from etdmap import ids
+from etdmap.testing import (
+    PAIRS_EMPTY,
+    cadence_sidecar,
+    datasets_frame,
+    household_batch_of,
+)
 
 from etdtransform.impute import calculate_average_diff_ibis, write_window_presence
 from etdtransform.presence import window_index, window_presence_frame
@@ -18,7 +24,8 @@ CUM = "ElektriciteitNetgebruik"
 #: What window_presence_frame derives from counts alone. A caller that does not
 #: spread supplies only these.
 ARTIFACT_COLUMNS = [
-    "column", "ProjectIdBSV", "HuisIdBSV", "window_start", "window_minutes",
+    "column", ids.PROJECT, ids.HOUSEHOLD_BATCH, "window_start",
+    "window_minutes",
     "n_slots", "n_delivered", "eligible", "n_eligible", "n_contributing",
     "slot_minimum", "averageable",
 ]
@@ -29,48 +36,59 @@ ARTIFACT_COLUMNS = [
 SPREAD_MEASUREMENTS = ["n_outage_windows", "n_outage_slots", "source"]
 
 
-def _frame(values_by_household, project=1, freq_minutes=15):
-    frames = []
-    for hid, vals in values_by_household.items():
-        n = len(vals)
-        frames.append(pd.DataFrame({
-            "HuisIdBSV": pd.array([hid] * n, dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([value + 1000 for value in [hid] * n], dtype="Int64"),
-            "ProjectIdBSV": pd.array([project] * n, dtype="Int64"),
-            "ReadingDate": pd.date_range(
-                "2026-01-05", periods=n, freq=f"{freq_minutes}min"
-            ),
-            COL: pd.array(vals, dtype="Float64"),
-        }))
-    return pd.concat(frames, ignore_index=True)
+def _frame(values_by_dataset, project=1, freq_minutes=15):
+    # The cumulative counterpart must carry no readings, so the averaging takes
+    # each dataset's volume from the interval values stated here: it prefers the
+    # cumulative column wherever that holds any value.
+    return datasets_frame(
+        {
+            dataset: {COL: list(values)}
+            for dataset, values in values_by_dataset.items()
+        },
+        start="2026-01-05",
+        freq=f"{freq_minutes}min",
+        project=project,
+        tz=None,
+        pairs=PAIRS_EMPTY,
+    )
 
 
 def _cadence_for(frame, minutes=15):
-    """A cadence table for *frame*'s households, recorded under the cumulative
+    """A cadence table for *frame*'s datasets, recorded under the cumulative
     name -- which is where cadence is recorded, and where the interval column
     resolves it from -- plus the ReadingDate row carrying the grid."""
-    households = sorted(int(h) for h in frame["HuisIdBSV"].unique())
-    rows = [
-        {"HuisBatchIdBSV": household + 1000, "column": column,
-         "cadence_minutes": minutes}
-        for household in households
-        for column in (CUM, "ReadingDate")
-    ]
-    return pd.DataFrame(rows).astype({
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-        "HuisBatchIdBSV": "Int64", "column": "string", "cadence_minutes": "Int64",
-    })
+    return pd.concat(
+        [
+            cadence_sidecar([CUM], minutes=minutes, household_batch_id=dataset)
+            for dataset in sorted(frame[ids.HOUSEHOLD_BATCH].unique())
+        ],
+        ignore_index=True,
+    )
 
 
 def _counts(timestamps, window_minutes, n_slots, n_delivered):
-    return pd.DataFrame({
-        "ProjectIdBSV": pd.array([1] * len(timestamps), dtype="Int64"),
-        "HuisIdBSV": pd.array(range(1, len(timestamps) + 1), dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in range(1, len(timestamps) + 1)], dtype="Int64"),
-        "_window": window_index(pd.Series(timestamps), window_minutes),
-        "n_slots": pd.array(n_slots, dtype="Int64"),
-        "n_delivered": pd.array(n_delivered, dtype="Int64"),
-    })
+    # The tallies are the only input the judgements are derived from, so each
+    # test states the coverage it means to have judged rather than leaving it to
+    # be counted off readings. One dataset per stated coverage, because a
+    # judgement is per (project, dataset, window).
+    frame = pd.concat(
+        [
+            datasets_frame(
+                {household_batch_of(position): {
+                    "n_slots": [slots], "n_delivered": [delivered],
+                }},
+                start=stamp,
+                tz=None,
+                dtypes={"n_slots": "Int64", "n_delivered": "Int64"},
+            )
+            for position, (stamp, slots, delivered) in enumerate(
+                zip(timestamps, n_slots, n_delivered), start=1
+            )
+        ],
+        ignore_index=True,
+    )
+    frame["_window"] = window_index(frame[ids.READING_DATE], window_minutes)
+    return frame
 
 
 class TestTheAveragingReturnsTheFrame:
@@ -80,19 +98,19 @@ class TestTheAveragingReturnsTheFrame:
     def _presence(self, frame, **kwargs):
         kwargs.setdefault("min_eligible", 1)
         result = calculate_average_diff_ibis(
-            ibis.memtable(frame), "ProjectIdBSV", [COL],
+            ibis.memtable(frame), ids.PROJECT, [COL],
             cadence=_cadence_for(frame), grid_minutes=15, **kwargs
         )
         return result[COL]["window_presence"].sort_values(
-            ["HuisIdBSV", "window_start"]
+            [ids.HOUSEHOLD_BATCH, "window_start"]
         ).reset_index(drop=True)
 
     def test_counts_and_judgements_match_the_gates(self):
         # A 15-minute day is 96 slots. Household 1 covers it; household 2
         # delivers 10 slots and is ineligible.
         frame = _frame({
-            1: [1.0] * 96,
-            2: [1.0] * 10 + [pd.NA] * 86,
+            household_batch_of(1): [1.0] * 96,
+            household_batch_of(2): [1.0] * 10 + [pd.NA] * 86,
         })
         presence = self._presence(frame, min_eligible=10)
 
@@ -123,7 +141,7 @@ class TestTheAveragingReturnsTheFrame:
         assert int(presence["n_outage_windows"].sum()) == 0
 
     def test_a_household_spanning_two_windows_gets_a_row_per_window(self):
-        frame = _frame({1: [1.0] * 192})
+        frame = _frame({household_batch_of(1): [1.0] * 192})
         presence = self._presence(frame)
         assert presence["window_start"].tolist() == [
             pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-06"),
@@ -140,7 +158,7 @@ class TestTheJudgementsAreDerivedFromTheCounts:
 
         daily = window_presence_frame(
             _counts(stamps, 1440, [96, 96], [96, 96]),
-            COL, 1440, "ProjectIdBSV",
+            COL, 1440, ids.PROJECT,
         )
         assert daily["window_start"].tolist() == (
             [pd.Timestamp("2026-01-06")] * 2
@@ -149,7 +167,7 @@ class TestTheJudgementsAreDerivedFromTheCounts:
 
         two_daily = window_presence_frame(
             _counts(stamps, 2880, [192, 192], [192, 192]),
-            COL, 2880, "ProjectIdBSV",
+            COL, 2880, ids.PROJECT,
         )
         # The 2880-minute grid counts from the epoch, so its boundary is
         # 1970-01-01 plus a whole number of two-day steps.
@@ -165,7 +183,7 @@ class TestTheJudgementsAreDerivedFromTheCounts:
         stamps = [pd.Timestamp("2026-01-05")] * 2
         out = window_presence_frame(
             _counts(stamps, 1440, [96, 96], [96, 0]),
-            COL, 1440, "ProjectIdBSV", min_coverage=0.0,
+            COL, 1440, ids.PROJECT, min_coverage=0.0,
         )
         assert out["eligible"].tolist() == [True, True]
         assert out["n_eligible"].tolist() == [2, 2]
@@ -174,7 +192,7 @@ class TestTheJudgementsAreDerivedFromTheCounts:
     def test_the_dtypes_are_nullable(self):
         out = window_presence_frame(
             _counts([pd.Timestamp("2026-01-05")], 1440, [96], [96]),
-            COL, 1440, "ProjectIdBSV",
+            COL, 1440, ids.PROJECT,
         )
         assert str(out["n_slots"].dtype) == "Int64"
         assert str(out["n_delivered"].dtype) == "Int64"
@@ -189,7 +207,7 @@ class TestTheWriter:
     def _presence(self):
         return window_presence_frame(
             _counts([pd.Timestamp("2026-01-05")] * 2, 1440, [96, 96], [96, 10]),
-            COL, 1440, "ProjectIdBSV",
+            COL, 1440, ids.PROJECT,
         )
 
     def test_it_writes_the_frames_it_was_given(self, tmp_path):

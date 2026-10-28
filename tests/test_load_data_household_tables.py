@@ -17,10 +17,12 @@ pipeline fixture, so the loader contract is tested independently of pipeline
 behaviour and runs fast.
 """
 
+import etdmap
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of, index_frame
 
-import etdmap
 import etdtransform
 from etdtransform.load_data import get_household_table, get_household_tables
 
@@ -29,47 +31,33 @@ pytestmark = pytest.mark.integration
 _HOUSEHOLDS = [1, 2]
 _ROWS_PER_HH = 4
 
-
-def _household_frame() -> pd.DataFrame:
-    rows = []
-    for household_id in _HOUSEHOLDS:
-        for i in range(_ROWS_PER_HH):
-            rows.append({
-                "HuisIdBSV": household_id,
-                "HuisBatchIdBSV": household_id + 1000,
-                "ProjectIdBSV": 1,
-                "ReadingDate": pd.Timestamp("2024-01-01", tz="UTC")
-                + pd.Timedelta(hours=i),
-                "value": float(household_id * 10 + i),
-            })
-    return pd.DataFrame(rows).astype({
-        "HuisIdBSV": "int64", "ProjectIdBSV": "int64", "value": "float64",
-        "HuisBatchIdBSV": "int64", "ProjectIdBSV": "int64", "value": "float64",
-    })
-
-
-def _index_frame() -> pd.DataFrame:
-    """A well-formed index: read_index requires the full metadata column
-    set."""
-    n = len(_HOUSEHOLDS)
-    return pd.DataFrame({
-        "HuisIdLeverancier": pd.array([f"L{h}" for h in _HOUSEHOLDS], dtype="string"),
-        "HuisIdBSV": pd.array(_HOUSEHOLDS, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in _HOUSEHOLDS], dtype="Int64"),
-        "Meenemen": pd.array([True] * n, dtype="boolean"),
-        "ProjectIdLeverancier": pd.array(["P1"] * n, dtype="string"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "Notities": pd.array([""] * n, dtype="string"),
-        "Dataleverancier": pd.array(["etdmap"] * n, dtype="string"),
-    })
+#: The dataset each household in this folder is read through. HuisBatchIdBSV
+#: is what the index is joined on, so every artifact here carries it.
+_DATASETS = {
+    household_id: household_batch_of(household_id)
+    for household_id in _HOUSEHOLDS
+}
 
 
 @pytest.fixture
 def aggregate_folder(tmp_path):
     """A minimal aggregate folder: one artifact per name the loader can ask for."""
+    rows = datasets_frame(
+        {
+            dataset: {
+                "value": [
+                    float(household_id * 10 + i) for i in range(_ROWS_PER_HH)
+                ]
+            }
+            for household_id, dataset in _DATASETS.items()
+        },
+        freq="1h",
+    )
     for name in ("household_60min", "household_default", "household_calculated"):
-        _household_frame().to_parquet(tmp_path / f"{name}.parquet", engine="pyarrow")
-    _index_frame().to_parquet(tmp_path / "index.parquet", engine="pyarrow")
+        rows.to_parquet(tmp_path / f"{name}.parquet", engine="pyarrow")
+    index_frame(_DATASETS.values(), Meenemen=True).to_parquet(
+        tmp_path / "index.parquet", engine="pyarrow"
+    )
 
     prev = (
         etdtransform.options.aggregate_folder_path,
@@ -93,7 +81,7 @@ class TestSingleTableLoader:
         assert len(df) == len(_HOUSEHOLDS) * _ROWS_PER_HH
         # the index join contributes Meenemen
         assert "Meenemen" in df.columns
-        assert set(df["HuisIdBSV"]) == set(_HOUSEHOLDS)
+        assert set(df[ids.HOUSEHOLD]) == set(_HOUSEHOLDS)
 
     def test_weather_can_be_skipped(self, aggregate_folder):
         """The default matches get_household_tables (weather included); a
@@ -142,44 +130,53 @@ class TestLoadersAgree:
         )[name].execute()
         single = get_household_table(name, include_weather=False).execute()
 
-        sort_cols = ["HuisIdBSV", "ReadingDate"]
+        sort_cols = [ids.HOUSEHOLD, "ReadingDate"]
         pd.testing.assert_frame_equal(
             multi.sort_values(sort_cols).reset_index(drop=True),
             single.sort_values(sort_cols).reset_index(drop=True),
         )
 
 
-class TestHouseholdAndProjectFilters:
-    """Filters are resolved to shard paths so the reader skips other
-    households entirely; results must be identical either way."""
+class TestDatasetAndProjectFilters:
+    """A filter prunes shard paths so the reader skips the other directories,
+    then selects rows on the dataset; results must be identical either way."""
 
-    def test_household_ids_restrict_rows(self, aggregate_folder):
-        df = get_household_table("60min", include_weather=False, household_ids=[1]).execute()
-        assert set(df["HuisIdBSV"]) == {1}
+    def test_dataset_ids_restrict_rows(self, aggregate_folder):
+        one = _DATASETS[1]
+        df = get_household_table(
+            "60min", include_weather=False, household_batch_ids=[one],
+        ).execute()
+        assert set(df[ids.HOUSEHOLD_BATCH]) == {one}
         assert len(df) == _ROWS_PER_HH
 
     def test_unfiltered_matches_filtered_union(self, aggregate_folder):
         full = get_household_table("60min", include_weather=False).execute()
         parts = pd.concat([
-            get_household_table("60min", include_weather=False, household_ids=[h]).execute()
-            for h in _HOUSEHOLDS
+            get_household_table(
+                "60min", include_weather=False, household_batch_ids=[dataset],
+            ).execute()
+            for dataset in _DATASETS.values()
         ])
-        sort_cols = ["HuisIdBSV", "ReadingDate"]
+        sort_cols = [ids.HOUSEHOLD_BATCH, ids.READING_DATE]
         pd.testing.assert_frame_equal(
             full.sort_values(sort_cols).reset_index(drop=True),
             parts.sort_values(sort_cols).reset_index(drop=True),
         )
 
-    def test_projects_resolve_to_their_households(self, aggregate_folder):
+    def test_projects_resolve_to_their_datasets(self, aggregate_folder):
         """Projects are a column, not a partition, so they are resolved to
-        household ids through the index before reading."""
+        dataset ids through the index before reading."""
         df = get_household_table("60min", include_weather=False, projects=[1]).execute()
-        assert set(df["HuisIdBSV"]) == set(_HOUSEHOLDS)
+        assert set(df[ids.HOUSEHOLD_BATCH]) == set(_DATASETS.values())
 
-    def test_project_and_household_filters_intersect(self, aggregate_folder):
-        df = get_household_table("60min", include_weather=False, projects=[1], household_ids=[2]).execute()
-        assert set(df["HuisIdBSV"]) == {2}
+    def test_project_and_dataset_filters_intersect(self, aggregate_folder):
+        one = _DATASETS[2]
+        df = get_household_table(
+            "60min", include_weather=False, projects=[1],
+            household_batch_ids=[one],
+        ).execute()
+        assert set(df[ids.HOUSEHOLD_BATCH]) == {one}
 
-    def test_unknown_project_yields_no_households(self, aggregate_folder):
-        from etdtransform.load_data import households_in_projects
-        assert households_in_projects([99999]) == []
+    def test_unknown_project_yields_no_datasets(self, aggregate_folder):
+        from etdtransform.load_data import household_batches_in_projects
+        assert household_batches_in_projects([99999]) == []

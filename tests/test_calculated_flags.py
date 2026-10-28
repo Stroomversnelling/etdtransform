@@ -13,10 +13,12 @@ Fixtures are small synthetic frames; never real data.
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 
 from etdtransform.calculated_flags import (
-    impute_type_column,
     grid_scaled_bounds,
+    impute_type_column,
     scan_calculated_columns,
     threshold_violation_summary,
 )
@@ -28,13 +30,20 @@ COLUMN = "ElektriciteitsgebruikTotaalBruto"
 
 
 def _frame(values, households=None):
-    n = len(values)
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array(households or [1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in households or [1] * n], dtype="Int64"),
-        "ReadingDate": pd.date_range("2024-01-01", periods=n, freq="5min", tz="UTC"),
-        COLUMN: pd.array(values, dtype="Float64"),
-    })
+    """One dataset per household named in *households*, taking that
+    household's values in the order given.
+
+    ``pairs=False`` leaves COLUMN without a cumulative counterpart: the values
+    stated here are what every assertion reads.
+    """
+    per_household = households or [1] * len(values)
+    per_dataset: dict = {}
+    for household, value in zip(per_household, values):
+        columns = per_dataset.setdefault(
+            household_batch_of(household), {COLUMN: []}
+        )
+        columns[COLUMN].append(value)
+    return datasets_frame(per_dataset, pairs=False)
 
 
 def _flags(df):
@@ -94,16 +103,17 @@ class TestThresholdViolation:
         )
         assert int((_flags(df) != 0).sum()) == 0
 
-    def test_summary_reports_the_household_and_the_worst_value(self):
+    def test_summary_reports_the_dataset_and_the_worst_value(self):
         df = scan_calculated_columns(
             _frame([-0.5, 1.0, -2.0], households=[1, 1, 2]),
             [COLUMN], grid_minutes=5,
         )
         summary = threshold_violation_summary(df, [COLUMN])
-        assert set(summary["HuisIdBSV"]) == {1, 2}
-        worst = summary.set_index("HuisIdBSV")["worst"]
-        assert float(worst.loc[1]) == pytest.approx(-0.5)
-        assert float(worst.loc[2]) == pytest.approx(-2.0)
+        first, second = household_batch_of(1), household_batch_of(2)
+        assert set(summary[ids.HOUSEHOLD_BATCH]) == {first, second}
+        worst = summary.set_index(ids.HOUSEHOLD_BATCH)["worst"]
+        assert float(worst.loc[first]) == pytest.approx(-0.5)
+        assert float(worst.loc[second]) == pytest.approx(-2.0)
 
     def test_summary_is_empty_when_nothing_violates(self):
         df = scan_calculated_columns(_frame([1.0, 2.0]), [COLUMN], grid_minutes=5)
@@ -228,8 +238,6 @@ class TestGridCadence:
     imputation every variable the derivation reads sits on the grid."""
 
     def test_a_coarser_grid_widens_a_scaling_bound(self):
-        from etdtransform.calculated_flags import grid_scaled_bounds
-
         # Netuitwisseling is declared +/-2.01 per five minutes, so an hourly
         # grid holds twelve of those.
         _, at_five = grid_scaled_bounds("Netuitwisseling", 5)
@@ -237,8 +245,6 @@ class TestGridCadence:
         assert float(at_sixty) > float(at_five)
 
     def test_a_non_scaling_bound_is_unchanged_by_the_grid(self):
-        from etdtransform.calculated_flags import grid_scaled_bounds
-
         # ZelfgebruikPercentage is a percentage, declared "algemeen": 100 is
         # 100 whatever interval the row covers.
         assert (grid_scaled_bounds("ZelfgebruikPercentage", 5)
@@ -441,6 +447,8 @@ class TestFillFromFormula:
 
     @classmethod
     def _frame_with_inputs(cls, target, left, right, third=None, fourth=None):
+        """The target column beside the formula inputs, whose per-row presence
+        is what decides which formula each row is a candidate for."""
         df = _frame(target)
         df[cls.LEFT] = pd.array(left, dtype="Float64")
         df[cls.RIGHT] = pd.array(right, dtype="Float64")
@@ -660,7 +668,9 @@ class TestFillCalculatedGaps:
         import ibis
 
         from etdtransform.calculated_flags import (
-            BITS_SUFFIX, FILL_SUFFIX, fill_gaps_in_table,
+            BITS_SUFFIX,
+            FILL_SUFFIX,
+            fill_gaps_in_table,
         )
         from etdtransform.constraints import RuleSet
 

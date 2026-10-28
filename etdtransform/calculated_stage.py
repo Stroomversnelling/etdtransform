@@ -5,7 +5,7 @@ which catalog variables it can derive from what it has, derives them, fills the
 gaps the derivation cannot reach, and writes the result as a hive shard tree --
 one shard per (household, batch).
 
-Separated from aggregate.py, which holds the imputation and the
+This stage lives apart from aggregate.py, which holds the imputation and the
 resample/aggregate stages. The three stages share almost nothing but the
 options object, and reading one of them inside a file holding all three is
 harder than it needs to be.
@@ -24,6 +24,7 @@ import pandas as pd
 
 import etdtransform
 from etdtransform.calculated_columns import _catalog_hash
+from etdmap import ids
 
 
 def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
@@ -33,7 +34,7 @@ def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
     Two compact sidecars (factored by schema group, so size is groups x derived
     vars + one row per household, not households x vars):
       - derivation_plan.parquet:      schema_group_id -> (variable, rhs_text, rhs_vars)
-      - household_derivation.parquet: HuisIdBSV -> schema_group_id
+      - household_derivation.parquet: ``ids.HOUSEHOLD`` -> schema_group_id
 
     A variable absent from a group's plan was provided/measured (not derived).
     Both carry catalog_hash so the equations are reproducible.
@@ -56,8 +57,8 @@ def _write_calc_provenance(output_path, plan_rows, hh_rows, catalog_hash,
     plan_df.to_parquet(os.path.join(out_dir, "derivation_plan.parquet"))
 
     hh_df = pd.DataFrame(
-        hh_rows, columns=["HuisIdBSV", "schema_group_id"]
-    ).astype({"HuisIdBSV": "Int64", "schema_group_id": "Int64"})
+        hh_rows, columns=[ids.HOUSEHOLD, "schema_group_id"]
+    ).astype({ids.HOUSEHOLD: "Int64", "schema_group_id": "Int64"})
     hh_df["catalog_hash"] = pd.array([catalog_hash] * len(hh_df), dtype="string")
     hh_df.to_parquet(os.path.join(out_dir, "household_derivation.parquet"))
 
@@ -110,15 +111,16 @@ def add_calculated_columns_to_hh_data_ibis(
     output_path : str
         Directory for the calculated hive shards
         (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/). Cleared before writing, so
-        re-runs are idempotent. Requires HuisBatchIdBSV in the source (a
-        sharded directory source provides it as a hive column).
+        re-runs are idempotent. Requires ``ids.HOUSEHOLD_BATCH`` in the source
+        (a sharded directory source provides it as a hive column).
 
     Notes
     -----
     source_path may be a parquet FILE or a hive-sharded DIRECTORY
     (HuisIdBSV=<n>/HuisBatchIdBSV=<p>/*.parquet); reads are format-detected.
-    With a directory source the input is validated at entry: duplicate
-    (HuisIdBSV, ReadingDate) rows raise (overlapping batch periods).
+    With a directory source the input is validated at entry: a household with
+    more than one dataset over the same ReadingDate raises (overlapping batch
+    periods).
     """
     import shutil
     from etdmap.catalog import load_catalog
@@ -178,10 +180,9 @@ def add_calculated_columns_to_hh_data_ibis(
         """The source, restricted to *household_ids* when they are known.
 
         Scope has to be set BEFORE planning, not after. A read that globs the
-        whole tree and filters afterwards costs 0.485s per unit at estate and
-        0.381s at a tenth of it -- superlinear, because every unit re-resolves
-        every shard. Naming only the unit's own files is flat: 0.071s and
-        0.066s per unit at the same two scales, and 6.9x faster overall.
+        whole tree and filters afterwards costs more per unit the more units
+        there are, because every unit re-resolves every shard. Naming only the
+        unit's own files keeps the per-unit cost flat whatever the scale.
         """
         return source_table(source_path, household_ids=household_ids)
 
@@ -198,11 +199,11 @@ def add_calculated_columns_to_hh_data_ibis(
     assert_cumulative_interval_pairs_complete(parquet_col_set)
 
     if source_is_shards:
-        # Batch-safety guard at this compute entry point: duplicate
-        # (HuisIdBSV, ReadingDate) rows / multi-batch households raise.
+        # Batch-safety guard at this compute entry point: a household with
+        # more than one dataset over the same ReadingDate raises.
         from etdtransform.impute import _assert_batch_safe_ibis
         _assert_batch_safe_ibis(tbl)
-    if "HuisBatchIdBSV" not in parquet_col_set:
+    if ids.HOUSEHOLD_BATCH not in parquet_col_set:
         raise ValueError(
             "add_calculated_columns_to_hh_data_ibis: the output is written one "
             "shard per (household, batch) and the source has no "
@@ -236,7 +237,7 @@ def add_calculated_columns_to_hh_data_ibis(
 
     agg_exprs = [tbl[col].notnull().mean().name(col) for col in analysis_cols]
     with checkpoints.phase("availability_scan") as mark:
-        availability_df = tbl.group_by("HuisIdBSV").agg(agg_exprs).execute()
+        availability_df = tbl.group_by(ids.HOUSEHOLD).agg(agg_exprs).execute()
         mark["rows"] = len(availability_df)
         mark["note"] = f"{len(analysis_cols)} candidate columns"
 
@@ -260,7 +261,7 @@ def add_calculated_columns_to_hh_data_ibis(
 
             with checkpoints.phase("household_rule_sets") as mark:
                 _rule_sets = rule_sets_by_household(
-                    availability_df["HuisIdBSV"], catalog_df, _calc_grid_minutes
+                    availability_df[ids.HOUSEHOLD], catalog_df, _calc_grid_minutes
                 )
                 mark["note"] = f"{len(_rule_sets)} apparaat-set(s)"
         except (FileNotFoundError, ValueError) as _rules_error:
@@ -271,10 +272,10 @@ def add_calculated_columns_to_hh_data_ibis(
                 _rules_error,
             )
 
-    # Build schema groups: frozenset(available_cols) -> list[int HuisIdBSV]
+    # Build schema groups: frozenset(available_cols) -> list[int household id]
     schema_groups: dict = {}
     for _, row in availability_df.iterrows():
-        household_id = int(row["HuisIdBSV"])
+        household_id = int(row[ids.HOUSEHOLD])
         avail = frozenset(
             col for col in analysis_cols
             # Available means the column holds at least one value. No fraction
@@ -291,12 +292,12 @@ def add_calculated_columns_to_hh_data_ibis(
 
     # Phase 2 + 3: plan and mutate per schema group
     _written_units: list = []
-    _PARTITION_KEYS = ("HuisIdBSV", "HuisBatchIdBSV")
+    _PARTITION_KEYS = (ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH)
 
     # Which batch each household's shard belongs to, resolved in one pass
     # rather than per unit.
     #
-    # THE UNIT IS THE SHARD: one (HuisIdBSV, HuisBatchIdBSV) pair, not one
+    # THE UNIT IS THE SHARD: one (household, household dataset) pair, not one
     # household. A household can appear in several batches, and between them
     # it may have been renovated -- different devices, different metadata --
     # so its batches are different datasets that happen to share an address.
@@ -358,7 +359,7 @@ def add_calculated_columns_to_hh_data_ibis(
                     needed_rhs.update(rule_row["rhs_vars"])
             blocked_inputs = sorted((needed_rhs - available_cols) & set(analysis_cols))
             if blocked_inputs:
-                group_avail = availability_df[availability_df["HuisIdBSV"].isin(group_ids)]
+                group_avail = availability_df[availability_df[ids.HOUSEHOLD].isin(group_ids)]
                 avail_by_col = {
                     col: float(group_avail[col].mean())
                     for col in blocked_inputs
@@ -388,7 +389,8 @@ def add_calculated_columns_to_hh_data_ibis(
                 + (f" (required: {sorted(not_req)})" if not_req else "")
             )
 
-        def _pass1_table(ids, batch_ids=None, record_provenance=False):
+        def _pass1_table(household_ids, batch_ids=None,
+                         record_provenance=False):
             """PASS 1: the regular formula calculations, as a lazy table.
 
             Derives each column this schema group cannot get from its
@@ -396,13 +398,15 @@ def add_calculated_columns_to_hh_data_ibis(
             and marks every derived cell. Nothing executes here -- the
             expressions are built and forced later, by whoever writes.
             """
-            scoped = _read_source_table(household_ids=ids)
-            scoped = scoped.filter(scoped["HuisIdBSV"].isin(ids))
+            scoped = _read_source_table(household_ids=household_ids)
+            scoped = scoped.filter(
+                scoped[ids.HOUSEHOLD].isin(household_ids)
+            )
             if batch_ids is not None:
                 # A household's batches are separate datasets; a unit is
                 # one of them, never all of a household's rows.
                 scoped = scoped.filter(
-                    scoped["HuisBatchIdBSV"].isin(batch_ids)
+                    scoped[ids.HOUSEHOLD_BATCH].isin(batch_ids)
                 )
             if has_zon_rename:
                 scoped = scoped.rename({"ZonopwekBruto": "Zon-opwekTotaalDiff"})
@@ -440,7 +444,7 @@ def add_calculated_columns_to_hh_data_ibis(
                 )
             return scoped
 
-        def _pass2_fill(table, ids):
+        def _pass2_fill(table, household_ids):
             """PASS 2: fill the gaps pass 1 could not reach.
 
             Two routes, each recorded separately: cell filling evaluates a
@@ -452,7 +456,7 @@ def add_calculated_columns_to_hh_data_ibis(
             if _rule_sets is None:
                 return table
             filled, report, fill_plan = fill_gaps_in_table(
-                table, ids, _rule_sets, checkpoints=checkpoints
+                table, household_ids, _rule_sets, checkpoints=checkpoints
             )
             if not fill_plan.empty:
                 _fill_plan_frames.append(
@@ -461,16 +465,15 @@ def add_calculated_columns_to_hh_data_ibis(
             return filled
 
         for _hid in group_ids:
-            _prov_hh_rows.append({"HuisIdBSV": int(_hid), "schema_group_id": group_idx})
+            _prov_hh_rows.append({ids.HOUSEHOLD: int(_hid), "schema_group_id": group_idx})
 
         # ONE SHARD IS THE UNIT OF WORK: one (household, batch) pair,
         # derived, filled and written on its own, so the amount of data in
         # flight never depends on how many units exist. A write whose
-        # fan-out is proportional to the estate is not a bulk write --
-        # scattering the whole estate in one partitioned COPY grows x65.7
-        # for x10 rows. Per unit the cost is flat across x10 scale: the
-        # estate write is 237s against 5,735s, at 1.7 GB peak RSS against
-        # 35.6 GB.
+        # fan-out is proportional to the whole population is not a bulk
+        # write: scattering every unit in one partitioned COPY costs
+        # superlinearly in rows, in time and in peak memory, while writing
+        # per unit keeps both flat.
         _group_id_set = {int(h) for h in group_ids}
         _group_units = [
             unit for unit in _shard_units if unit[0] in _group_id_set
@@ -524,8 +527,8 @@ def add_calculated_columns_to_hh_data_ibis(
         raise RuntimeError(
             f"[calc ibis] {len(_missing_units)} source shard(s) were "
             f"not written: {_missing_units[:5]}. Every "
-            f"(HuisIdBSV, HuisBatchIdBSV) in the source must appear "
-            f"in the output."
+            f"({ids.HOUSEHOLD}, {ids.HOUSEHOLD_BATCH}) in the source must "
+            f"appear in the output."
         )
     logging.info(
         f"[calc ibis] Wrote {len(_written_units)} shard "

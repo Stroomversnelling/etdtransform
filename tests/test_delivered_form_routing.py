@@ -17,6 +17,8 @@ import logging
 
 import pandas as pd
 import pytest
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of, sidecar_frame
 
 from etdtransform.vectorized_impute import (
     ImputeType,
@@ -32,16 +34,6 @@ DIFF = f"{CUM}Diff"
 OTHER_CUM = "Gasgebruik"
 OTHER_DIFF = f"{OTHER_CUM}Diff"
 N = 24
-
-
-def _batch(household):
-    """The dataset id a frame for household *household* carries.
-
-    `HuisBatchIdBSV` keys one body of data -- its time series, its cadence rows,
-    its sidecars -- and a household may own several. The two ids are never equal
-    here, so a lookup built on the wrong one reaches no rows.
-    """
-    return household + 1000
 
 
 #: Flags that only mean something given a register to anchor on. None may land
@@ -70,13 +62,24 @@ def _quiet_logs():
 
 
 def _cadence(rows):
-    return pd.DataFrame({
-        "HuisIdBSV": pd.array([r[0] for r in rows], dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(r[0]) for r in rows], dtype="Int64"),
-        "column": pd.array([r[1] for r in rows], dtype="string"),
-        "cadence_minutes": pd.array([r[2] for r in rows], dtype="Int64"),
-        "n_readings": pd.array([r[3] for r in rows], dtype="Int64"),
-    })
+    """The cadence sidecar for the rows below, over its full schema.
+
+    Each row is ``(household, column, cadence_minutes, n_readings)``. Keyed on
+    the household's dataset, as the sidecar is: the routing joins the table on
+    `HuisBatchIdBSV`, so a table keyed on anything else reaches no row.
+    """
+    return sidecar_frame(
+        "cadence",
+        [
+            {
+                ids.HOUSEHOLD_BATCH: household_batch_of(household),
+                "column": column,
+                "cadence_minutes": minutes,
+                "n_readings": n_readings,
+            }
+            for household, column, minutes, n_readings in rows
+        ],
+    )
 
 
 def _form_rows(household, cum_col, diff_col, register, intervals, grid=GRID):
@@ -99,13 +102,15 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
     for _ in range(n):
         total += rise
         values.append(total)
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(household)] * n, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(values, dtype="Float64"),
-    })
+    df = datasets_frame(
+        {household_batch_of(household): {CUM: values}},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the register above, the
+        # intervals differenced from it below.
+        pairs=False,
+    )
     df[DIFF] = df[CUM].diff().round(10)
     df.loc[0, DIFF] = 0
     df.loc[gap[0]:gap[1], DIFF] = pd.NA
@@ -115,14 +120,19 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
 
 def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
     """Delivered intervals at the grid, no register, with cells missing."""
-    df = pd.DataFrame({
-        "HuisIdBSV": pd.array([household] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([_batch(household)] * n, dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array([pd.NA] * n, dtype="Float64"),
-        DIFF: pd.array([value] * n, dtype="Float64"),
-    })
+    df = datasets_frame(
+        {household_batch_of(household): {
+            CUM: [pd.NA] * n,
+            DIFF: [value] * n,
+        }},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the register that never
+        # arrived, empty, and the delivered intervals. A register holding any
+        # value would displace the intervals as the fill's source.
+        pairs=False,
+    )
     df.loc[missing[0]:missing[1], DIFF] = pd.NA
     df[f"{DIFF}_avg"] = pd.array([value] * n, dtype="Float64")
     return df
@@ -130,7 +140,7 @@ def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
 
 def _impute(df, cadence, columns=(CUM,)):
     out, _, _ = impute_and_normalize(
-        df.copy(), list(columns), "ProjectIdBSV", cadence=cadence
+        df.copy(), list(columns), ids.PROJECT, cadence=cadence
     )
     return out
 
@@ -143,7 +153,7 @@ def _impute_with_constraints(df, rules, cadence=None):
     out, _, _ = impute_and_normalize(
         df.copy(),
         [CUM],
-        "ProjectIdBSV",
+        ids.PROJECT,
         cadence=cadence or _cadence(_form_rows(1, CUM, DIFF, False, True)),
         constraints=_constraints(*rules),
     )
@@ -202,7 +212,7 @@ class TestRoutingAtACoarserGrid:
         )
 
         paths = delivery_paths(df, CUM, DIFF, cadence)
-        first = df["HuisIdBSV"] == 1
+        first = df[ids.HOUSEHOLD] == 1
         assert bool(paths.cumulative[first].all())
         assert bool(paths.interval[~first].all())
         # The three masks partition the frame whatever the grid is.
@@ -269,7 +279,7 @@ class TestTheRoutingIsPerHousehold:
             + _form_rows(2, CUM, DIFF, False, True)
         )
         paths = delivery_paths(df, CUM, DIFF, cadence)
-        first = df["HuisIdBSV"] == 1
+        first = df[ids.HOUSEHOLD] == 1
         assert bool(paths.cumulative[first].all())
         assert bool(paths.interval[~first].all())
 
@@ -290,7 +300,7 @@ class TestTheRoutingIsPerHousehold:
                 (2, OTHER_DIFF, GRID, 0),
             ]
         )
-        first = df["HuisIdBSV"] == 1
+        first = df[ids.HOUSEHOLD] == 1
         swapped = delivery_paths(df, OTHER_CUM, OTHER_DIFF, cadence)
         assert bool(swapped.interval[first].all())
         assert bool(swapped.cumulative[~first].all())
@@ -301,7 +311,7 @@ class TestTheGuards:
         """isin() reads pd.NA as no-match, so such a row would route silently
         into nothing-delivered and still satisfy the partition check."""
         df = _register_frame()
-        df.loc[3, "HuisBatchIdBSV"] = pd.NA
+        df.loc[3, ids.HOUSEHOLD_BATCH] = pd.NA
         with pytest.raises(ValueError, match=r"carry no\s+HuisBatchIdBSV"):
             delivery_paths(
                 df, CUM, DIFF, _cadence(_form_rows(1, CUM, DIFF, True, False))
@@ -321,7 +331,7 @@ class TestTheGuards:
             delivery_paths(_register_frame(), CUM, DIFF, None)
 
     def test_a_frame_without_dataset_ids_is_refused(self):
-        df = _register_frame().drop(columns=["HuisBatchIdBSV"])
+        df = _register_frame().drop(columns=[ids.HOUSEHOLD_BATCH])
         with pytest.raises(ValueError, match="no HuisBatchIdBSV"):
             delivery_paths(
                 df, CUM, DIFF, _cadence(_form_rows(1, CUM, DIFF, True, False))
@@ -361,12 +371,14 @@ class TestTheGuards:
         """An unrecorded form must not stop the fill. The cumulative logic is
         what ran before this routing existed, so that is the fallback."""
         df = _register_frame()
-        cadence = pd.DataFrame({
-            "HuisIdBSV": pd.array([1], dtype="Int64"),
-            "HuisBatchIdBSV": pd.array([_batch(1)], dtype="Int64"),
-            "column": pd.array([CUM], dtype="string"),
-            "cadence_minutes": pd.array([GRID], dtype="Int64"),
-        })
+        cadence = sidecar_frame(
+            "cadence",
+            [{"column": CUM, "cadence_minutes": GRID}],
+            household_batch_id=household_batch_of(1),
+            # A sidecar with no `n_readings` at all is the subject: the
+            # routing has no delivery count to read.
+            partial=[ids.HOUSEHOLD_BATCH, "column", "cadence_minutes"],
+        )
         paths = delivery_paths(df, CUM, DIFF, cadence)
         assert bool(paths.cumulative.all())
 
@@ -417,7 +429,7 @@ class TestTheIntervalBranch:
         than gaps of zero length. What it filled is in the branch signal and the
         fill action instead."""
         _, gap_stats, _ = impute_and_normalize(
-            _interval_frame().copy(), [CUM], "ProjectIdBSV",
+            _interval_frame().copy(), [CUM], ids.PROJECT,
             cadence=_cadence(_form_rows(1, CUM, DIFF, False, True)),
         )
         row = gap_stats.iloc[0]
@@ -574,10 +586,10 @@ class TestARegisterCombinedFromTariffRegisters:
 
         cadence = _cadence(self._split_rows(1, hoog=True, laag=False))
         assert delivered_by_household_batch(self.SPLITS[0], cadence) == {
-            _batch(1): True
+            household_batch_of(1): True
         }
         assert delivered_by_household_batch(self.SPLITS[1], cadence) == {
-            _batch(1): False
+            household_batch_of(1): False
         }
 
     def test_a_delivered_root_does_not_need_the_fallback(self):
@@ -586,7 +598,9 @@ class TestARegisterCombinedFromTariffRegisters:
         from etdtransform.bounds import delivered_by_household_batch
 
         cadence = _cadence(_form_rows(1, CUM, DIFF, True, False))
-        assert delivered_by_household_batch(CUM, cadence) == {_batch(1): True}
+        assert delivered_by_household_batch(CUM, cadence) == {
+            household_batch_of(1): True
+        }
 
     def test_the_interval_form_is_not_delivered_by_a_split_register(self):
         """The splits' own interval columns are differenced at mapping, like the

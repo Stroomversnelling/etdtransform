@@ -7,6 +7,7 @@ import ibis.selectors as s
 import pandas as pd
 from ibis import _
 
+from etdmap import ids
 from etdmap.data_model import load_etdmodel
 
 import etdtransform
@@ -22,7 +23,24 @@ from etdtransform.knmi import (
 )
 
 
-def _household_table(name: str, household_ids=None) -> ibis.Expr:
+def households_of_household_batches(household_batch_ids) -> list:
+    """The households the given datasets belong to, from the index.
+
+    The shard path carries a household level, so pruning directories needs the
+    households a request's datasets sit under. Selecting rows is a separate,
+    exact step on ``ids.HOUSEHOLD_BATCH``.
+    """
+    from etdmap.index_helpers import read_index
+
+    wanted = {int(b) for b in household_batch_ids}
+    index_df, _ = read_index(etdtransform.options.mapped_folder_path)
+    match = index_df.loc[
+        index_df[ids.HOUSEHOLD_BATCH].isin(wanted), ids.HOUSEHOLD
+    ]
+    return sorted(int(h) for h in match.dropna().unique())
+
+
+def _household_table(name: str, household_batch_ids=None) -> ibis.Expr:
     """Read the household artifact called ``name`` and join it with the index.
 
     ``name`` is the artifact name without the ``household_`` prefix: a
@@ -34,35 +52,52 @@ def _household_table(name: str, household_ids=None) -> ibis.Expr:
     source = resolve_source_path(
         etdtransform.options.aggregate_folder_path, f"household_{name}"
     )
-    tbl = source_table(source, household_ids=household_ids)
-    if household_ids is not None:
+    # Directory pruning takes the households the datasets sit under, because
+    # that is the level the shard path has. Row selection is exact and keys on
+    # the dataset, so a household's other datasets do not ride along.
+    prune_to = (
+        None if household_batch_ids is None
+        else households_of_household_batches(household_batch_ids)
+    )
+    tbl = source_table(source, household_ids=prune_to)
+    if household_batch_ids is not None:
         # Applied for BOTH layouts so the result does not depend on how the
         # data happens to be stored: a single-file source has no directories
         # to select from.
-        tbl = tbl.filter(tbl["HuisIdBSV"].isin(sorted({int(h) for h in household_ids})))
+        tbl = tbl.filter(
+            tbl[ids.HOUSEHOLD_BATCH].isin(
+                sorted({int(b) for b in household_batch_ids})
+            )
+        )
     return join_index_table(tbl)
 
 
-def households_in_projects(projects) -> list:
+def household_batches_in_projects(projects) -> list:
     """
-    HuisIdBSV values belonging to the given ProjectIdBSV values.
+    The household datasets belonging to the given projects.
 
     Projects are a column inside the data, not a storage partition, so a
-    project filter cannot select files on its own. Resolving it to household
-    ids through the index lets the reader open only the shards concerned.
+    project filter cannot select files on its own. Resolving it to datasets
+    through the index lets the reader open only the shards concerned.
+
+    Resolved to datasets rather than households because a household's datasets
+    may sit in different projects: resolving to the household would pull in the
+    ones the request did not ask for.
     """
     from etdmap.index_helpers import read_index
 
     wanted = {int(p) for p in projects}
     index_df, _ = read_index(etdtransform.options.mapped_folder_path)
-    match = index_df.loc[index_df["ProjectIdBSV"].isin(wanted), "HuisIdBSV"]
-    return sorted(int(h) for h in match.dropna().unique())
+    match = index_df.loc[
+        index_df[ids.PROJECT].isin(wanted), ids.HOUSEHOLD_BATCH
+    ]
+    return sorted(int(b) for b in match.dropna().unique())
 
 
 def get_household_table(
     interval: str,
     include_weather: bool = True,
-    household_ids=None,
+    household_batch_ids=None,
     projects=None,
 ) -> ibis.Expr:
     """
@@ -70,10 +105,10 @@ def get_household_table(
 
     Callers name the data they want, never a file path.
 
-    Restricting to households or projects is worth doing here rather than
-    filtering the returned table: the data is stored one directory per
-    household, so naming them up front lets the reader skip the other
-    directories entirely instead of opening every one to find out.
+    Restricting to datasets or projects is worth doing here rather than
+    filtering the returned table: a dataset's rows sit in their own shard
+    directory, so naming them up front lets the reader skip the others
+    entirely instead of opening every one to find out.
 
     Parameters
     ----------
@@ -86,11 +121,12 @@ def get_household_table(
         :func:`get_household_tables`). When loading several tables at once,
         prefer that function: it reads the weather tables once and reuses
         them instead of per table.
-    household_ids : iterable of int, optional
-        Restrict to these HuisIdBSV values. None reads every household.
+    household_batch_ids : iterable of int, optional
+        Restrict to these ``ids.HOUSEHOLD_BATCH`` values -- the datasets to
+        read. None reads every dataset.
     projects : iterable of int, optional
-        Restrict to these ProjectIdBSV values, resolved to their households
-        through the index. Combines with ``household_ids`` as an
+        Restrict to these ``ids.PROJECT`` values, resolved to their datasets
+        through the index. Combines with ``household_batch_ids`` as an
         intersection.
 
     Returns
@@ -100,12 +136,12 @@ def get_household_table(
         needed.
     """
     if projects is not None:
-        in_projects = set(households_in_projects(projects))
-        household_ids = (
-            sorted(in_projects) if household_ids is None
-            else sorted(in_projects & {int(h) for h in household_ids})
+        in_projects = set(household_batches_in_projects(projects))
+        household_batch_ids = (
+            sorted(in_projects) if household_batch_ids is None
+            else sorted(in_projects & {int(b) for b in household_batch_ids})
         )
-    tbl = _household_table(interval, household_ids=household_ids)
+    tbl = _household_table(interval, household_batch_ids=household_batch_ids)
     if include_weather:
         tbl = join_weather_data(tbl)
     return tbl
@@ -168,10 +204,16 @@ def get_household_tables(include_weather: bool = True, include_preimputed_data: 
 def join_index_table(
     tbl: ibis.Expr,
     index_table: Optional[ibis.Expr] = None,
-    index_join_columns: Tuple[str] = ("HuisIdBSV", "ProjectIdBSV"),
+    index_join_columns: Tuple[str] = (ids.HOUSEHOLD_BATCH, ids.PROJECT),
 ) -> ibis.Expr:
     """
     Joins a given table with an index table on specified columns.
+
+    index.parquet holds one row per household dataset, so
+    ``ids.HOUSEHOLD_BATCH`` is its key and the household id is not unique in
+    it. ``ids.PROJECT`` stays in the key because both sides carry it; the
+    index's household id arrives with a ``_right`` suffix and the data table's
+    own household id remains authoritative.
 
     Parameters
     ----------
@@ -180,7 +222,7 @@ def join_index_table(
     index_table : Optional[ibis.Expr], optional
         The index table. If None, reads from default parquet file (default is None).
     index_join_columns : List[str], optional
-        Columns to use for the join (default is ["HuisIdBSV", "ProjectIdBSV"]).
+        Columns to use for the join (default is [ids.HOUSEHOLD_BATCH, ids.PROJECT]).
 
     Returns
     -------
@@ -338,8 +380,8 @@ def get_weather_data_table() -> ibis.Expr:
 
     # Add columns according to our data model
     etdmodel =  load_etdmodel()
-    # etdmodel["KNMI"] are the old names
-    # etdmodel["Variabele"] are the new names
+    # etdmodel["KNMI"] holds the KNMI column names
+    # etdmodel["Variabele"] holds the data model's variable names
 
     filtered = etdmodel.dropna(subset=["KNMI", "Variabele"]).drop_duplicates(subset=["KNMI", "Variabele"])
     var_mapping = dict(zip(filtered["KNMI"], filtered["Variabele"]))
@@ -499,21 +541,21 @@ def get_dfs():
 
     for interval in intervals:
         dfs[interval] = read_aggregate(name="project", interval=interval)
-        dfs[interval] = dfs[interval][dfs[interval]["ProjectIdBSV"] != 6.0]
+        dfs[interval] = dfs[interval][dfs[interval][ids.PROJECT] != 6.0]
 
         dfs[interval] = pd.merge(
             dfs[interval],
-            project_weather_station_df[["ProjectIdBSV", "Weerstation", "STN"]],
-            on="ProjectIdBSV",
+            project_weather_station_df[[ids.PROJECT, "Weerstation", "STN"]],
+            on=ids.PROJECT,
             how="left",
         )
 
         if "YYYYMMDD" not in dfs.columns:
             # See join_weather_data: KNMI uurvak HH (1..24) for a reading at
             # clock-hour h:00 UT is uurvak h (obs at end of vak), so derive
-            # both HH and YYYYMMDD from (ReadingDate - 1 hour). This avoids the
-            # one-uurvak over-shift of the old "+1" and maps 00:00 readings to
-            # uurvak 24 of the previous day rather than the non-existent HH=0.
+            # both HH and YYYYMMDD from (ReadingDate - 1 hour). That maps 00:00
+            # readings to uurvak 24 of the previous day rather than to the
+            # non-existent HH=0.
             ref = dfs[interval]["ReadingDate"] - pd.Timedelta(hours=1)
             dfs[interval]["HH"] = ref.dt.hour + 1
             dfs[interval]["YYYYMMDD"] = ref.dt.strftime("%Y%m%d").astype(int)
@@ -540,10 +582,10 @@ def get_dfs():
                 f"Missing {missing_count} temperature out of {total_records} records ({percentage_missing:.2f}%)."
             )
             print(
-                f"Affected ProjectIdBSV(s): {missing_temps['ProjectIdBSV'].unique().tolist()}"
+                f"Affected {ids.PROJECT}(s): {missing_temps[ids.PROJECT].unique().tolist()}"
             )
             logging.info(
-                f"Affected ProjectIdBSV(s): {missing_temps['ProjectIdBSV'].unique().tolist()}"
+                f"Affected {ids.PROJECT}(s): {missing_temps[ids.PROJECT].unique().tolist()}"
             )
             print(
                 f"Missing temperature dates: {missing_temps['ReadingDate'].dt.date.unique().tolist()}"
@@ -552,10 +594,10 @@ def get_dfs():
                 f"Missing temperature dates: {missing_temps['ReadingDate'].dt.date.unique().tolist()}"
             )
             print(
-                f"Missing temperature data details:\n{missing_temps[['ProjectIdBSV', 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
+                f"Missing temperature data details:\n{missing_temps[[ids.PROJECT, 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
             )  # Print a few details of missing records
             logging.info(
-                f"Missing temperature data details:\n{missing_temps[['ProjectIdBSV', 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
+                f"Missing temperature data details:\n{missing_temps[[ids.PROJECT, 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
             )  # Print a few details of missing records
 
         missing_apparent_temps = dfs[interval][
@@ -573,10 +615,10 @@ def get_dfs():
                 f"Missing {missing_count} apparent temperature out of {total_records} records ({percentage_missing:.2f}%)."
             )
             print(
-                f"Affected ProjectIdBSV(s): {missing_apparent_temps['ProjectIdBSV'].unique().tolist()}"
+                f"Affected {ids.PROJECT}(s): {missing_apparent_temps[ids.PROJECT].unique().tolist()}"
             )
             logging.info(
-                f"Affected ProjectIdBSV(s): {missing_apparent_temps['ProjectIdBSV'].unique().tolist()}"
+                f"Affected {ids.PROJECT}(s): {missing_apparent_temps[ids.PROJECT].unique().tolist()}"
             )
             print(
                 f"Missing apparent temperature dates: {missing_apparent_temps['ReadingDate'].dt.date.unique().tolist()}"
@@ -585,10 +627,10 @@ def get_dfs():
                 f"Missing apparent temperature dates: {missing_apparent_temps['ReadingDate'].dt.date.unique().tolist()}"
             )
             print(
-                f"Missing apparent temperature data details:\n{missing_apparent_temps[['ProjectIdBSV', 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
+                f"Missing apparent temperature data details:\n{missing_apparent_temps[[ids.PROJECT, 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
             )  # Print a few details of missing records
             logging.info(
-                f"Missing apparent temperature data details:\n{missing_apparent_temps[['ProjectIdBSV', 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
+                f"Missing apparent temperature data details:\n{missing_apparent_temps[[ids.PROJECT, 'ReadingDate', 'Weerstation', 'STN', 'YYYYMMDD', 'HH']].head()}"
             )  # Print a few details of missing records
 
     return dfs
@@ -604,8 +646,8 @@ def get_dfs():
 #
 # Two read patterns, chosen by measurement:
 #   - a specific set of households: read each household's file directly with
-#     pandas (filtering a whole-folder scan down to a few households was
-#     measured 3x slower);
+#     pandas (filtering a whole-folder scan down to a few households is
+#     slower);
 #   - the whole dataset: one lazy DuckDB/ibis query over all files at once.
 #
 # The functions that need no query engine live in etdmap.storage (etdmap is
@@ -640,9 +682,9 @@ def source_table(path, household_ids=None) -> "ibis.Expr":
 
     Raises ``ValueError`` for a flat directory. It carries the household id only
     in its file names, which this reader cannot see, so the lazy table would
-    have no ``HuisIdBSV`` and nothing would say so. ``read_source_frame`` reads
-    that layout and injects the ids, which is the same choice
-    ``mapped_household_table`` already makes.
+    have no ``ids.HOUSEHOLD`` column and nothing would say so.
+    ``read_source_frame`` reads that layout and injects the ids, which is the
+    same choice ``mapped_household_table`` already makes.
     """
     from etdmap.storage import source_layout, source_read_targets
 
@@ -651,7 +693,7 @@ def source_table(path, household_ids=None) -> "ibis.Expr":
     if layout == "flat":
         raise ValueError(
             f"{p} is a flat directory of per-household files. A lazy table over "
-            f"it would carry no HuisIdBSV. Use "
+            f"it would carry no {ids.HOUSEHOLD}. Use "
             f"etdmap.storage.read_source_frame, or point at the sharded "
             f"artifact."
         )
@@ -696,12 +738,14 @@ def mapped_household_table(mapped_folder_path=None) -> ibis.Expr:
 
 def included_household_ids(mapped_folder_path=None) -> list:
     """
-    HuisIdBSV values whose household batch has `Meenemen` == True, from the
-    index.
+    The households whose dataset has `Meenemen` == True, from the index.
 
-    `Meenemen` is defined per household within each batch (one index row
-    per HuisBatchIdBSV). Collapsing the decision to household ids is valid
-    only while no household appears in more than one batch; this function
+    A household-level grouping for reading, not a unit of analysis: callers
+    use it to choose which shard directories to open.
+
+    `Meenemen` is defined per household dataset (one index row per
+    ``ids.HOUSEHOLD_BATCH``). Collapsing the decision to household ids is valid
+    only while no household holds more than one household batch; this function
     raises HouseBatchOverlapError otherwise.
 
     Inclusion is resolved at read time from the index instead of being
@@ -720,15 +764,15 @@ def included_household_ids(mapped_folder_path=None) -> list:
         )
     index_df, _ = read_index(mapped_folder_path)
     included = index_df.loc[
-        index_df["Meenemen"] == True, "HuisIdBSV"  # noqa: E712
+        index_df["Meenemen"] == True, ids.HOUSEHOLD  # noqa: E712
     ].dropna()
     dup = included.duplicated()
     if bool(dup.any()):
         multi = sorted(int(h) for h in included[dup].unique())
         raise HouseBatchOverlapError(
-            f"HuisIdBSV {multi} have more than one included batch in the "
-            f"index; collapsing `Meenemen` to household ids is not valid. "
-            f"A household in more than one batch is valid in the data model "
-            f"but not yet supported."
+            f"{ids.HOUSEHOLD} {multi} hold more than one included household "
+            f"batch in the index; collapsing `Meenemen` to household ids is "
+            f"not valid. A household holding more than one household batch is "
+            f"valid in the data model but not yet supported."
         )
     return sorted(int(h) for h in included.unique())

@@ -5,6 +5,10 @@ Test fixture dataset: paths are loaded from config_test.yaml (see
 config_test_template.yaml for the committed reference template). This is a
 small anonymised dataset -- NOT production data. All tests in this suite must
 pass against that fixture; there are no "pre-existing" failures (see ADR-007).
+
+The builders a test should use, and the idioms that go with them, are in
+etdmap's docs/WRITING_TESTS.md. The fixtures here re-export the ones this suite
+uses most; the guide is the list.
 """
 import logging
 import os
@@ -26,11 +30,17 @@ from etdmap.testing import (  # noqa: F401  (re-exported for the tests)
     DEFAULT_HOUSEHOLDS_PER_PROJECT,
     DEFAULT_PROJECTS,
     HOUSEHOLD_BATCH_OFFSET,
+    PAIRS_EMPTY,
+    PAIRS_RAMP,
+    cadence_sidecar,
+    dataset_frame,
+    datasets_frame,
     generate_mapped_dataset,
     household_batch_of,
-    household_frame,
-    households_frame,
+    household_of_batch,
+    index_frame,
     installed_fingerprint,
+    sidecar_frame,
 )
 from etdtransform.aggregate import (
     add_calculated_columns_to_hh_data_ibis,
@@ -167,10 +177,11 @@ def _cum_cols():
 # equality that only holds while the mapping writes one dataset per household.
 # ---------------------------------------------------------------------------
 
-# `household_frame` (one household batch, no id columns -- for a shard tree) and
-# `households_frame` (several households in one frame, carrying both ids -- for
-# a stage that takes a frame) live in `etdmap.testing`, which both suites
-# import, and are re-exported here for the tests that already name them.
+# `dataset_frame` (one dataset's rows, no id columns -- for a shard tree, whose
+# path carries them) and `datasets_frame` (several datasets in one frame,
+# keyed on HuisBatchIdBSV and carrying both ids -- for a stage that takes a
+# frame) live in `etdmap.testing`, which both suites import, and are
+# re-exported here for the tests that name them.
 
 
 def shard_dir(root, household_id, household_batch_id=None):
@@ -213,7 +224,7 @@ def write_shard_tree(root, frames):
             key if isinstance(key, tuple) else (key, key)
         )
         save_household_shard(
-            frame.drop(columns=["HuisIdBSV"], errors="ignore"),
+            frame.drop(columns=[ids.HOUSEHOLD], errors="ignore"),
             household_id,
             household_batch_id,
             root,
@@ -241,7 +252,7 @@ def sharded_fixture_mapped(mapped_dataset, _include_updated):
     expected = DEFAULT_HOUSEHOLDS_PER_PROJECT * DEFAULT_PROJECTS
     found = mapped_household_paths(mapped_dataset)
     assert len(found) == expected, (
-        f"expected {expected} households, found {len(found)}"
+        f"expected {expected} dataset(s), found {len(found)}"
     )
     return Path(mapped_dataset)
 
@@ -299,6 +310,7 @@ def sharded_calculated(sharded_stage3, tmp_path_factory):
 # test fail so the gap is visible. Do not add pytest.skip.
 # ---------------------------------------------------------------------------
 import pytest as _pytest
+from etdmap import ids
 
 # Only these classes of skip may exist. A skip is allowed when its reason
 # begins with "<TOKEN>: " and TOKEN is a key below.
@@ -515,21 +527,21 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
 
     cum_col = cumulative_column(diff_col)
     minutes = dict(
-        zip(cadence["HuisBatchIdBSV"], cadence["cadence_minutes"])
+        zip(cadence[ids.HOUSEHOLD_BATCH], cadence["cadence_minutes"])
     )
     has_register = (
         frame[cum_col].notna() if cum_col in frame.columns
         else pd.Series(False, index=frame.index)
     )
-    on_register = frame["HuisIdBSV"].isin(
-        frame.loc[has_register, "HuisIdBSV"].unique()
+    on_register = frame[ids.HOUSEHOLD].isin(
+        frame.loc[has_register, ids.HOUSEHOLD].unique()
     )
     source = (
         frame[cum_col].where(on_register, frame[diff_col])
         if cum_col in frame.columns else frame[diff_col]
     )
     coarsest = max(cadence["cadence_minutes"].dropna())
-    projects = sorted(int(p) for p in frame["ProjectIdBSV"].dropna().unique())
+    projects = sorted(int(p) for p in frame[ids.PROJECT].dropna().unique())
     grids = (
         {int(p): float(m) for p, m in grid_minutes.items()}
         if isinstance(grid_minutes, dict)
@@ -541,19 +553,19 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
 
     assigned = frame.assign(
         _value=source.astype("Float64"),
-        _minutes=frame["HuisBatchIdBSV"].map(minutes).astype("Float64"),
+        _minutes=frame[ids.HOUSEHOLD_BATCH].map(minutes).astype("Float64"),
         _on_cumulative=on_register.astype("boolean"),
     )
 
     frames = []
     total = present = consuming = 0
     for grid, group in sorted(by_grid.items()):
-        rows = assigned[assigned["ProjectIdBSV"].isin(group)]
+        rows = assigned[assigned[ids.PROJECT].isin(group)]
         total_slots = int(
-            rows[["ProjectIdBSV", "ReadingDate"]].drop_duplicates().shape[0]
+            rows[[ids.PROJECT, "ReadingDate"]].drop_duplicates().shape[0]
         )
         avg, _coverage, _duty, _presence = _resample_average_ibis(
-            ibis.memtable(rows), diff_col, "ProjectIdBSV", grid,
+            ibis.memtable(rows), diff_col, ids.PROJECT, grid,
             max_slots=max(1, int(round(float(coarsest) / grid))),
             total_slots=total_slots,
             window_minutes=grid,
@@ -570,7 +582,7 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
         frames.append(avg)
 
     out = pd.concat(frames, ignore_index=True).sort_values(
-        ["ProjectIdBSV", "ReadingDate"]
+        [ids.PROJECT, "ReadingDate"]
     )
     if drop_na:
         out = out[out[f"{diff_col}_avg"].notna()]
@@ -622,16 +634,22 @@ def cadence_table(df, columns, minutes=5):
         which is the cumulative side of the pair.
     minutes : float
         The spacing *df* was built at.
+
+    Carries the cadence columns only, with no ``n_readings``. That absence is
+    load-bearing: ``bounds.delivered_by_household_batch`` answers "nothing is
+    known about delivery" for a table without the field and "delivered
+    nothing" for one that has it empty, and the two route differently. A table
+    stating a reading count has to say what it was, so a test that needs one
+    builds it with :func:`etdmap.testing.cadence_sidecar`.
     """
-    batches = sorted(int(b) for b in df["HuisBatchIdBSV"].dropna().unique())
-    rows = [
-        {"HuisBatchIdBSV": batch, "column": column,
-         "cadence_minutes": minutes}
-        for batch in batches
-        for column in columns
-    ]
-    return pd.DataFrame(rows).astype({
-        "HuisBatchIdBSV": "Int64",
-        "column": "string",
-        "cadence_minutes": "Int64",
-    })
+    batches = sorted(int(b) for b in df[ids.HOUSEHOLD_BATCH].dropna().unique())
+    return sidecar_frame(
+        "cadence",
+        [
+            {ids.HOUSEHOLD_BATCH: batch, "column": column,
+             "cadence_minutes": minutes}
+            for batch in batches
+            for column in columns
+        ],
+        partial=[ids.HOUSEHOLD_BATCH, "column", "cadence_minutes"],
+    )

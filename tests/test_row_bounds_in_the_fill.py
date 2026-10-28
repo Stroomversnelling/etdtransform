@@ -11,6 +11,8 @@ while inside the bound its own column declares -- is signalled with
 import pandas as pd
 import pytest
 from conftest import cadence_table
+from etdmap import ids
+from etdmap.testing import datasets_frame, household_batch_of
 from test_constraint_package import _constraints
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -22,6 +24,9 @@ DIFF = "ElektriciteitNetgebruikDiff"
 AVG = f"{DIFF}_avg"
 ITYPE = f"{DIFF}_impute_type"
 
+#: The one household every frame below describes.
+HOUSEHOLD = 1
+
 # The row bound follows K exactly: DIFF = K, with K unbounded in the
 # thresholds, so every narrowing in these tests is the row's own.
 FOLLOWS_K = (((DIFF), "K", {"K": 1}),)
@@ -29,25 +34,29 @@ FOLLOWS_K = (((DIFF), "K", {"K": 1}),)
 
 def _frame(cumulative, averages, diffs=None, k=None):
     n = len(cumulative)
-    data = {
-        "HuisIdBSV": pd.array([1] * n, dtype="Int64"),
-        "HuisBatchIdBSV": pd.array([value + 1000 for value in [1] * n], dtype="Int64"),
-        "ProjectIdBSV": pd.array([1] * n, dtype="Int64"),
-        "ReadingDate": pd.date_range("2026-01-01", periods=n, freq="5min"),
-        CUM: pd.array(cumulative, dtype="Float64"),
-        DIFF: pd.array([pd.NA] * n if diffs is None else diffs, dtype="Float64"),
-        AVG: pd.array(averages, dtype="Float64"),
+    columns = {
+        CUM: list(cumulative),
+        DIFF: [pd.NA] * n if diffs is None else list(diffs),
+        AVG: list(averages),
     }
     if k is not None:
-        data["K"] = pd.array(k, dtype="Float64")
-    return pd.DataFrame(data)
+        columns["K"] = list(k)
+    return datasets_frame(
+        {household_batch_of(HOUSEHOLD): columns},
+        start="2026-01-01",
+        freq="5min",
+        tz=None,
+        # Both halves of the pair are stated here: the anchored cumulative
+        # column, and the interval column the fill writes into.
+        pairs=False,
+    )
 
 
 def _impute(frame, constraints=None):
     out, _, _ = impute_and_normalize(
         frame,
         [CUM],
-        "ProjectIdBSV",
+        ids.PROJECT,
         cadence=cadence_table(frame, [CUM]),
         constraints=constraints,
     )
