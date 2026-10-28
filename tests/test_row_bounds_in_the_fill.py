@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 from test_constraint_package import _constraints
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -41,7 +41,7 @@ def _frame(cumulative, averages, diffs=None, k=None):
     }
     if k is not None:
         columns["K"] = list(k)
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): columns},
         start="2026-01-01",
         freq="5min",

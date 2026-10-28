@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 import etdtransform.vectorized_impute as vectorized_impute
 from etdtransform.vectorized_impute import (
@@ -56,7 +56,7 @@ FILL_ROUTES = (
 def _frame(cumulative, diffs, averages):
     """One household batch's rows, as the fill reads them: the register, its interval
     column, and the project average the scaling routes read."""
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(1): {
             CUM: list(cumulative),
             DIFF: list(diffs),
@@ -203,7 +203,7 @@ class TestTheThresholdPassAccumulates:
         """Two rows already carrying *preset* in the findings column, the second
         of them out of bounds. No register: the pass reads the interval column
         and its two findings columns only."""
-        df = datasets_frame(
+        df = household_batches_frame(
             {household_batch_of(1): {
                 DIFF: [0.5, 99.0],
                 f"{DIFF}_avg": [0.5, 0.5],

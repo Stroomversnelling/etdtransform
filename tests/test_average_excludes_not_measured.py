@@ -30,7 +30,7 @@ from etdmap.mapping_helpers import (
     _detect_frozen_spans_for_household_batch,
     _treat_frozen_spans,
 )
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import impute_and_normalize
 
@@ -79,7 +79,7 @@ def _household_with_a_treated_span(hh, catchup=MODEST_CATCHUP, n=40, freeze=(10,
         values.append(current)
 
     household_batch_id = household_batch_of(hh)
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_id: {CUM: values}},
         start="2026-01-01",
         freq="5min",
@@ -112,7 +112,7 @@ def _clean_household(hh, n=40):
     here, and a completed counterpart holding a total would supply the volume
     instead. Timestamps are tz-naive, the shape the averaging receives.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {
             household_batch_of(hh): {
                 DIFF: [0.0] + [NORMAL] * (n - 1),

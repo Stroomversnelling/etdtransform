@@ -15,8 +15,8 @@ import pytest
 from etdmap import ids
 from etdmap.testing import (
     cadence_sidecar,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     index_frame,
 )
 from pandas.testing import assert_frame_equal
@@ -274,7 +274,7 @@ def _two_household_frame():
     intersect to an empty bound and withhold the fill, which is a different
     behaviour than the selection this file tests.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {
             household_batch_of(1): {CUM: [100.0, pd.NA, pd.NA, 103.0]},
             household_batch_of(2): {CUM: [100.0, pd.NA, pd.NA, 101.5]},

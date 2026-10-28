@@ -13,20 +13,20 @@ catalog carrying the ZelfgebruikPercentage rule.
 """
 
 import os
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from unittest.mock import patch
+from etdmap import ids
 
 import etdtransform
 from etdtransform.aggregate import (
     _derive_columns_in_parquet,
-    resample_hh_data_duckdb,
     aggregate_project_data_duckdb,
+    resample_hh_data_duckdb,
 )
 from etdtransform.calculated_columns import _catalog_hash
 from etdtransform.calculated_stage import _write_calc_provenance
-from etdmap import ids
 
 pytestmark = pytest.mark.integration
 

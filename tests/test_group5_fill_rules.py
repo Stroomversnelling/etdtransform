@@ -29,7 +29,7 @@ import pytest
 from conftest import cadence_table
 from etdmap import ids
 from etdmap.flags import MappingFlag
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
@@ -53,7 +53,7 @@ def _household(household_id, n, **columns):
     the builder completes neither half: delivery is read off the cumulative
     readings the test puts there.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household_id): {
             name: list(values) for name, values in columns.items()
         }},
@@ -127,7 +127,7 @@ class TestNoDeliveredNoFill:
         assert out.loc[filled_rows, DIFF].notna().all()
         assert out.loc[filled_rows, f"{DIFF}_is_imputed"].all()
 
-    def test_no_volume_rows_are_collected_for_the_skipped_dataset(self):
+    def test_no_volume_rows_are_collected_for_the_skipped_household_batch(self):
         volume_reports = []
         _impute(
             _frame(_delivering_household(1), self._all_na_household(2)),

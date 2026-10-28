@@ -18,8 +18,8 @@ from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     sidecar_frame,
 )
 
@@ -73,7 +73,7 @@ def _frame(values, household=1):
     The register is present and empty throughout, which is what keeps the
     interval column the volume source where the frame reaches the averaging.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household): {DIFF: list(values)}},
         start="2026-01-01",
         freq="5min",

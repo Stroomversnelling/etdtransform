@@ -14,7 +14,7 @@ Fixtures are small synthetic frames; never real data.
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.calculated_flags import (
     grid_scaled_bounds,
@@ -37,13 +37,13 @@ def _frame(values, households=None):
     stated here are what every assertion reads.
     """
     per_household = households or [1] * len(values)
-    per_dataset: dict = {}
+    per_household_batch: dict = {}
     for household, value in zip(per_household, values):
-        columns = per_dataset.setdefault(
+        columns = per_household_batch.setdefault(
             household_batch_of(household), {COLUMN: []}
         )
         columns[COLUMN].append(value)
-    return datasets_frame(per_dataset, pairs=False)
+    return household_batches_frame(per_household_batch, pairs=False)
 
 
 def _flags(df):
@@ -103,7 +103,7 @@ class TestThresholdViolation:
         )
         assert int((_flags(df) != 0).sum()) == 0
 
-    def test_summary_reports_the_dataset_and_the_worst_value(self):
+    def test_summary_reports_the_household_batch_and_the_worst_value(self):
         df = scan_calculated_columns(
             _frame([-0.5, 1.0, -2.0], households=[1, 1, 2]),
             [COLUMN], grid_minutes=5,

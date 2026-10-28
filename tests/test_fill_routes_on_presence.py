@@ -17,7 +17,7 @@ imputation and nulls anything above it.
 import pandas as pd
 import pytest
 from conftest import cadence_table
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import (
     ImputeType,
@@ -46,7 +46,7 @@ JUMP = 4.0
 def _frame(averages, end=CUMULATIVE[-1]):
     cumulative = CUMULATIVE[:-1] + [end]
     n = len(cumulative)
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {
             CUM: cumulative,
             DIFF: [pd.NA] * n,

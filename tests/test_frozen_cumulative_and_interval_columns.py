@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
+from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -70,7 +70,7 @@ def _series(catchup: float) -> pd.DataFrame:
             current += NORMAL
         values.append(current)
 
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(HOUSEHOLD): {CUM: values}},
         start=START,
         freq="5min",
@@ -204,7 +204,7 @@ def test_interval_only_column_is_imputed():
     """
     n = 20
     gap = [8, 9, 10, 11]  # .loc slices are label-inclusive on both ends
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(HOUSEHOLD): {CUM: pd.NA, DIFF: [2.0] * n}},
         start=START,
         freq="5min",
@@ -228,7 +228,7 @@ def test_household_level_outlier_filter_excludes_a_spiking_household():
     """
     n = 6
     spiking = 99  # the household whose dataset carries the one spike
-    df = datasets_frame(
+    df = household_batches_frame(
         {
             household_batch_of(household): {DIFF: [3.0] * n}
             for household in [*LEVEL_HOUSEHOLDS, spiking]
@@ -274,7 +274,7 @@ def test_project_average_rejects_physically_impossible_value():
     an affected slot is 94 of ~99.
     """
     n = 6
-    df = datasets_frame(
+    df = household_batches_frame(
         {
             household_batch_of(household): {DIFF: [3.0] * n}
             for household in LEVEL_HOUSEHOLDS
@@ -321,7 +321,7 @@ class TestWhichThresholdAppliesWhere:
     HOURLY, GRID = 1, 2
 
     def _frame(self):
-        return datasets_frame(
+        return household_batches_frame(
             {
                 household_batch_of(self.HOURLY): {
                     DIFF: [50.0, 50.0],

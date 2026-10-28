@@ -11,8 +11,8 @@ from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
 )
 
 from etdtransform.impute import calculate_average_diff_ibis, write_window_presence
@@ -36,14 +36,14 @@ ARTIFACT_COLUMNS = [
 SPREAD_MEASUREMENTS = ["n_outage_windows", "n_outage_slots", "source"]
 
 
-def _frame(values_by_dataset, project=1, freq_minutes=15):
+def _frame(values_by_household_batch, project=1, freq_minutes=15):
     # The cumulative counterpart must carry no readings, so the averaging takes
     # each household batch's volume from the interval values stated here: it prefers the
     # cumulative column wherever that holds any value.
-    return datasets_frame(
+    return household_batches_frame(
         {
-            dataset: {COL: list(values)}
-            for dataset, values in values_by_dataset.items()
+            household_batch: {COL: list(values)}
+            for household_batch, values in values_by_household_batch.items()
         },
         start="2026-01-05",
         freq=f"{freq_minutes}min",
@@ -59,8 +59,8 @@ def _cadence_for(frame, minutes=15):
     resolves it from -- plus the ReadingDate row carrying the grid."""
     return pd.concat(
         [
-            cadence_sidecar([CUM], minutes=minutes, household_batch_id=dataset)
-            for dataset in sorted(frame[ids.HOUSEHOLD_BATCH].unique())
+            cadence_sidecar([CUM], minutes=minutes, household_batch_id=household_batch)
+            for household_batch in sorted(frame[ids.HOUSEHOLD_BATCH].unique())
         ],
         ignore_index=True,
     )
@@ -73,7 +73,7 @@ def _counts(timestamps, window_minutes, n_slots, n_delivered):
     # judgement is per (project, household batch, window).
     frame = pd.concat(
         [
-            datasets_frame(
+            household_batches_frame(
                 {household_batch_of(position): {
                     "n_slots": [slots], "n_delivered": [delivered],
                 }},

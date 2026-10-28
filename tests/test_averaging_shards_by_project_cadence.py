@@ -24,9 +24,9 @@ from etdmap import ids
 from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
 from etdmap.testing import (
     PAIRS_EMPTY,
-    datasets_frame,
     declare_synthetic_model,
     household_batch_of,
+    household_batches_frame,
     sidecar_frame,
     synthetic_model,
 )
@@ -76,7 +76,7 @@ def _household(household, project, grid):
     hour."""
     periods = HOURS * 60 // grid
     per_reading = DELIVERED_EVERY // grid
-    return datasets_frame(
+    return household_batches_frame(
         {
             household_batch_of(household): {
                 DIFF: [
@@ -297,13 +297,13 @@ class TestAGridThatDividesNothing:
         # spreading takes the volume from the interval column.
         parts = [
             # Project 1 on a five-minute grid, reporting every ten.
-            datasets_frame(
+            household_batches_frame(
                 {household_batch_of(1): {DIFF: [pd.NA, pd.NA, value, pd.NA]}},
                 project=1, start=START, freq="5min", tz=None,
                 pairs=PAIRS_EMPTY,
             ),
             # Project 3 on a seven-minute grid, reporting every twenty-eight.
-            datasets_frame(
+            household_batches_frame(
                 {
                     household_batch_of(2): {
                         DIFF: [pd.NA, pd.NA, pd.NA, pd.NA, value]
@@ -363,7 +363,7 @@ class TestACoarseProjectsGapIsFilledWithItsOwnInterval:
     GAP = slice(20, 24)
 
     def _frame(self, households=10):
-        return datasets_frame(
+        return household_batches_frame(
             {
                 household_batch_of(household): {
                     DIFF: [self.AT_GRID] * self.SLOTS

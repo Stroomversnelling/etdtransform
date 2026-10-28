@@ -22,8 +22,6 @@ import ibis
 import pandas as pd
 import pytest
 import yaml
-
-import etdtransform
 from etdmap.mapping_helpers import save_household_shard
 from etdmap.storage import mapped_household_paths
 from etdmap.testing import (  # noqa: F401  (re-exported for the tests)
@@ -33,15 +31,17 @@ from etdmap.testing import (  # noqa: F401  (re-exported for the tests)
     PAIRS_EMPTY,
     PAIRS_RAMP,
     cadence_sidecar,
-    dataset_frame,
-    datasets_frame,
     generate_mapped_dataset,
+    household_batch_frame,
     household_batch_of,
+    household_batches_frame,
     household_of_batch,
     index_frame,
     installed_fingerprint,
     sidecar_frame,
 )
+
+import etdtransform
 from etdtransform.aggregate import (
     add_calculated_columns_to_hh_data_ibis,
     aggregate_project_data_duckdb,
@@ -177,8 +177,8 @@ def _cum_cols():
 # equality that only holds while the mapping writes one household batch per household.
 # ---------------------------------------------------------------------------
 
-# `dataset_frame` (one household batch's rows, no id columns -- for a shard tree, whose
-# path carries them) and `datasets_frame` (several household batches in one frame,
+# `household_batch_frame` (one household batch's rows, no id columns -- for a shard tree, whose
+# path carries them) and `household_batches_frame` (several household batches in one frame,
 # keyed on ids.HOUSEHOLD_BATCH and carrying both ids -- for a stage that takes a
 # frame) live in `etdmap.testing`, which both suites import, and are
 # re-exported here for the tests that name them.
@@ -521,8 +521,8 @@ def spread_average(frame, cadence, diff_col, grid_minutes=5, drop_na=True):
     Returns ``(avg, coverage, duty)``.
     """
     import ibis
-
     from etdmap.data_model import cumulative_column
+
     from etdtransform.impute import _resample_average_ibis
 
     cum_col = cumulative_column(diff_col)

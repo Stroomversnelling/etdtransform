@@ -16,18 +16,18 @@ import etdmap
 import etdmap.index_helpers
 import pandas as pd
 import pytest
+from etdmap import ids
 from etdmap.testing import generate_mapped_dataset
 
 import etdtransform
 from etdtransform.impute import prepare_diff_averages_sharded, read_diffs
-from etdtransform.presence import MIN_ELIGIBLE_DATASETS
-from etdmap import ids
+from etdtransform.presence import MIN_ELIGIBLE_HOUSEHOLD_BATCHES
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
 #: Both projects start at the floor, so the one that keeps every household is
 #: averageable and the one that loses a household is one short of it.
-AT_THE_FLOOR = MIN_ELIGIBLE_DATASETS
+AT_THE_FLOOR = MIN_ELIGIBLE_HOUSEHOLD_BATCHES
 SHORT_PROJECT = 1
 FULL_PROJECT = 2
 
@@ -118,7 +118,7 @@ class TestTheFloorDecidesWhetherAnAverageIsPublished:
         assert not rows.empty, f"project {FULL_PROJECT} has no rows at all"
         assert rows[column].notna().any(), (
             f"project {FULL_PROJECT} has {AT_THE_FLOOR} eligible households, "
-            f"which meets the floor of {MIN_ELIGIBLE_DATASETS}, so its "
+            f"which meets the floor of {MIN_ELIGIBLE_HOUSEHOLD_BATCHES}, so its "
             f"average must be published"
         )
 
@@ -130,7 +130,7 @@ class TestTheFloorDecidesWhetherAnAverageIsPublished:
         assert rows[column].isna().all(), (
             f"project {SHORT_PROJECT} lost household {dropped}, leaving "
             f"{AT_THE_FLOOR - 1} eligible against a floor of "
-            f"{MIN_ELIGIBLE_DATASETS}, so it must publish no average"
+            f"{MIN_ELIGIBLE_HOUSEHOLD_BATCHES}, so it must publish no average"
         )
 
     def test_the_two_projects_disagree(self, averaged):

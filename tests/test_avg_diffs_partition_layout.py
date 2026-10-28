@@ -17,7 +17,7 @@ import os
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.impute import AVG_DIFFS_ARTIFACT, read_diffs, write_diffs
 
@@ -139,7 +139,7 @@ class TestWhatTheFillReceives:
         write_diffs(_averages(), aggregate_folder_path=tmp_path)
         # One household batch of project 2, on that project's quarter-hourly grid and
         # tz-naive, which is what the merge keys have to meet.
-        chunk = datasets_frame(
+        chunk = household_batches_frame(
             {household_batch_of(7): {}}, n_rows=2, project=2,
             start="2026-01-01", freq="15min", tz=None,
         )

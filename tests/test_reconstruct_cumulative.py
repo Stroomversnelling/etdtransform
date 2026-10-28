@@ -5,12 +5,12 @@ reconstruct_cumulative_columns_ibis (Ibis/DuckDB).
 Both must produce identical output to the original per-household loop + pd.concat
 implementation that they replaced.
 """
+import ibis
 import numpy as np
 import pandas as pd
 import pytest
-import ibis
-
 from etdmap import ids
+
 from etdtransform.aggregate import (
     reconstruct_cumulative_columns,
     reconstruct_cumulative_columns_ibis,
@@ -47,10 +47,10 @@ def _reference_reconstruct(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 # Fixture
 # ---------------------------------------------------------------------------
 
-def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
+def _make_df(household_batches: list, seed: int = 42) -> pd.DataFrame:
     """Frames for *household batches*, each ``(ids.HOUSEHOLD, ids.HOUSEHOLD_BATCH)``.
 
-    Not `conftest.dataset_frame`: that builds one household's rows and fills
+    Not `conftest.household_batch_frame`: that builds one household's rows and fills
     the cumulative counterpart with arbitrary values, while the relation
     ``cumulative == cumsum(interval) + 100`` is what reconstruction is checked
     against here, and these frames carry several household batches at once.
@@ -63,7 +63,7 @@ def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
         "2023-01-01", periods=ROWS, freq="5min"
     ).astype("datetime64[us]")
     rows = []
-    for household_id, household_batch_id in datasets:
+    for household_id, household_batch_id in household_batches:
         diffs = rng.uniform(0.1, 5.0, (len(COLS), ROWS))
         cumulatives = [pd.Series(d, dtype="Float64").cumsum() + 100.0 for d in diffs]
         for i, dt in enumerate(dates):
@@ -91,12 +91,12 @@ def _make_df(datasets: list, seed: int = 42) -> pd.DataFrame:
 #: Three households, one household batch each, plus a SECOND household batch of household 1
 #: over the same timestamps. Grouping the rebuild by household would run one
 #: cumulative total across both of household 1's deliveries.
-DATASETS = [(1, 1001), (2, 1002), (3, 1003), (1, 2001)]
+HOUSEHOLD_BATCHES = [(1, 1001), (2, 1002), (3, 1003), (1, 2001)]
 
 
 @pytest.fixture(scope="module")
 def base_df():
-    return _make_df(DATASETS)
+    return _make_df(HOUSEHOLD_BATCHES)
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +137,10 @@ def test_pandas_original_column_preserved(base_df):
         )
 
 
-def test_pandas_cumsum_is_per_dataset(base_df):
+def test_pandas_cumsum_is_per_household_batch(base_df):
     out = reconstruct_cumulative_columns(base_df.copy(), COLS)
     for col in COLS:
-        for _dataset, grp in out.groupby(ids.HOUSEHOLD_BATCH):
+        for _household_batch, grp in out.groupby(ids.HOUSEHOLD_BATCH):
             expected = grp[col + "Diff"].cumsum().values
             np.testing.assert_allclose(grp[col].values, expected, rtol=1e-9)
 
@@ -156,7 +156,7 @@ def test_pandas_check_column_is_diff_of_residual(base_df):
             )
 
 
-def test_pandas_single_row_per_dataset():
+def test_pandas_single_row_per_household_batch():
     """Edge case: one row per household batch -- check should be NaN."""
     df = (
         _make_df([(10, 1010), (11, 1011)])
@@ -188,7 +188,7 @@ def test_ibis_matches_pandas_multiple_households(base_df):
     )
 
 
-def test_ibis_cumsum_per_dataset(base_df):
+def test_ibis_cumsum_per_household_batch(base_df):
     tbl = ibis.memtable(base_df)
     out = reconstruct_cumulative_columns_ibis(tbl, COLS).execute()
     out = _sort(out)

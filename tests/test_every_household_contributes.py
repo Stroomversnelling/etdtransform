@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import PAIRS_EMPTY, datasets_frame, household_batch_of
+from etdmap.testing import PAIRS_EMPTY, household_batch_of, household_batches_frame
 
 pytestmark = pytest.mark.unit
 
@@ -42,7 +42,7 @@ def _household(household, values, project=1):
     half a pair is not a household artifact -- and empty, so the averaging
     takes the household batch's volume from the values stated here.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household): {DIFF: values}},
         start="2026-01-01",
         freq="5min",

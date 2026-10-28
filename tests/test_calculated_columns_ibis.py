@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 import sympy as sp
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
 from etdtransform.calculated_columns import sympy_to_ibis, undefined_where
@@ -200,7 +200,7 @@ def _make_multi_schema_df():
     No cumulative counterpart is completed: A, B and C are not data model
     variables, so none of them has one.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {
             household_batch_of(household_id): {
                 column: [value] * N for column, value in values.items()

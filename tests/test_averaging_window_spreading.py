@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 from conftest import spread_average
 from etdmap import ids
-from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
+from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
 
 pytestmark = pytest.mark.unit
 
@@ -45,15 +45,15 @@ def _frame(per_household):
     Both halves of the pair are stated -- the cumulative readings and the
     intervals differenced from them -- so no counterpart is completed.
     """
-    per_dataset = {}
+    per_household_batch = {}
     for household, readings in per_household.items():
         cumulative = pd.Series(pd.array(readings, dtype="Float64"))
-        per_dataset[household_batch_of(household)] = {
+        per_household_batch[household_batch_of(household)] = {
             CUM: cumulative.tolist(),
             IV: cumulative.diff().tolist(),
         }
-    return datasets_frame(
-        per_dataset,
+    return household_batches_frame(
+        per_household_batch,
         start="2026-01-01",
         freq=f"{GRID}min",
         tz=None,

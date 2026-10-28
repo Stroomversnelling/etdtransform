@@ -18,7 +18,7 @@ import logging
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of, sidecar_frame
+from etdmap.testing import household_batch_of, household_batches_frame, sidecar_frame
 
 from etdtransform.vectorized_impute import (
     ImputeType,
@@ -102,7 +102,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
     for _ in range(n):
         total += rise
         values.append(total)
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(household): {CUM: values}},
         start="2026-01-01",
         freq="5min",
@@ -120,7 +120,7 @@ def _register_frame(household=1, n=N, rise=0.5, gap=(8, 11)):
 
 def _interval_frame(household=1, n=N, value=0.5, missing=(8, 11)):
     """Delivered intervals at the grid, no register, with cells missing."""
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(household): {
             CUM: [pd.NA] * n,
             DIFF: [value] * n,
@@ -330,7 +330,7 @@ class TestTheGuards:
         with pytest.raises(ValueError, match="no cadence table"):
             delivery_paths(_register_frame(), CUM, DIFF, None)
 
-    def test_a_frame_without_dataset_ids_is_refused(self):
+    def test_a_frame_without_household_batch_ids_is_refused(self):
         df = _register_frame().drop(columns=[ids.HOUSEHOLD_BATCH])
         with pytest.raises(ValueError, match="no HuisBatchIdBSV"):
             delivery_paths(

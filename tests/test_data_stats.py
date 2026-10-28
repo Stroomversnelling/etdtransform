@@ -22,16 +22,15 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
+from etdmap import ids
 from etdmap.data_stats import (
-    NUMERIC_STATS_SCHEMA,
     _STATS_DTYPES,
+    NUMERIC_STATS_SCHEMA,
     compute_numeric_column_stats,
 )
+from etdmap.testing import household_batch_of
 
 from etdtransform.data_stats import get_data_stats
-from etdmap import ids
-from etdmap.testing import household_batch_of
 
 pytestmark = pytest.mark.integration
 
@@ -126,7 +125,7 @@ class TestValueParityExactPrecision:
     compute_numeric_column_stats. This is the byte-equal contract
     that cross-stage drift reports rely on."""
 
-    def test_exact_quantile_matches_kernel_for_a_single_dataset(
+    def test_exact_quantile_matches_kernel_for_a_single_household_batch(
         self, fixture_parquet
     ):
         """For one household batch, column=kWh, annual: get_data_stats(exact) row
@@ -172,7 +171,7 @@ class TestCrossJoinPadding:
     ibis aggregation -- the mapped-mode kernel emits a count=0 row
     for an all-NA column, and the wide-stage path must too."""
 
-    def test_zero_count_row_for_a_dataset_with_no_column_data(
+    def test_zero_count_row_for_a_household_batch_with_no_column_data(
         self, fixture_parquet
     ):
         """The third household batch has no kWh data. Output must contain a row for

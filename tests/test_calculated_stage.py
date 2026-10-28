@@ -13,9 +13,9 @@ Cross-FORMAT reading (resolving a monolith or a hive tree) is
 import shutil
 
 import pytest
+from etdmap import ids
 
 from etdtransform.aggregate import add_calculated_columns_to_hh_data_ibis
-from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -45,10 +45,10 @@ class TestSourceGuards:
         # before anything is written. Stated with a frame that simply has no
         # ids.HOUSEHOLD_BATCH, rather than borrowing an artifact that happens to
         # lack one.
-        from conftest import dataset_frame
+        from conftest import household_batch_frame
 
         source = tmp_path / "no_batch_id.parquet"
-        dataset_frame(ElektriciteitNetgebruikDiff=1.0).to_parquet(
+        household_batch_frame(ElektriciteitNetgebruikDiff=1.0).to_parquet(
             source, index=False
         )
         with pytest.raises(ValueError, match=ids.HOUSEHOLD_BATCH):
@@ -84,10 +84,10 @@ class TestDerivationIsPerRow:
 
     @pytest.fixture
     def derived(self, tmp_path):
-        from conftest import dataset_frame, write_shard_tree
+        from conftest import household_batch_frame, write_shard_tree
 
         src = write_shard_tree(tmp_path / "imputed_shards", {
-            hid: dataset_frame(n_rows=_ROWS, **{_TERUG: terug, _NETG: netg})
+            hid: household_batch_frame(n_rows=_ROWS, **{_TERUG: terug, _NETG: netg})
             for hid, (terug, netg) in _PER_HOUSEHOLD.items()
         })
         out = tmp_path / "calculated_shards"

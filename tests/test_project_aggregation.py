@@ -14,8 +14,8 @@ import shutil
 
 import pandas as pd
 import pytest
-
 from etdmap import ids
+
 from etdtransform.aggregate import (
     aggregate_project_data_duckdb,
     resample_hh_data_duckdb,
@@ -54,11 +54,11 @@ class TestProjectAggregateIsTheMeanOverItsOwnHouseholds:
     def project_rows(self, tmp_path):
         from unittest.mock import patch
 
-        from conftest import dataset_frame, write_shard_tree
+        from conftest import household_batch_frame, write_shard_tree
 
         agg = tmp_path / "agg"
         write_shard_tree(agg / "household_15min", {
-            hid: dataset_frame(n_rows=_SLOTS, project=pid, freq="15min",
+            hid: household_batch_frame(n_rows=_SLOTS, project=pid, freq="15min",
                                  **{_AVG_COL: value})
             for (pid, hid), value in _MEMBERSHIP.items()
         })

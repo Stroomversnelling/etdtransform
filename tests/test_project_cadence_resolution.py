@@ -19,9 +19,9 @@ committed.
 
 import pandas as pd
 import pytest
-
-from etdmap.mapping_helpers import detect_column_cadence
 from etdmap import ids
+from etdmap.mapping_helpers import detect_column_cadence
+
 from etdtransform.bounds import (
     grid_minutes_by_household_batch,
     grid_minutes_by_project,

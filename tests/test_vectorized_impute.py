@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -27,7 +27,7 @@ HOUSEHOLD = 1
 
 
 def _frame(cumulative, diffs, averages):
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {
             CUM: cumulative,
             DIFF: diffs,
@@ -61,7 +61,7 @@ def conserved():
 
 
 class TestTheStatsDescribeTheFill:
-    def test_one_row_per_dataset_and_column(self, conserved):
+    def test_one_row_per_household_batch_and_column(self, conserved):
         _, stats = conserved
         assert len(stats) == 1
         row = stats.iloc[0]

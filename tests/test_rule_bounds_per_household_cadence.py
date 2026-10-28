@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 from etdmap import ids
 from etdmap.data_model import resolve_bounds, thresholds_dict
-from etdmap.testing import cadence_sidecar, datasets_frame, household_batch_of
+from etdmap.testing import cadence_sidecar, household_batch_of, household_batches_frame
 from test_constraint_package import _constraints
 
 import etdtransform.vectorized_impute as vi
@@ -30,7 +30,7 @@ N = 4
 
 def _rows(household, minutes, n=N):
     """One household batch's rows, spaced at its own reporting interval."""
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household): {
             DIFF: [0.1] * n,
             # The rule's input, never known, so nothing narrows and the bound

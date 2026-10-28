@@ -24,9 +24,9 @@ from etdmap import ids
 from etdmap.flags import MappingFlag, flag_column
 from etdmap.testing import (
     PAIRS_EMPTY,
-    datasets_frame,
     declare_synthetic_model,
     household_batch_of,
+    household_batches_frame,
     synthetic_model,
 )
 
@@ -67,19 +67,19 @@ def _frame(per_household, project_of=None, register=None):
     ``PAIRS_EMPTY`` is what leaves a household without one on the interval
     values: the cumulative column is present and empty, not absent.
     """
-    per_dataset = {}
-    project_of_dataset = {}
+    per_household_batch = {}
+    project_of_household_batch = {}
     for household, values in per_household.items():
-        dataset = household_batch_of(household)
+        household_batch = household_batch_of(household)
         columns = {DIFF: list(values)}
         readings = (register or {}).get(household)
         if readings is not None:
             columns[CUM] = list(readings)
-        per_dataset[dataset] = columns
-        project_of_dataset[dataset] = (project_of or {}).get(household, 1)
-    return datasets_frame(
-        per_dataset,
-        project_of=project_of_dataset,
+        per_household_batch[household_batch] = columns
+        project_of_household_batch[household_batch] = (project_of or {}).get(household, 1)
+    return household_batches_frame(
+        per_household_batch,
+        project_of=project_of_household_batch,
         start="2026-01-01",
         freq=f"{GRID}min",
         tz=None,
@@ -249,7 +249,7 @@ class TestWindowsSkippedAsOutages:
         assert int(presence["n_outage_windows"].sum()) == 0
 
 
-class TestWhichSourceFedEachDataset:
+class TestWhichSourceFedEachHouseholdBatch:
     """The source is decided per household batch per column, and recorded rather than
     used and discarded: without it a reader cannot tell whether a household batch's
     volume came from its cumulative readings or its delivered intervals."""

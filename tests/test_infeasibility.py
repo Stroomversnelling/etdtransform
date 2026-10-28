@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 from test_constraint_package import _constraints
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -41,7 +41,7 @@ def _frame(columns):
     Every caller states each cumulative column alongside its interval one, so
     the builder completes neither half and the stated readings bound the gaps.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {
             name: list(values) for name, values in columns.items()
         }},

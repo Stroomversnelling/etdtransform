@@ -12,7 +12,7 @@ it counts.
 import pandas as pd
 import pytest
 from etdmap.flags import MappingFlag, flag_column
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.bounds import usable_readings
 
@@ -28,7 +28,7 @@ def _frame(values, flags=None):
     columns = {CUM: list(values)}
     if flags is not None:
         columns[flag_column(CUM)] = list(flags)
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): columns},
         start="2026-01-01",
         freq="5min",

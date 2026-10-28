@@ -16,8 +16,8 @@ from etdmap import ids
 from etdmap.mapping_helpers import cadence_to_rows, detect_column_cadence
 from etdmap.testing import (
     PAIRS_EMPTY,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     sidecar_frame,
 )
 
@@ -76,7 +76,7 @@ def _household(household):
     every ``K`` slots, the first on the first.
     """
     values = [READING if position % K == 0 else pd.NA for position in range(N)]
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household): {DIFF: values}},
         start="2026-01-01",
         freq=f"{GRID}min",

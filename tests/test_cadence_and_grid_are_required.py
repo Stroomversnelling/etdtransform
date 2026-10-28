@@ -14,8 +14,8 @@ from etdmap.mapping_helpers import CADENCE_FILENAME
 from etdmap.testing import (
     PAIRS_EMPTY,
     cadence_sidecar,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     index_frame,
     sidecar_frame,
 )
@@ -139,7 +139,7 @@ class TestTheGridIsNotDefaultedDownstream:
         not the same as defaulting to a number: a project that resolves none
         raises, naming itself, rather than being averaged at some other
         project's spacing."""
-        frame = datasets_frame(
+        frame = household_batches_frame(
             {household_batch_of(HOUSEHOLD): {DIFF: [1.0, 1.0]}},
             project=4,
             start="2026-01-01",

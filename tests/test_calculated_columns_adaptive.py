@@ -14,7 +14,7 @@ import logging
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.calculated_columns import add_calculated_columns_adaptive
 from etdtransform.catalog.query import DatasetAdapter
@@ -60,7 +60,7 @@ def _make_df(cols: dict, household_id=1) -> pd.DataFrame:
     counterpart is completed: availability is assessed per column, so one the
     test did not declare would be another available column.
     """
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household_id): {
             column: list(values) for column, values in cols.items()
         }},

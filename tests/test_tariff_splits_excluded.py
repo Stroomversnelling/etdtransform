@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table, project_averages
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.impute import (
     concatenate_avg_diff_columns,
@@ -64,23 +64,23 @@ class TestAveragingMicroMixedSupplier:
     unaffected."""
 
     def _frame(self):
-        per_dataset = {}
+        per_household_batch = {}
         project_of = {}
         for project, household, root_value in (
             (1, 1, 1.0), (1, 2, 3.0), (2, 3, 2.0), (2, 4, 4.0),
         ):
-            dataset = household_batch_of(household)
-            project_of[dataset] = project
+            household_batch = household_batch_of(household)
+            project_of[household_batch] = project
             # Project 2 also carries its delivered splits (kept as mapped);
             # project 1 delivered the root and no splits.
             split = root_value / 2 if project == 2 else pd.NA
-            per_dataset[dataset] = {
+            per_household_batch[household_batch] = {
                 ROOT_DIFF: root_value,
                 HOOG_DIFF: split,
                 LAAG_DIFF: split,
             }
-        return datasets_frame(
-            per_dataset,
+        return household_batches_frame(
+            per_household_batch,
             project_of=project_of,
             start="2026-01-01",
             freq="5min",
@@ -129,7 +129,7 @@ class TestFillSkipsSplits:
     def _frame(self):
         split_diff = [0.5, 0.5, pd.NA, pd.NA, 0.5, 0.5, 0.5, 0.5]
         split_cum = [0.5, 1.0, pd.NA, pd.NA, 2.0, 2.5, 3.0, 3.5]
-        return datasets_frame(
+        return household_batches_frame(
             {
                 household_batch_of(1): {
                     ROOT: [1.0, 2.0, pd.NA, pd.NA, 5.0, 6.0, 7.0, 8.0],

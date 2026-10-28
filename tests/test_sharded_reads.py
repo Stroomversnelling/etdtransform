@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
 from etdmap import ids
+
 from etdtransform.load_data import (
     detect_mapped_format,
     mapped_household_files,

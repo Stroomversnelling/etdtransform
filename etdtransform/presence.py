@@ -15,7 +15,7 @@ Window eligibility
 
 Project sufficiency
     Per (project, column, window). The window is averaged at all only where at
-    least ``MIN_ELIGIBLE_DATASETS`` were eligible for it. The slot fraction
+    least ``MIN_ELIGIBLE_HOUSEHOLD_BATCHES`` were eligible for it. The slot fraction
     below cannot carry this, because it scales with the count it is judging.
 
 Slot sufficiency
@@ -62,7 +62,7 @@ SUFFICIENCY_FRACTION = 0.5
 #:
 #: Counted in household batches, because a household batch is the unit of
 #: data: one household delivered as two household batches contributes two series.
-MIN_ELIGIBLE_DATASETS = 10
+MIN_ELIGIBLE_HOUSEHOLD_BATCHES = 10
 
 
 def window_minutes_for_column(cadence_minutes, base=WINDOW_MINUTES) -> float:
@@ -111,7 +111,7 @@ def slot_minimum(n_eligible, shape=SUFFICIENCY_SHAPE, fraction=SUFFICIENCY_FRACT
     return int(min(int(shape), ceil(float(fraction) * int(n_eligible))))
 
 
-def window_is_averageable(n_eligible, minimum=MIN_ELIGIBLE_DATASETS) -> bool:
+def window_is_averageable(n_eligible, minimum=MIN_ELIGIBLE_HOUSEHOLD_BATCHES) -> bool:
     """Whether a window has enough eligible household batches to average at all.
 
     A separate question from :func:`slot_minimum`, which asks how many of them a
@@ -133,16 +133,16 @@ def window_presence_frame(
     column,
     window_minutes,
     project_id_column,
-    dataset_column=ids.HOUSEHOLD_BATCH,
+    household_batch_column=ids.HOUSEHOLD_BATCH,
     min_coverage=MIN_WINDOW_COVERAGE,
     shape=SUFFICIENCY_SHAPE,
     fraction=SUFFICIENCY_FRACTION,
-    min_eligible=MIN_ELIGIBLE_DATASETS,
+    min_eligible=MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ):
     """One row per (project, household batch, window): the counts the presence gates
     judged, and the judgements derived from them.
 
-    *counts* carries *project_id_column*, *dataset_column*, ``_window`` (the
+    *counts* carries *project_id_column*, *household_batch_column*, ``_window`` (the
     :func:`window_index` value) and the two raw counts ``n_slots`` and
     ``n_delivered``. Everything else -- eligibility, the per-window household batch
     tallies, the slot minimum and whether the window is averageable at all --
@@ -202,7 +202,7 @@ def window_presence_frame(
     ordered = [
         "column",
         project_id_column,
-        dataset_column,
+        household_batch_column,
         "window_start",
         "window_minutes",
         "n_slots",
@@ -221,6 +221,6 @@ def window_presence_frame(
     ]
     return (
         out[ordered]
-        .sort_values([project_id_column, dataset_column, "window_start"])
+        .sort_values([project_id_column, household_batch_column, "window_start"])
         .reset_index(drop=True)
     )

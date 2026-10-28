@@ -16,9 +16,9 @@ import shutil
 
 import pandas as pd
 import pytest
+from etdmap import ids
 
 from etdtransform.aggregate import resample_hh_data_duckdb
-from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -55,11 +55,11 @@ class TestResamplingIsPerHouseholdAndInterval:
     def resampled(self, tmp_path):
         from unittest.mock import patch
 
-        from conftest import dataset_frame, write_shard_tree
+        from conftest import household_batch_frame, write_shard_tree
         from etdmap.storage import read_source_frame
 
         src = write_shard_tree(tmp_path / "calculated_shards", {
-            hid: dataset_frame(n_rows=_SLOTS, **{_SUM_COL: value})
+            hid: household_batch_frame(n_rows=_SLOTS, **{_SUM_COL: value})
             for hid, value in _PER_HOUSEHOLD_VALUE.items()
         })
         out = tmp_path / "out"
@@ -124,10 +124,10 @@ class TestSourceGuards:
     def test_a_source_without_a_batch_column_is_refused(self, tmp_path):
         # As in test_calculated_stage: a source with no household batch id to file the rows
         # under is a caller error, stated with a frame that has none.
-        from conftest import dataset_frame
+        from conftest import household_batch_frame
 
         source = tmp_path / "no_batch_id.parquet"
-        dataset_frame(**{_SUM_COL: 1.0}).to_parquet(source, index=False)
+        household_batch_frame(**{_SUM_COL: 1.0}).to_parquet(source, index=False)
         with pytest.raises(ValueError, match=ids.HOUSEHOLD_BATCH):
             resample_hh_data_duckdb(
                 str(source), str(tmp_path / "out"), intervals=("60min",),

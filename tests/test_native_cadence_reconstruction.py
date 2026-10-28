@@ -29,7 +29,7 @@ from etdmap.mapping_helpers import (
     _treat_frozen_spans,
     add_diff_columns,
 )
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
 
@@ -73,7 +73,7 @@ def _household(n=60, frozen=range(8, 20), catchup_at=20, catchup=400.0,
             current += NORMAL
         values.append(current)
 
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(HOUSEHOLD): {CUM: values}},
         start="2026-01-01",
         freq="5min",

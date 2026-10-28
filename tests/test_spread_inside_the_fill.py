@@ -19,8 +19,8 @@ import pytest
 from etdmap import ids
 from etdmap.testing import (
     PAIRS_EMPTY,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     sidecar_columns,
     sidecar_frame,
 )
@@ -58,7 +58,7 @@ def _interval_only_frame(reading=1.2, missing=(), n=N):
 
     # PAIRS_EMPTY: the register is the one that never arrived, so the pair is
     # present and holds nothing, leaving the interval column the only source.
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {DIFF: values}},
         start="2026-01-01",
         freq="5min",
@@ -184,7 +184,7 @@ class TestOtherDeliveryFormsAreUntouched:
             values.append(total if row % K == K - 1 else pd.NA)
         # pairs=False: both halves are supplied here, the register directly and
         # the interval column by differencing it.
-        df = datasets_frame(
+        df = household_batches_frame(
             {household_batch_of(HOUSEHOLD): {CUM: values}},
             start="2026-01-01",
             freq="5min",

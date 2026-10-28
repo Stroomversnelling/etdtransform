@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.constraints import CONSTRAINT_COLUMNS, build_constraint_package
 from etdtransform.vectorized_impute import ImputeType, impute_and_normalize
@@ -59,7 +59,7 @@ def _constraints_for_models(*rows):
 
 def _two_project_frame():
     """One household per project, identical data: only the model differs."""
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(household): _READINGS
          for household in PROJECT_OF_HOUSEHOLD},
         project_of={household_batch_of(household): project
@@ -129,15 +129,15 @@ class TestTheFillJoinsModelPerRow:
             ),
             physical_models={1: "All-Electric", 2: "Hybride"},
         )
-        by_dataset = {
+        by_household_batch = {
             household: out[
                 out[ids.HOUSEHOLD_BATCH] == household_batch_of(household)
             ].reset_index(drop=True)
             for household in (1, 2)
         }
-        flagged = int(by_dataset[1].loc[1, ITYPE])
+        flagged = int(by_household_batch[1].loc[1, ITYPE])
         assert flagged & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
-        other = by_dataset[2].loc[1, ITYPE]
+        other = by_household_batch[2].loc[1, ITYPE]
         assert pd.isna(other) or not (
             int(other) & ImputeType.DELIVERED_OUTSIDE_RULE_BOUND.value
         )

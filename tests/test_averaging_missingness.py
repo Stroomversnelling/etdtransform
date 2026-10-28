@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.impute import calculate_average_diff_ibis
 
@@ -59,7 +59,7 @@ _NULL_SLOTS = {(1, 105, 3), (1, 110, 7), (2, 207, 0), (2, 215, 12)}
 @pytest.fixture(scope="module")
 def diff_fixture_df() -> pd.DataFrame:
     rng = np.random.default_rng(42)
-    per_dataset = {}
+    per_household_batch = {}
     project_of = {}
 
     for project_id, normal_ids, outlier_id in [
@@ -75,26 +75,26 @@ def diff_fixture_df() -> pd.DataFrame:
                 else:
                     low_tariff.append(float(rng.uniform(1.0, 10.0)))
                     solar.append(float(rng.uniform(0.5, 5.0)))
-            dataset = household_batch_of(household_id)
-            per_dataset[dataset] = {
+            household_batch = household_batch_of(household_id)
+            per_household_batch[household_batch] = {
                 "ElektriciteitNetgebruikLaagDiff": low_tariff,
                 "ZonopwekVerbruikDiff": solar,
             }
-            project_of[dataset] = project_id
+            project_of[household_batch] = project_id
 
         low_tariff, solar = [], []
         for _ in range(SLOTS):
             low_tariff.append(float(rng.uniform(150.0, 300.0)))
             solar.append(float(rng.uniform(150.0, 300.0)))
-        dataset = household_batch_of(outlier_id)
-        per_dataset[dataset] = {
+        household_batch = household_batch_of(outlier_id)
+        per_household_batch[household_batch] = {
             "ElektriciteitNetgebruikLaagDiff": low_tariff,
             "ZonopwekVerbruikDiff": solar,
         }
-        project_of[dataset] = project_id
+        project_of[household_batch] = project_id
 
-    df = datasets_frame(
-        per_dataset,
+    df = household_batches_frame(
+        per_household_batch,
         start="2023-01-01",
         freq="5min",
         project_of=project_of,
@@ -144,7 +144,7 @@ def test_nulls_excluded_from_mean(diff_fixture_df):
     Null-in, null-out still holds: no slot comes back empty, because one
     household did cover every one of them.
     """
-    mini = datasets_frame(
+    mini = household_batches_frame(
         {
             household_batch_of(1): {"ZonopwekVerbruikDiff": [2.0, pd.NA, 4.0]},
             household_batch_of(2): {"ZonopwekVerbruikDiff": [6.0, 6.0, 6.0]},
@@ -184,7 +184,7 @@ def test_empty_project_edge_cases():
          normal project processes correctly; zero project gets null upper_bound.
     """
     # Project 1: all zeros. Project 2: normal non-zero values.
-    mini = datasets_frame(
+    mini = household_batches_frame(
         {
             household_batch_of(1): {"ZonopwekVerbruikDiff": [0.0, 0.0, 0.0]},
             household_batch_of(2): {"ZonopwekVerbruikDiff": [3.0, 5.0, 4.0]},
@@ -247,7 +247,7 @@ def test_flagged_values_excluded_in_both_paths():
     from etdmap.flags import MappingFlag, flag_column
 
     findings = flag_column("ZonopwekVerbruikDiff")
-    mini = datasets_frame(
+    mini = household_batches_frame(
         {
             household_batch_of(1): {
                 "ZonopwekVerbruikDiff": [3.0, 3.0, 3.0],
@@ -293,7 +293,7 @@ def test_all_null_diffs_edge_case():
     Both paths agree on this, which is the point of the assertion.
     """
     absent = [pd.NA, pd.NA]
-    mini = datasets_frame(
+    mini = household_batches_frame(
         {household_batch_of(1): {"ZonopwekVerbruikDiff": absent}},
         start="2024-06-01",
         freq="5min",

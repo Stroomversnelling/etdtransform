@@ -11,11 +11,11 @@ Cross-FORMAT reading is `etdmap.storage`'s subject and is tested there.
 
 
 import pandas as pd
+import pytest
+from etdmap import ids
 
 import etdtransform
 from etdtransform.data_stats import get_data_stats
-import pytest
-from etdmap import ids
 
 pytestmark = [pytest.mark.integration, pytest.mark.pipeline]
 
@@ -29,12 +29,12 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
     not kill the whole stats report: that column's stats become NA with a
     factual warning, counts are kept, and every other column reports normally
     (ADR-022: NA = 'we do not know', stated visibly)."""
-    from conftest import dataset_frame, write_shard_tree
+    from conftest import household_batch_frame, write_shard_tree
 
     # A hive tree, because that is the shape a wide stage artifact has when
     # the stats are collected over it in production.
     root = write_shard_tree(tmp_path / "household_calculated", {
-        1: dataset_frame(
+        1: household_batch_frame(
             n_rows=10,
             Normal=[float(i) for i in range(10)],
             HugeRatio=[1e200, 2e200] * 5,
@@ -58,24 +58,24 @@ def test_variance_overflow_reports_na_not_crash(tmp_path, caplog):
 #: mean, min and max share no value with the other's, so stats pooled across
 #: the two would be wrong rather than close: pooled, both means read 7.0.
 _HOUSEHOLD = 1
-_PER_DATASET = {101: [0.0, 1.0, 2.0, 3.0, 4.0], 102: [10.0, 11.0, 12.0, 13.0, 14.0]}
+_PER_HOUSEHOLD_BATCH = {101: [0.0, 1.0, 2.0, 3.0, 4.0], 102: [10.0, 11.0, 12.0, 13.0, 14.0]}
 _EXPECTED = {101: {"mean": 2.0, "min": 0.0, "max": 4.0, "count": 5},
              102: {"mean": 12.0, "min": 10.0, "max": 14.0, "count": 5}}
 
 
 @pytest.fixture
-def per_dataset_stats(tmp_path):
+def per_household_batch_stats(tmp_path):
     """Stats over a sharded source holding one household's two household batches."""
-    from conftest import dataset_frame, write_shard_tree
+    from conftest import household_batch_frame, write_shard_tree
 
     root = write_shard_tree(tmp_path / "stage", {
-        (_HOUSEHOLD, batch_id): dataset_frame(n_rows=len(values), Measured=values)
-        for batch_id, values in _PER_DATASET.items()
+        (_HOUSEHOLD, batch_id): household_batch_frame(n_rows=len(values), Measured=values)
+        for batch_id, values in _PER_HOUSEHOLD_BATCH.items()
     })
     return get_data_stats(str(root), precision="exact")
 
 
-def test_stats_are_computed_over_each_datasets_own_rows(per_dataset_stats):
+def test_stats_are_computed_over_each_household_batches_own_rows(per_household_batch_stats):
     """A household batch's stats come from its rows and no others.
 
     Both household batches here belong to one household, so a producer keyed on the
@@ -83,7 +83,7 @@ def test_stats_are_computed_over_each_datasets_own_rows(per_dataset_stats):
     monolith-versus-shards comparison could not catch that, because both
     layouts would pool identically.
     """
-    measured = per_dataset_stats[per_dataset_stats["column"] == "Measured"]
+    measured = per_household_batch_stats[per_household_batch_stats["column"] == "Measured"]
     assert not measured.empty, "no stats row for the Measured column"
     for batch_id, expected in _EXPECTED.items():
         rows = measured[measured[ids.HOUSEHOLD_BATCH] == batch_id]
@@ -95,7 +95,7 @@ def test_stats_are_computed_over_each_datasets_own_rows(per_dataset_stats):
         assert float(row["max"]) == pytest.approx(expected["max"])
 
 
-def test_a_dataset_holding_no_value_still_gets_a_row(tmp_path):
+def test_a_household_batch_holding_no_value_still_gets_a_row(tmp_path):
     """A household batch present in the artifact but with nothing in a column gets a
     row for it anyway, reporting count 0.
 
@@ -108,11 +108,11 @@ def test_a_dataset_holding_no_value_still_gets_a_row(tmp_path):
     measured nothing, it has measured nothing at all, and the report says so by
     carrying the row with a count of 0 instead of omitting it.
     """
-    from conftest import dataset_frame, write_shard_tree
+    from conftest import household_batch_frame, write_shard_tree
 
     root = write_shard_tree(tmp_path / "stage", {
-        1: dataset_frame(n_rows=5, Measured=[0.0, 1.0, 2.0, 3.0, 4.0]),
-        2: dataset_frame(n_rows=5, Measured=[pd.NA] * 5),
+        1: household_batch_frame(n_rows=5, Measured=[0.0, 1.0, 2.0, 3.0, 4.0]),
+        2: household_batch_frame(n_rows=5, Measured=[pd.NA] * 5),
     })
     stats = get_data_stats(str(root), precision="exact")
 

@@ -20,7 +20,7 @@ from etdmap.data_model import (
 from etdmap.flags import MappingFlag, flag_column
 
 from etdtransform.presence import (
-    MIN_ELIGIBLE_DATASETS,
+    MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
     MIN_WINDOW_COVERAGE,
     SUFFICIENCY_FRACTION,
     SUFFICIENCY_SHAPE,
@@ -335,7 +335,7 @@ def calculate_average_diff_ibis(
     bounds: dict | None = None,
     cadence: pd.DataFrame | None = None,
     grid_minutes: float | None = None,
-    min_eligible: int = MIN_ELIGIBLE_DATASETS,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ) -> dict:
     """
     The project average of each interval column, per project and reading date.
@@ -485,7 +485,7 @@ def _average_at_one_cadence(
     cadence: pd.DataFrame | None,
     grid_minutes: float,
     included_ids: list[int],
-    min_eligible: int = MIN_ELIGIBLE_DATASETS,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ) -> dict:
     """
     One pass of the averaging, over the household batches that share one grid.
@@ -576,7 +576,7 @@ def _average_at_one_cadence(
 
             # The interval each household batch's readings cover. A household batch absent
             # from the cadence table reports at the grid cadence.
-            minutes = _per_dataset(
+            minutes = _per_household_batch(
                 included[ids.HOUSEHOLD_BATCH],
                 cadence_minutes_by_household_batch(col, cadence),
                 grid_minutes,
@@ -612,7 +612,7 @@ def _average_at_one_cadence(
             bound = (bounds or {}).get(col, pd.NA)
             if pd.notna(bound):
                 assert_bounds_not_inverted(col, cadence)
-                scaled_bound = _per_dataset(
+                scaled_bound = _per_household_batch(
                     included[ids.HOUSEHOLD_BATCH],
                     column_bound_by_household_batch(col, cadence),
                     bound,
@@ -718,7 +718,7 @@ def _to_nullable(df: pd.DataFrame, float_cols: list[str] | None = None) -> pd.Da
     return df
 
 
-def _per_dataset(dataset_column, by_dataset, default):
+def _per_household_batch(household_batch_column, by_household_batch, default):
     """
     A per-household-batch number as an ibis expression, defaulting where unknown.
 
@@ -728,13 +728,13 @@ def _per_dataset(dataset_column, by_dataset, default):
     import ibis
 
     known = {
-        int(dataset): float(value)
-        for dataset, value in by_dataset.items()
+        int(household_batch): float(value)
+        for household_batch, value in by_household_batch.items()
         if pd.notna(value)
     }
     if not known:
         return ibis.literal(float(default)).cast("float64")
-    return dataset_column.substitute(known, else_=float(default)).cast("float64")
+    return household_batch_column.substitute(known, else_=float(default)).cast("float64")
 
 def _match_reading_date_dtype(frame):
     """Give ReadingDate the resolution pandas produces, preserving any timezone.
@@ -758,7 +758,7 @@ def _match_reading_date_dtype(frame):
 def _resample_average_ibis(
     prepared, diff_col, project_id_column, grid_minutes, max_slots, total_slots,
     window_minutes=WINDOW_MINUTES,
-    min_eligible=MIN_ELIGIBLE_DATASETS,
+    min_eligible=MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ):
     """
     The project average of *diff_col*, computed in SQL by resampling.
@@ -1167,7 +1167,7 @@ def prepare_diff_averages_for_impute_ibis(
     tbl,
     project_id_column: str,
     cumulative_columns: list,
-    min_eligible: int = MIN_ELIGIBLE_DATASETS,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ):
     """
     Compute the project averages and save the artefacts imputation reads.
@@ -1472,7 +1472,7 @@ def prepare_diff_averages_sharded(
     aggregate_folder_path=None,
     cumulative_columns: list = None,
     household_ids=None,
-    min_eligible: int = MIN_ELIGIBLE_DATASETS,
+    min_eligible: int = MIN_ELIGIBLE_HOUSEHOLD_BATCHES,
 ):
     """
     Sharded version of the avg-diffs stage: compute the imputation estimation

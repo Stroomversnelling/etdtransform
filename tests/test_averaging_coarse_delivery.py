@@ -27,8 +27,8 @@ from etdmap import ids
 from etdmap.data_model import thresholds_dict
 from etdmap.testing import (
     PAIRS_EMPTY,
-    datasets_frame,
     household_batch_of,
+    household_batches_frame,
     sidecar_frame,
 )
 
@@ -106,7 +106,7 @@ def _coarse_register_frame(n=N, rise=RISE):
             values.append(total)
         else:
             values.append(pd.NA)
-    df = datasets_frame(
+    df = household_batches_frame(
         {household_batch_of(HOUSEHOLD): {CUM: values}},
         start=START,
         freq=f"{GRID}min",
@@ -125,7 +125,7 @@ def _coarse_interval_frame(n=N, reading=RISE):
     values = [pd.NA] * n
     for row in range(K - 1, n, K):
         values[row] = reading
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {DIFF: values}},
         start=START,
         freq=f"{GRID}min",

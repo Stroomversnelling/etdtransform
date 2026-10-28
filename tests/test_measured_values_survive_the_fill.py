@@ -25,7 +25,7 @@ import pandas as pd
 import pytest
 from conftest import cadence_table
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of
+from etdmap.testing import household_batch_of, household_batches_frame
 
 from etdtransform.vectorized_impute import impute_and_normalize
 
@@ -56,7 +56,7 @@ _N = len(_CUM)
 
 
 def _frame():
-    return datasets_frame(
+    return household_batches_frame(
         {household_batch_of(HOUSEHOLD): {
             CUM: _CUM,
             DIFF: _DIFF,

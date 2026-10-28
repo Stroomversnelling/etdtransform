@@ -11,10 +11,10 @@ model has a pair that does not follow it.
 """
 
 import pytest
-
-from etdmap.data_model import complement_column
-from etdtransform.impute import assert_cumulative_interval_pairs_complete
 from etdmap import ids
+from etdmap.data_model import complement_column
+
+from etdtransform.impute import assert_cumulative_interval_pairs_complete
 
 #: A real pair from the committed data model whose names do NOT follow the
 #: Diff convention -- the case a suffix-based guard gets wrong.
@@ -92,7 +92,7 @@ class TestTheCalculatedStageCallsIt:
     def _source(tmp_path, columns):
         """A sharded imputed artifact holding only *columns*.
 
-        The frame is spelled out rather than built by `dataset_frame`,
+        The frame is spelled out rather than built by `household_batch_frame`,
         because that helper completes every pair from the model and a HALF
         pair is exactly what this fixture has to hold. The LAYOUT is the real
         one, so the guard is shown firing on the shape the stage actually

@@ -21,7 +21,7 @@ import etdmap
 import pandas as pd
 import pytest
 from etdmap import ids
-from etdmap.testing import datasets_frame, household_batch_of, index_frame
+from etdmap.testing import household_batch_of, household_batches_frame, index_frame
 
 import etdtransform
 from etdtransform.load_data import get_household_table, get_household_tables
@@ -33,7 +33,7 @@ _ROWS_PER_HH = 4
 
 #: The household batch each household in this folder is read through. ids.HOUSEHOLD_BATCH
 #: is what the index is joined on, so every artifact here carries it.
-_DATASETS = {
+_HOUSEHOLD_BATCHES = {
     household_id: household_batch_of(household_id)
     for household_id in _HOUSEHOLDS
 }
@@ -42,20 +42,20 @@ _DATASETS = {
 @pytest.fixture
 def aggregate_folder(tmp_path):
     """A minimal aggregate folder: one artifact per name the loader can ask for."""
-    rows = datasets_frame(
+    rows = household_batches_frame(
         {
-            dataset: {
+            household_batch: {
                 "value": [
                     float(household_id * 10 + i) for i in range(_ROWS_PER_HH)
                 ]
             }
-            for household_id, dataset in _DATASETS.items()
+            for household_id, household_batch in _HOUSEHOLD_BATCHES.items()
         },
         freq="1h",
     )
     for name in ("household_60min", "household_default", "household_calculated"):
         rows.to_parquet(tmp_path / f"{name}.parquet", engine="pyarrow")
-    index_frame(_DATASETS.values(), Meenemen=True).to_parquet(
+    index_frame(_HOUSEHOLD_BATCHES.values(), Meenemen=True).to_parquet(
         tmp_path / "index.parquet", engine="pyarrow"
     )
 
@@ -137,12 +137,12 @@ class TestLoadersAgree:
         )
 
 
-class TestDatasetAndProjectFilters:
+class TestHouseholdBatchAndProjectFilters:
     """A filter prunes shard paths so the reader skips the other directories,
     then selects rows on the household batch; results must be identical either way."""
 
-    def test_dataset_ids_restrict_rows(self, aggregate_folder):
-        one = _DATASETS[1]
+    def test_household_batch_ids_restrict_rows(self, aggregate_folder):
+        one = _HOUSEHOLD_BATCHES[1]
         df = get_household_table(
             "60min", include_weather=False, household_batch_ids=[one],
         ).execute()
@@ -153,9 +153,9 @@ class TestDatasetAndProjectFilters:
         full = get_household_table("60min", include_weather=False).execute()
         parts = pd.concat([
             get_household_table(
-                "60min", include_weather=False, household_batch_ids=[dataset],
+                "60min", include_weather=False, household_batch_ids=[household_batch],
             ).execute()
-            for dataset in _DATASETS.values()
+            for household_batch in _HOUSEHOLD_BATCHES.values()
         ])
         sort_cols = [ids.HOUSEHOLD_BATCH, ids.READING_DATE]
         pd.testing.assert_frame_equal(
@@ -163,20 +163,20 @@ class TestDatasetAndProjectFilters:
             parts.sort_values(sort_cols).reset_index(drop=True),
         )
 
-    def test_projects_resolve_to_their_datasets(self, aggregate_folder):
+    def test_projects_resolve_to_their_household_batches(self, aggregate_folder):
         """Projects are a column, not a partition, so they are resolved to
         household batch ids through the index before reading."""
         df = get_household_table("60min", include_weather=False, projects=[1]).execute()
-        assert set(df[ids.HOUSEHOLD_BATCH]) == set(_DATASETS.values())
+        assert set(df[ids.HOUSEHOLD_BATCH]) == set(_HOUSEHOLD_BATCHES.values())
 
-    def test_project_and_dataset_filters_intersect(self, aggregate_folder):
-        one = _DATASETS[2]
+    def test_project_and_household_batch_filters_intersect(self, aggregate_folder):
+        one = _HOUSEHOLD_BATCHES[2]
         df = get_household_table(
             "60min", include_weather=False, projects=[1],
             household_batch_ids=[one],
         ).execute()
         assert set(df[ids.HOUSEHOLD_BATCH]) == {one}
 
-    def test_unknown_project_yields_no_datasets(self, aggregate_folder):
+    def test_unknown_project_yields_no_household_batches(self, aggregate_folder):
         from etdtransform.load_data import household_batches_in_projects
         assert household_batches_in_projects([99999]) == []
