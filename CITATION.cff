@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "etdtransform: A Python package for improving the data quality of data in the Energietransitie Dataset (ETD) model"
+type: software
+authors:
+  - family-names: Witkamp
+    given-names: Marten
+  - family-names: Dickinson
+    given-names: Nicolas
+  - family-names: Izeboud
+    given-names: Petra
+license: BSD-3-Clause
+repository-code: "https://github.com/Stroomversnelling/etdtransform"
+url: "https://energietransitiedataset.nl/"
+version: 0.1.0
+date-released: "2024-12-02"
+keywords:
+  - energietransitie
+  - energy transition
+  - stroomversnelling
+  - warmtepomp
+  - heatpump
