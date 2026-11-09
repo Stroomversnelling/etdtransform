@@ -6,7 +6,7 @@ It depends on `etdmap` for the ETD data model definitions and for some data load
 
 # License
 
-`etdmap` is released under the [BSD 3-Clause License](LICENSE). The licence covers this code only.
+`etdtransform` is released under the [BSD 3-Clause License](LICENSE). The licence covers this code only.
 
 Please cite this package when you use it in publications, analyses or other software (see below and [CITATION.cff](CITATION.cff)).
 
