@@ -6,7 +6,9 @@ It depends on `etdmap` for the ETD data model definitions and for some data load
 
 # License
 
-The package may only be used for open processing. You agree to publicly share the intended application, obtained insights, and applied calculation methods under the same license.
+`etdmap` is released under the [BSD 3-Clause License](LICENSE). The licence covers this code only.
+
+Please cite this package when you use it in publications, analyses or other software (see below and [CITATION.cff](CITATION.cff)).
 
 # Citation
 
